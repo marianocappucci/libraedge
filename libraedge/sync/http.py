@@ -3,8 +3,8 @@
 import json
 from urllib.request import Request, urlopen
 
-from libracommerce.domain.sync import OutboxOperation
-from libracommerce.sync.worker import PushResult
+from libraedge.domain.sync import OutboxOperation
+from libraedge.sync.worker import PushResult
 
 
 class HttpSyncTransport:

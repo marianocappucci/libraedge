@@ -1,6 +1,6 @@
 """FastAPI adapter for the central synchronization receiver."""
 
-from libracommerce.domain.sync import OutboxOperation
+from libraedge.domain.sync import OutboxOperation
 
 
 def create_sync_app(receiver):
@@ -12,7 +12,7 @@ def create_sync_app(receiver):
         from fastapi import FastAPI, HTTPException
     except ImportError as exc:
         raise RuntimeError(
-            "FastAPI es opcional; instalar libracommerce[offline-server]"
+            "FastAPI es opcional; instalar libraedge[server]"
         ) from exc
 
     app = FastAPI(title="LibraCommerce Sync API", version="0.1")

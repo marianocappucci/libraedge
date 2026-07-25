@@ -1,64 +1,31 @@
-"""Central-side idempotent receiver for synchronization operations."""
+"""Generic central-side idempotent receiver."""
 
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Callable
 
-from decimal import Decimal
-
-from libracommerce.domain.catalog import CatalogItemType
-from libracommerce.domain.sales import Sale, SaleItem, SaleStatus
-from libracommerce.domain.sync import OutboxOperation
-from libracommerce.db.repository import SqliteCommerceRepository
-from libracommerce.sync.worker import PushResult
+from libraedge.domain.sync import OutboxOperation
+from libraedge.sync.worker import PushResult
 
 
-@dataclass(frozen=True)
+@dataclass
 class SyncReceiver:
     conn: sqlite3.Connection
+    operation_handler: Callable[[OutboxOperation], None] | None = None
     supported_schema_version: int = 1
-
-    def _apply(self, operation: OutboxOperation) -> None:
-        if operation.operation_type != "sale.confirmed":
-            return
-        data = operation.payload
-        if "items" not in data:
-            return
-        items = tuple(
-            SaleItem(
-                kind=CatalogItemType(item["kind"]), item_id=item["item_id"],
-                description_snapshot=item["description_snapshot"],
-                quantity=Decimal(item["quantity"]),
-                unit_price=Decimal(item["unit_price"]),
-                discount_amount=Decimal(item["discount_amount"]),
-                tax_rate=Decimal(item["tax_rate"]),
-                tax_amount=Decimal(item["tax_amount"]),
-                unit_cost_snapshot=(
-                    Decimal(item["unit_cost_snapshot"])
-                    if item["unit_cost_snapshot"] is not None else None
-                ),
-            )
-            for item in data["items"]
-        )
-        sale = Sale(
-            id=None, number=data["number"], items=items, status=SaleStatus.CONFIRMED,
-            branch_id=data.get("branch_id"), register_id=data.get("register_id"),
-            source_type=f"offline:{operation.node_id}", source_id=data["sale_id"],
-            total=Decimal(data["total"]),
-        )
-        SqliteCommerceRepository(self.conn).save_sale(sale)
 
     def accept(self, operation: OutboxOperation) -> PushResult:
         if operation.schema_version != self.supported_schema_version:
             return PushResult("rejected", "schema incompatible")
-        existing = self.conn.execute(
-            "SELECT status FROM sync_inbox WHERE operation_id = ?",
+        if self.conn.execute(
+            "SELECT 1 FROM sync_inbox WHERE operation_id = ?",
             (operation.operation_id,),
-        ).fetchone()
-        if existing is not None:
+        ).fetchone() is not None:
             return PushResult("duplicate")
         try:
-            self._apply(operation)
+            if self.operation_handler is not None:
+                self.operation_handler(operation)
             self.conn.execute(
                 """INSERT INTO sync_inbox (operation_id, applied_at, status)
                    VALUES (?, ?, 'applied')""",
