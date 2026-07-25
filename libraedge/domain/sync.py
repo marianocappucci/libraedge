@@ -25,6 +25,13 @@ class OutboxOperation:
     occurred_at: str
     schema_version: int
     payload: dict[str, Any]
+    status: SyncOperationStatus = SyncOperationStatus.PENDING
+    attempts: int = 0
+    next_attempt_at: str | None = None
+    last_error: str | None = None
+    created_at: str | None = None
+    sent_at: str | None = None
+    acknowledged_at: str | None = None
 
     def payload_json(self) -> str:
         return json.dumps(self.payload, sort_keys=True, separators=(",", ":"))
