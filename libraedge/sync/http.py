@@ -8,8 +8,9 @@ from libraedge.sync.worker import PushResult
 
 
 class HttpSyncTransport:
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, node_secret: str, timeout: float = 10.0):
         self.base_url = base_url.rstrip("/")
+        self.node_secret = node_secret
         self.timeout = timeout
 
     def push(self, operation: OutboxOperation) -> PushResult:
@@ -26,7 +27,11 @@ class HttpSyncTransport:
         }).encode("utf-8")
         request = Request(
             f"{self.base_url}/sync/v1/push", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.node_secret}",
+            },
+            method="POST",
         )
         with urlopen(request, timeout=self.timeout) as response:
             data = json.loads(response.read())

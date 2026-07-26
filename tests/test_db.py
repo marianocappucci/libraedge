@@ -82,6 +82,41 @@ def test_worker_flow_marks_sending_then_retries_on_transport_error():
     assert pending[0].attempts == 1
 
 
+def test_register_node_issues_a_secret_that_verifies():
+    repo = _repo()
+    secret = repo.register_node("node-1", branch_id="branch-1")
+    assert secret
+    assert repo.verify_node_secret("node-1", secret) is True
+
+
+def test_verify_node_secret_rejects_wrong_secret():
+    repo = _repo()
+    repo.register_node("node-1", branch_id="branch-1")
+    assert repo.verify_node_secret("node-1", "not-the-real-secret") is False
+
+
+def test_verify_node_secret_rejects_unknown_node():
+    repo = _repo()
+    assert repo.verify_node_secret("never-registered", "anything") is False
+
+
+def test_deactivate_node_rejects_its_secret():
+    repo = _repo()
+    secret = repo.register_node("node-1", branch_id="branch-1")
+    repo.deactivate_node("node-1")
+    assert repo.verify_node_secret("node-1", secret) is False
+
+
+def test_re_registering_a_node_issues_a_new_secret_and_reactivates_it():
+    repo = _repo()
+    old_secret = repo.register_node("node-1", branch_id="branch-1")
+    repo.deactivate_node("node-1")
+    new_secret = repo.register_node("node-1", branch_id="branch-1")
+    assert new_secret != old_secret
+    assert repo.verify_node_secret("node-1", old_secret) is False
+    assert repo.verify_node_secret("node-1", new_secret) is True
+
+
 def test_worker_flow_acknowledges_accepted_operation():
     from libraedge.sync.worker import OutboxWorker, PushResult
 

@@ -11,7 +11,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             installed_at TEXT NOT NULL,
             schema_version INTEGER NOT NULL,
             last_server_cursor TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            secret_hash TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS local_sequences (

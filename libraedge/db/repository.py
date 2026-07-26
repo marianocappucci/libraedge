@@ -1,7 +1,15 @@
+import hashlib
+import hmac
 import json
+import secrets
 import sqlite3
+from datetime import datetime, timezone
 
 from libraedge.domain.sync import OutboxOperation, SyncOperationStatus
+
+
+def _hash_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
 class SqliteNodeRepository:
@@ -15,6 +23,46 @@ class SqliteNodeRepository:
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
+
+    def register_node(self, node_id: str, branch_id: str, schema_version: int = 1) -> str:
+        """Create a node identity and return its plaintext secret.
+
+        The secret is shown here once -- only its hash is persisted, same
+        pattern as an API key: whoever provisions the edge node copies it
+        into ``HttpSyncTransport`` immediately, there's no way to recover
+        it later (re-registering, i.e. calling this again for the same
+        node_id, issues a new secret and invalidates the old one).
+        """
+        secret = secrets.token_urlsafe(32)
+        self._conn.execute(
+            """INSERT INTO node_identity
+                (node_id, branch_id, installed_at, schema_version, secret_hash)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                secret_hash = excluded.secret_hash, active = 1""",
+            (node_id, branch_id, datetime.now(timezone.utc).isoformat(),
+             schema_version, _hash_secret(secret)),
+        )
+        self._conn.commit()
+        return secret
+
+    def verify_node_secret(self, node_id: str, secret: str) -> bool:
+        """True only for an active node whose secret hash matches."""
+        row = self._conn.execute(
+            "SELECT secret_hash, active FROM node_identity WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        if row is None or not row[1]:
+            return False
+        return hmac.compare_digest(row[0], _hash_secret(secret))
+
+    def deactivate_node(self, node_id: str) -> None:
+        """Revoke a node -- e.g. a stolen/decommissioned mini PC. Its
+        secret stops verifying immediately; re-registering issues a new
+        one and reactivates it."""
+        self._conn.execute(
+            "UPDATE node_identity SET active = 0 WHERE node_id = ?", (node_id,)
+        )
+        self._conn.commit()
 
     def next_sequence(self, name: str = "operations") -> int:
         row = self._conn.execute(
