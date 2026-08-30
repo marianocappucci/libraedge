@@ -203,8 +203,10 @@ def test_worker_flow_marks_sending_then_retries_on_transport_error(repo):
         def push(self, op):
             raise ConnectionError("offline")
 
-    processed = OutboxWorker(repo, FailingTransport()).run_once()
-    assert processed == 1
+    resultado = OutboxWorker(repo, FailingTransport()).run_once()
+    assert resultado.procesadas == 1
+    assert resultado.fallidas == 1, "un fallo de transporte tiene que ser distinguible"
+    assert resultado.hubo_falla_de_transporte is True
     pending = repo.list_pending_operations()
     assert len(pending) == 1
     assert pending[0].status == SyncOperationStatus.RETRYABLE_ERROR
@@ -250,7 +252,8 @@ def test_worker_flow_acknowledges_accepted_operation(repo):
         def push(self, op):
             return PushResult("accepted")
 
-    processed = OutboxWorker(repo, AcceptingTransport()).run_once()
-    assert processed == 1
+    resultado = OutboxWorker(repo, AcceptingTransport()).run_once()
+    assert resultado.confirmadas == 1
+    assert resultado.hubo_falla_de_transporte is False
     assert repo.list_pending_operations() == ()
     assert repo.get_operation("node-1:1").status == SyncOperationStatus.ACKNOWLEDGED

@@ -17,13 +17,38 @@ class SyncTransport(Protocol):
     def push(self, operation: OutboxOperation) -> PushResult: ...
 
 
+@dataclass(frozen=True)
+class ResultadoOutbox:
+    """Que paso al drenar la cola.
+
+    🔴 **Antes esto era un `int` con la cuenta de procesadas, y esa cuenta no
+    distingue exito de fracaso**: el worker atrapa los errores de transporte a
+    proposito --los convierte en reintentos, que es lo que lo hace durable-- y
+    despues los contaba igual que a los confirmados. Un nodo que mirara ese
+    numero se declararia en linea con la cola entera atascada. Se encontro al
+    escribir el ciclo del nodo, en la Fase 4.
+    """
+
+    procesadas: int = 0
+    confirmadas: int = 0
+    fallidas: int = 0
+    rechazadas: int = 0
+    ultimo_error: str | None = None
+
+    @property
+    def hubo_falla_de_transporte(self) -> bool:
+        """Si algo no pudo salir. Es lo que define si el nodo esta en linea."""
+        return self.fallidas > 0
+
+
 class OutboxWorker:
     def __init__(self, repository, transport: SyncTransport):
         self.repository = repository
         self.transport = transport
 
-    def run_once(self, limit=100) -> int:
-        processed = 0
+    def run_once(self, limit=100) -> ResultadoOutbox:
+        procesadas = confirmadas = fallidas = rechazadas = 0
+        ultimo_error = None
         for operation in self.repository.list_pending_operations(limit):
             self.repository.mark_operation_sending(operation.operation_id)
             try:
@@ -32,16 +57,24 @@ class OutboxWorker:
                 self.repository.retry_operation(
                     operation.operation_id, str(exc), self._now()
                 )
-                processed += 1
+                procesadas += 1
+                fallidas += 1
+                ultimo_error = f"{type(exc).__name__}: {exc}"
                 continue
             if result.result in {"accepted", "duplicate"}:
                 self.repository.acknowledge_operation(operation.operation_id, self._now())
+                confirmadas += 1
             else:
                 self.repository.mark_operation_manual_review(
                     operation.operation_id, result.error or "operación rechazada"
                 )
-            processed += 1
-        return processed
+                rechazadas += 1
+                ultimo_error = result.error or "operación rechazada"
+            procesadas += 1
+        return ResultadoOutbox(
+            procesadas=procesadas, confirmadas=confirmadas, fallidas=fallidas,
+            rechazadas=rechazadas, ultimo_error=ultimo_error,
+        )
 
     @staticmethod
     def _now() -> str:
