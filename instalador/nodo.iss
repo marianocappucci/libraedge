@@ -11,10 +11,19 @@
 ;   carga\postgres\      PostgreSQL 16 (el ZIP binario, NO el instalador de EDB)
 ;   carga\producto\      El producto ya instalado en el Python embebido
 ;   carga\herramientas\  nssm.exe
+;
+; 🔴 Al armar `carga\python\`: el paquete embebido trae un `python3XX._pth` con
+; la línea `import site` COMENTADA. Con eso apagado `site-packages` no entra al
+; path, y `python -m alembic` falla con "No module named alembic" aunque esté
+; instalado justo al lado. Hay que descomentarla al preparar la carga;
+; `preparar_nodo.ps1` lo verifica antes de correr las migraciones.
 
 #define Producto      "Restolibra"
 #define NombreNodo    "Nodo LibraEdge"
-#define Version       "0.4.1"
+; ⚠️ Mover esto con el tag de LibraEdge. Estuvo en 0.4.1 mientras el paquete iba
+; por v0.6.0: un número que nadie mantiene es peor que no tenerlo, porque el
+; cliente termina reportando una versión que no es la que tiene.
+#define Version       "0.6.0"
 #define Editor        "Mariano Cappucci"
 
 [Setup]

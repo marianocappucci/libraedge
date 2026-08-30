@@ -31,17 +31,49 @@ $estado     = Join-Path $RaizNodo "estado.json"
 # escribe con ACL restringida ANTES de poner el contenido: crearlo con los
 # permisos heredados y arreglarlos después deja una ventana en la que cualquier
 # usuario de la máquina puede leerlo.
+#
+# 🔴 **Las cuentas van por SID y no por nombre.** `"Administrators"` no existe
+# en un Windows en español: ahí el grupo se llama `Administradores`, y
+# `FileSystemAccessRule("Administrators", ...)` tira `IdentityNotMappedException`.
+# Medido el 2026-08-30 sobre un Windows 11 Pro es-AR: `SYSTEM` resuelve,
+# `Administrators` **no**, `Administradores` sí.
+#
+# Las PCs de los clientes son justamente Windows en español, así que el nombre
+# literal habría hecho fallar el instalador en el 100% de las instalaciones
+# reales — y en el 0% de cualquier prueba corrida en un Windows en inglés.
+#
+# Los SIDs conocidos no dependen del idioma: `S-1-5-18` es SYSTEM y
+# `S-1-5-32-544` el grupo de administradores locales.
 if (Test-Path $archivoEnv) { Remove-Item $archivoEnv -Force }
 New-Item -ItemType File -Path $archivoEnv | Out-Null
 $acl = Get-Acl $archivoEnv
 $acl.SetAccessRuleProtection($true, $false)   # corta la herencia
-foreach ($cuenta in @("SYSTEM", "Administrators")) {
+foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+    $cuenta = New-Object System.Security.Principal.SecurityIdentifier($sid)
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
         $cuenta, "FullControl", "Allow")))
 }
 Set-Acl -Path $archivoEnv -AclObject $acl
 
-@"
+# Que la ACL haya quedado NO se asume: `Set-Acl` puede fallar parcialmente y el
+# archivo con el secreto seguiría legible por cualquier usuario de la máquina.
+$quedaron = (Get-Acl $archivoEnv).Access |
+    ForEach-Object { $_.IdentityReference.Translate(
+        [System.Security.Principal.SecurityIdentifier]).Value }
+foreach ($esperado in @("S-1-5-18", "S-1-5-32-544")) {
+    if ($quedaron -notcontains $esperado) { throw "La ACL de $archivoEnv no quedó: falta $esperado" }
+}
+$deMas = $quedaron | Where-Object { $_ -notin @("S-1-5-18", "S-1-5-32-544") }
+if ($deMas) { throw "La ACL de $archivoEnv dejó cuentas de más: $($deMas -join ', ')" }
+
+# Sin BOM. `Set-Content -Encoding utf8` en Windows PowerShell 5.1 --la que trae
+# Windows 11 de fábrica-- escribe `EF BB BF` adelante. Acá abajo el archivo lo
+# vuelve a leer `Get-Content`, que **sí** saca el BOM, así que por ese camino no
+# se rompe nada: eso está medido. Se escribe sin BOM igual porque el archivo es
+# un `.env` y cualquier lector que no sea PowerShell --un `python-dotenv`, por
+# ejemplo-- se comería el BOM como parte del nombre de la primera variable, y
+# `LIBRAEDGE_NODE_ID` desaparecería sin que nada avise.
+$contenido = @"
 LIBRAEDGE_NODE_ID=$NodeId
 LIBRAEDGE_NODE_SECRET=$NodeSecret
 LIBRAEDGE_CENTRAL_URL=$UrlCentral
@@ -50,12 +82,29 @@ LIBRAEDGE_TABLAS_ESPEJO=$TablasEspejo
 LIBRAEDGE_ESTADO=$estado
 RESTOLIBRA_DATABASE_URL=$UrlBase
 TZ=America/Argentina/Buenos_Aires
-"@ | Set-Content -Path $archivoEnv -Encoding utf8
+"@
+[System.IO.File]::WriteAllText(
+    $archivoEnv, $contenido, (New-Object System.Text.UTF8Encoding($false)))
 
 # --- Las migraciones ------------------------------------------------------
 # El nodo corre LAS MISMAS que el central: es lo que hace que el espejo pueda
 # escribir fila por fila sin traducir nada. Si divergen, el aplicador del nodo
 # falla por una columna que no existe.
+#
+# 🔴 Antes de migrar, chequear que el Python embebido pueda VER sus paquetes.
+# El "Windows embeddable package" de python.org viene con un `python3XX._pth`
+# donde `import site` está comentado: con eso apagado `site-packages` no entra
+# al path y `-m alembic` muere con "No module named alembic" aunque alembic esté
+# instalado ahí mismo. El error apunta a una dependencia faltante y el problema
+# es un archivo de configuración de dos líneas.
+& $python -c "import alembic" *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw ("El Python embebido no puede importar alembic. Casi seguro es el " +
+           "'import site' comentado en el archivo python3XX._pth de " +
+           "$RaizNodo\python: descomentarlo y volver a correr. Si ya está " +
+           "descomentado, entonces sí falta instalar el producto en esa carga.")
+}
+
 Push-Location $RaizNodo
 try {
     $env:RESTOLIBRA_DATABASE_URL = $UrlBase

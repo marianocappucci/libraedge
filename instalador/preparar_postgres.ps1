@@ -13,7 +13,22 @@ param(
     [string]$NombreServicio = "LibraEdgePostgres",
     [int]$Puerto = 55432,
     [string]$Base = "restolibra",
-    [string]$Zona = "America/Argentina/Buenos_Aires"
+    [string]$Zona = "America/Argentina/Buenos_Aires",
+    # 🔴 El collation tiene que parecerse al del central, y `C` no se parece a
+    # nada: ordena por bytes, o sea todas las mayúsculas antes que cualquier
+    # minúscula. Medido en producción el 2026-08-30: la base de
+    # `restolibra-demo` es **`en_US.utf8`**. Con `C` en el nodo, la misma carta
+    # sale ordenada distinto en el mostrador que en el central.
+    #
+    # Se usa el proveedor **ICU** y no el de la libc porque los nombres de
+    # locale de la libc de Windows no son los de glibc
+    # (`English_United States.1252` contra `en_US.utf8`): con ICU, `en-US`
+    # significa lo mismo en los dos sistemas operativos.
+    #
+    # ⚠️ ICU y glibc **no son byte-idénticos** en los casos raros. Es todo lo
+    # cerca que se puede estar sin correr la misma libc, y es muchísimo más
+    # cerca que `C`. No asumir igualdad exacta de orden entre nodo y central.
+    [string]$Locale = "en-US"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,20 +63,57 @@ if (Test-Path (Join-Path $DirectorioDatos "PG_VERSION")) {
     $env:TZ = $Zona
     $archivoPass = New-TemporaryFile
     try {
-        Set-Content -Path $archivoPass -Value $Password -NoNewline -Encoding utf8
+        # 🔴 **Sin BOM, y por eso NO se usa `Set-Content -Encoding utf8`.**
+        # En Windows PowerShell 5.1 --la que trae Windows 11 de fábrica, y la
+        # que va a correr esto en la PC del cliente-- `-Encoding utf8` escribe
+        # `EF BB BF` al principio. Medido el 2026-08-30 en 5.1.26100.
+        #
+        # `Get-Content` lo saca al leer, así que del lado de PowerShell no se
+        # nota. Pero `initdb` es un programa en C: **se come el BOM como parte
+        # de la contraseña**. El superusuario queda con una clave que este
+        # mismo script no sabe, y la falla aparece tres pasos después, como
+        # "arrancó pero no acepta conexiones" — que se lee como un problema de
+        # arranque y no de credencial.
+        [System.IO.File]::WriteAllText(
+            $archivoPass, $Password, (New-Object System.Text.UTF8Encoding($false)))
         & $initdb --pgdata="$DirectorioDatos" --username=postgres `
-            --pwfile="$archivoPass" --encoding=UTF8 --locale=C `
+            --pwfile="$archivoPass" --encoding=UTF8 `
+            --locale-provider=icu --icu-locale=$Locale --locale=C `
             --auth-local=scram-sha-256 --auth-host=scram-sha-256
-        if ($LASTEXITCODE -ne 0) { throw "initdb falló con código $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0) {
+            # No se cae a `--locale=C` en silencio: ese es justamente el estado
+            # que este parámetro existe para evitar, y un nodo que ordena por
+            # bytes no avisa de nada, sólo muestra la carta en otro orden.
+            # Sin backticks en el mensaje: adentro de comillas dobles PowerShell
+            # los lee como carácter de escape y se los come.
+            throw ("initdb falló con código $LASTEXITCODE. Si el motivo es que " +
+                   "este build no tiene ICU, hay que decidir el collation a mano " +
+                   "y dejarlo escrito. Caer al collation C NO es una opción " +
+                   "silenciosa: ordena por bytes y nada avisa.")
+        }
     } finally {
         # El archivo tiene la contraseña del superusuario en texto plano.
         Remove-Item $archivoPass -Force -ErrorAction SilentlyContinue
     }
 
-    $conf = Join-Path $DirectorioDatos "postgresql.conf"
+}
+
+# 🔴 **Este bloque va FUERA del `else`, y es el arreglo de un defecto real.**
+# Estaba adentro, o sea que sólo se escribía cuando el clúster era nuevo. En el
+# camino de reparación --clúster que ya existe pero servicio que no, que es
+# exactamente donde cae una instalación interrumpida-- el script seguía de
+# largo, registraba el servicio, y después sondeaba el puerto $Puerto durante
+# treinta segundos contra un PostgreSQL que estaba escuchando en el 5432. El
+# error final decía "arrancó pero no acepta conexiones", que manda a mirar el
+# arranque en vez de la configuración.
+#
+# Se aplica siempre y es idempotente: si la marca ya está, no se duplica.
+$conf = Join-Path $DirectorioDatos "postgresql.conf"
+$marca = "# --- LibraEdge ---"
+if ((Get-Content $conf -Raw -ErrorAction SilentlyContinue) -notmatch [regex]::Escape($marca)) {
     Add-Content -Path $conf -Encoding utf8 -Value @"
 
-# --- LibraEdge ---
+$marca
 port = $Puerto
 timezone = '$Zona'
 log_timezone = '$Zona'
@@ -69,6 +121,8 @@ log_timezone = '$Zona'
 # base a la red del local sería una superficie que nadie va a vigilar.
 listen_addresses = '127.0.0.1'
 "@
+} else {
+    Write-Host "postgresql.conf ya tiene el bloque de LibraEdge: no se duplica."
 }
 
 & $pgctl register -N $NombreServicio -D "$DirectorioDatos" -S auto
@@ -93,8 +147,28 @@ if ($existe -ne "1") {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la base $Base." }
 }
 
-# La verificación que importa: qué hora cree el SERVIDOR que es.
+# --- Las dos verificaciones que no se pueden posponer -----------------------
+# Las dos miran el estado REAL del servidor, no los flags que se le pasaron:
+# initdb puede haber ignorado cualquiera de los dos y salir con código 0.
+# Y las dos son irreversibles sin rehacer el clúster, así que si están mal,
+# están mal AHORA y no dentro de seis meses con datos adentro.
+
+# 1. Qué hora cree el SERVIDOR que es. No la del sistema operativo.
 $ahora = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d $Base -tAc "SELECT now()"
 Write-Host "PostgreSQL listo en el puerto $Puerto. now() del servidor: $ahora"
-Write-Host "Si ese offset no es -03, el initdb no tomó la zona y hay que rehacer el cluster."
+if ($ahora -notmatch "-03") {
+    Write-Warning ("La zona NO quedó en -03 (now() = $ahora). El initdb no tomó " +
+                   "'$Zona' y hay que rehacer el cluster ANTES de cargar datos.")
+}
+
+# 2. Con qué criterio ordena. `C` ordena por bytes y el central no.
+$orden = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d $Base -tAc `
+    "SELECT datlocprovider || '/' || coalesce(daticulocale, datcollate) FROM pg_database WHERE datname = current_database()"
+Write-Host "Collation del nodo: $orden   (el central es libc/en_US.utf8)"
+if ($orden -match "/C$") {
+    Write-Warning ("El cluster quedó en collation C: ordena por BYTES, con todas " +
+                   "las mayúsculas antes que las minúsculas. La carta va a salir " +
+                   "en otro orden que en el central. Rehacer el cluster.")
+}
+
 $env:PGPASSWORD = $null
