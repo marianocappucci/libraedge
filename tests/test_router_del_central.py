@@ -82,7 +82,8 @@ def test_el_router_abre_una_conexion_POR_REQUEST(central):
 
 def test_el_router_acepta_un_push_y_llama_al_handler_del_producto(central):
     aplicadas = []
-    cliente, secreto, _ = _montar(central, handler=aplicadas.append)
+    cliente, secreto, _ = _montar(
+        central, handler=lambda conexion, op: aplicadas.append((conexion, op)))
 
     respuesta = cliente.post(
         "/sync/v1/push", json=_payload(),
@@ -92,12 +93,19 @@ def test_el_router_acepta_un_push_y_llama_al_handler_del_producto(central):
     assert respuesta.status_code == 200, respuesta.text
     assert respuesta.json()["result"] == "accepted"
     assert len(aplicadas) == 1
-    assert aplicadas[0].payload["total"] == "16000.00"
+    conexion_recibida, operacion = aplicadas[0]
+    assert operacion.payload["total"] == "16000.00"
+    assert conexion_recibida is central, (
+        "el handler tiene que recibir la conexion DEL REQUEST: sin ella no "
+        "puede escribir las filas de dominio, y con otra escribiria fuera de "
+        "la transaccion que el receptor va a confirmar"
+    )
 
 
 def test_el_router_deduplica_igual_que_la_app(central):
     aplicadas = []
-    cliente, secreto, _ = _montar(central, handler=aplicadas.append)
+    cliente, secreto, _ = _montar(
+        central, handler=lambda conexion, op: aplicadas.append((conexion, op)))
     cabeceras = {"Authorization": f"Bearer {secreto}"}
 
     primera = cliente.post("/sync/v1/push", json=_payload(), headers=cabeceras)
@@ -162,7 +170,8 @@ def test_el_router_rechaza_un_secreto_invalido_en_la_subida(central):
     que la autenticacion por nodo vino a tapar en su momento.
     """
     aplicadas = []
-    cliente, _secreto_real, _ = _montar(central, handler=aplicadas.append)
+    cliente, _secreto_real, _ = _montar(
+        central, handler=lambda conexion, op: aplicadas.append((conexion, op)))
 
     respuesta = cliente.post(
         "/sync/v1/push", json=_payload(),
@@ -176,7 +185,8 @@ def test_el_router_rechaza_un_secreto_invalido_en_la_subida(central):
 def test_el_router_rechaza_el_secreto_de_otro_nodo_en_la_subida(central):
     """Suplantacion: secreto valido de node-1, diciendo ser node-99."""
     aplicadas = []
-    cliente, secreto, _ = _montar(central, handler=aplicadas.append)
+    cliente, secreto, _ = _montar(
+        central, handler=lambda conexion, op: aplicadas.append((conexion, op)))
 
     respuesta = cliente.post(
         "/sync/v1/push", json=_payload(node_id="node-99"),
