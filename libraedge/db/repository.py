@@ -96,6 +96,42 @@ class NodeRepository:
         )
         self._conn.commit()
 
+    def get_server_cursor(self, node_id: str) -> int:
+        """Hasta dónde espejó este nodo los datos de referencia del central.
+
+        Vive en `node_identity.last_server_cursor`, que estaba declarado en el
+        esquema desde el primer día y **ningún archivo leía ni escribía** hasta
+        la Fase 2 (2026-08-30) — LibraEdge era solo-subida.
+
+        Un nodo que nunca sincronizó devuelve 0, que es lo mismo que "traeme
+        todo": el snapshot inicial no es un mecanismo aparte, es pedir desde el
+        principio de un changelog que fue sembrado. Ver `db/changelog.py`.
+        """
+        fila = self._conn.execute(
+            "SELECT last_server_cursor FROM node_identity WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        if fila is None or fila[0] is None:
+            return 0
+        return int(fila[0])
+
+    def set_server_cursor(self, node_id: str, cursor: int) -> None:
+        """Avanza el cursor. **Nunca lo retrocede.**
+
+        El `WHERE ... < ?` no es una optimización: dos ciclos de bajada
+        superpuestos —el del arranque y el periódico— pueden terminar fuera de
+        orden, y el que termine último no puede hacer que el nodo vuelva a pedir
+        cambios que ya aplicó. Un cursor que retrocede reaplica, que es
+        inofensivo; pero uno que retrocede *mucho* rehace el snapshot entero
+        sobre una base viva.
+        """
+        self._escribir(
+            """UPDATE node_identity SET last_server_cursor = ?
+               WHERE node_id = ?
+                 AND (last_server_cursor IS NULL OR CAST(last_server_cursor AS INTEGER) < ?)""",
+            (str(cursor), node_id, cursor),
+        )
+        self._conn.commit()
+
     def next_sequence(self, name: str = "operations") -> int:
         row = self._conn.execute(
             "SELECT next_value FROM local_sequences WHERE name = ?", (name,)

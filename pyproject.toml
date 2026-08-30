@@ -86,4 +86,6 @@ skip_covered = false
 # 87 -> 91 el 2026-08-29: la suite paso a correr contra los DOS motores y la
 # medicion subio de 89% a 93,27%. Dejarlo en 87 habria dado por bueno perder
 # toda la cobertura nueva de PostgreSQL sin que nada se pusiera rojo.
-fail_under = 91
+# 91 -> 92 el 2026-08-30: entro la bajada (changelog, pull, espejo de
+# referencia) y la medicion quedo en 94,65%.
+fail_under = 92
