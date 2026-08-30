@@ -109,8 +109,41 @@ def main(argv: list[str] | None = None) -> int:
         help="segundos entre ciclos (default: 60)",
     )
     sub.add_parser("estado", help="imprime el ultimo estado escrito, sin sincronizar")
+    bandeja = sub.add_parser(
+        "bandeja", help="el icono de bandeja (Windows); --una-vez imprime y sale")
+    bandeja.add_argument(
+        "--una-vez", action="store_true",
+        help="imprime lo que mostraria el tooltip y sale, sin abrir ninguna ventana",
+    )
+    bandeja.add_argument("--intervalo", type=int, default=60,
+                         help="cada cuanto cicla el nodo, para decidir si esta caido")
 
     args = parser.parse_args(argv)
+
+    if args.comando == "bandeja":
+        # Igual que `estado`: no arma el nodo ni toca la base. La bandeja tiene
+        # que poder decir "el servicio no esta corriendo" cuando justamente no
+        # esta corriendo.
+        from datetime import datetime, timezone
+
+        from libraedge.bandeja import resumen_para_la_bandeja
+        from libraedge.nodo import leer_estado
+
+        ruta = os.environ.get("LIBRAEDGE_ESTADO")
+        if not ruta:
+            raise SystemExit("Falta LIBRAEDGE_ESTADO: no hay estado que mostrar.")
+
+        if args.una_vez:
+            resumen = resumen_para_la_bandeja(
+                leer_estado(ruta), datetime.now(timezone.utc), args.intervalo)
+            print(f"[{resumen.severidad}] {resumen.titulo}")
+            if resumen.detalle:
+                print(f"  {resumen.detalle}")
+            return 0 if resumen.severidad == "ok" else 1
+
+        from libraedge.bandeja_windows import correr
+
+        return correr(ruta, intervalo_segundos=args.intervalo)
 
     if args.comando == "estado":
         # No arma el nodo ni toca la base: tiene que poder contestar con el
