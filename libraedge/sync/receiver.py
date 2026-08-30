@@ -11,7 +11,14 @@ from libraedge.sync.worker import PushResult
 
 @dataclass
 class SyncReceiver:
-    conn: sqlite3.Connection
+    #: Cualquier conexion DB-API. El ``except sqlite3.IntegrityError`` de abajo
+    #: sirve igual contra PostgreSQL porque la capa de LibraCore re-lanza los
+    #: errores de psycopg como sus equivalentes de ``sqlite3``; y el
+    #: ``rollback()`` que lo acompaña **no es decorativo ahi**: en PostgreSQL la
+    #: sentencia fallida aborta la transaccion entera, asi que sin el la
+    #: conexion queda inservible para el push siguiente. Lo cubre
+    #: ``tests/test_sync_api.py``, en su parametro ``[postgres]``.
+    conn: object
     operation_handler: Callable[[OutboxOperation], None] | None = None
     supported_schema_version: int = 1
 
