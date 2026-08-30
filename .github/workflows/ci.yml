@@ -7,9 +7,53 @@ on:
   pull_request:
     branches: [develop, main]
 
+# Una sola corrida viva por rama. Si entra un push nuevo mientras esta
+# corriendo, se cancela la anterior en vez de pagar las dos: su resultado ya
+# no le sirve a nadie, porque reporta sobre un codigo que no es el que quedo
+# en la rama.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # El outbox tiene que ejercitarse contra PostgreSQL real y no solo contra
+    # SQLite. Hasta la Fase 1 del nodo espejo (2026-08-29) esta suite corria
+    # solo sobre SQLite, porque se asumia que LibraEdge era la "excepcion
+    # permanente" de la familia; el nodo pasa a correr el producto entero con
+    # PostgreSQL embebido, asi que ese motor ES el suyo. Y no era cosmetico:
+    # el primer cruce contra PostgreSQL encontro que una operacion rechazada
+    # dejaba la conexion con la transaccion abortada.
+    #
+    # La imagen es la de Debian (`postgres:16`) y no la alpine: es la de
+    # Restolibra, que es el producto piloto del nodo, y el collation viene de
+    # la imagen.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: libraedge
+          POSTGRES_USER: libraedge
+          POSTGRES_PASSWORD: libraedge-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U libraedge -d libraedge"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      # La lee `tests/conftest.py`. Su ausencia **falla** en CI en vez de
+      # saltear: una suite verde que no toco PostgreSQL seria peor que no
+      # tenerla, porque diria que el outbox anda ahi sin haberlo probado.
+      LIBRACORE_POSTGRES_URL: postgresql://libraedge:libraedge-ci@localhost:5432/libraedge
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,6 +62,64 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # libracore es dependencia **SOLO DE TEST** (extra `dev`): este paquete
+      # sigue con `dependencies = []` en runtime y no lo importa nunca. Lo
+      # necesita la suite, porque la conexion a PostgreSQL contra la que se
+      # ejercita el outbox es la de LibraCore -- la misma que le pasa el
+      # producto en el nodo real.
+      #
+      # Se accede con una deploy key SSH de solo lectura registrada en
+      # libracore, cuya privada vive en el secret LIBRACORE_DEPLOY_KEY de este
+      # repo. Es la clave del **repo-motor**, la misma que ya usan los otros
+      # consumidores: GitHub no admite la misma publica en dos repos, pero la
+      # misma privada si puede ser secret de varios.
+      #
+      # Por que deploy key y no un PAT: un PAT vence sin aviso y, al estar
+      # compartido, tumba el CI de todos los repos a la vez (y en el VPS tumbo
+      # un deploy real: incidente Restolibra del 2026-07-25). Las deploy keys
+      # no vencen.
+      #
+      # El alias `github-<repo>` con IdentitiesOnly se mantiene aunque aca haya
+      # una sola dependencia: cuando un repo necesita mas de una, SSH ofrece
+      # las claves en orden y GitHub autentica con la primera que acepta, que
+      # puede no ser la del repo que se clona. Mismo patron que los otros cinco
+      # repos, para que no diverjan.
+      - name: Configure SSH access to private Libra dependencies
+        env:
+          LIBRACORE_DEPLOY_KEY: ${{ secrets.LIBRACORE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          configurar() {
+            repo=$1; clave=$2
+            if [ -z "$clave" ]; then
+              echo "::error::Falta el secret con la deploy key de $repo en este repositorio."
+              exit 1
+            fi
+            printf '%s\n' "$clave" > ~/.ssh/id_"$repo"
+            chmod 600 ~/.ssh/id_"$repo"
+            printf 'Host github-%s\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/id_%s\n  IdentitiesOnly yes\n' \
+              "$repo" "$repo" >> ~/.ssh/config
+            git config --global \
+              url."git@github-$repo:marianocappucci/$repo".insteadOf \
+              "https://github.com/marianocappucci/$repo"
+          }
+          configurar libracore "$LIBRACORE_DEPLOY_KEY"
+
+      # Confirma que la clave autentica contra SU repo y no contra otro, para
+      # que ese error no se manifieste recien dentro del pip install, donde
+      # aparece como un fallo de git que no dice cual repo fallo.
+      - name: Verify each deploy key resolves to its own repo
+        run: |
+          for repo in libracore; do
+            saludo=$(ssh -o StrictHostKeyChecking=yes -T "git@github-$repo" 2>&1 || true)
+            echo "$repo -> $saludo"
+            case "$saludo" in
+              *"marianocappucci/$repo"*) ;;
+              *) echo "::error::La deploy key de $repo no resuelve a marianocappucci/$repo."; exit 1 ;;
+            esac
+          done
 
       - name: Install package + dev deps
         run: pip install -e ".[dev,server]"
@@ -31,6 +133,6 @@ jobs:
 
       # `--cov` sin argumento toma el paquete de [tool.coverage.run] del
       # pyproject. El piso (fail_under) tambien esta ahi: es un trinquete
-      # fijado 2 puntos debajo de lo medido el 2026-07-31, no una meta.
+      # fijado 2 puntos debajo de lo medido, no una meta.
       - name: Run tests
         run: pytest -v --cov --cov-report=term-missing

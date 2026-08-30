@@ -4,7 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "libraedge"
-version = "0.1.0"
+# 0.1.0 -> 0.2.0 (2026-08-30). **Primera version consumible por tag.**
+# Hasta hoy este paquete no tenia ningun tag y sus consumidores lo
+# pinneaban a la rama develop, o sea a lo que hubiera ahi en el momento
+# del build -- un pin flotante en una dependencia de produccion. Dejo de
+# ser aceptable cuando Restolibra paso a consumirlo de verdad (Fase 3 del
+# nodo espejo): sus tablas se crean en la cadena de Alembic, asi que un
+# cambio de schema no anunciado en develop le llegaria al proximo deploy.
+#
+# 0.2.0 y no 0.1.1: entre 0.1.0 y hoy entraron los dos motores, la bajada
+# entera (changelog, pull, espejo) y el enqueue sin commit.
+version = "0.2.0"
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,8 +23,26 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "pytest-cov>=6",
-    "ruff>=0.13","pytest>=8.0"]
+    "ruff>=0.13","pytest>=8.0",
+    # SOLO PARA TESTS. Este motor no importa libracore en runtime y sigue
+    # teniendo  a proposito -- eso es lo que le evita
+    # necesitar una deploy key en el CI. Pero desde la Fase 1 del nodo espejo
+    # (2026-08-29) la suite corre contra los DOS motores, y la conexion a
+    # PostgreSQL es la de LibraCore: es la misma que le pasa el producto en el
+    # nodo, porque las tablas de LibraEdge conviven con las suyas en la misma
+    # base. Mismo patron que ya usa LibraCommerce.
+    #
+    # Pin en v1.59.0 = lo que corre Restolibra, que es el piloto del nodo. Un
+    # banco de pruebas que no se parece a produccion no prueba produccion.
+    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.59.0",
+]
 server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
+
+# La dependencia de tests apunta a un repo de git ().
+# Hatchling rechaza esas referencias directas salvo que se declare esto --
+# mismo fix que necesito LibraCommerce en su momento (commit 0de3975).
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["libraedge"]
@@ -60,9 +88,14 @@ omit = ["*/tests/*", "*/migrations/*", "*/.venv/*", "*/__main__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-# Piso de cobertura. Es un TRINQUETE, no una meta: se fijo 2 puntos por
-# debajo de lo que el repo media el 2026-07-31 (89%), asi que hoy pasa
-# holgado y lo unico que puede ponerlo en rojo es una regresion. Cuando la
-# cobertura suba de verdad, subir tambien este numero -- nunca bajarlo para
-# que pase un cambio.
-fail_under = 87
+# Piso de cobertura. Es un TRINQUETE, no una meta: se fija 2 puntos por
+# debajo de lo medido, asi que pasa holgado y lo unico que puede ponerlo en
+# rojo es una regresion. Cuando la cobertura suba de verdad, subir tambien
+# este numero -- nunca bajarlo para que pase un cambio.
+#
+# 87 -> 91 el 2026-08-29: la suite paso a correr contra los DOS motores y la
+# medicion subio de 89% a 93,27%. Dejarlo en 87 habria dado por bueno perder
+# toda la cobertura nueva de PostgreSQL sin que nada se pusiera rojo.
+# 91 -> 92 el 2026-08-30: entro la bajada (changelog, pull, espejo de
+# referencia) y la medicion quedo en 94,65%.
+fail_under = 92
