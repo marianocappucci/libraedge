@@ -1,7 +1,16 @@
-import sqlite3
+"""El schema del nodo: identidad, secuencias locales, outbox e inbox.
+
+``conn`` es cualquier conexion DB-API -- decia ``sqlite3.Connection`` hasta la
+Fase 1 del nodo espejo (2026-08-29), y desde que el nodo corre el producto
+entero con PostgreSQL embebido eso pasó a ser mentira. Contra PostgreSQL se le
+pasa la conexion de LibraCore, que es la misma del producto (estas tablas viven
+en SU base, para que el enqueue entre en su transaccion): esa capa sabe de
+``executescript``, traduce los ``?`` y saltea los ``PRAGMA``, asi que el DDL de
+abajo sirve igual en los dos motores. Lo cubre la suite, parametrizada.
+"""
 
 
-def init_schema(conn: sqlite3.Connection) -> None:
+def init_schema(conn) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(
         """
