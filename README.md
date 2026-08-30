@@ -36,6 +36,26 @@ Esa asimetría es lo que hace que **no haya merge ni resolución de conflictos**
 
 **`MirrorApplier` sólo escribe en las tablas de su lista.** El nombre de la tabla llega desde la red y termina interpolado en un `INSERT`: sin la lista, un central comprometido —o con un trigger de más— podría hacer que el nodo escriba en una tabla de su propia autoridad, como `ventas`. La lista es el reparto de autoridad hecho código.
 
+## El nodo como proceso (Fase 4, 2026-08-30)
+
+Hasta acá esto era una biblioteca que **no corría sola**: tenía outbox, worker, transporte, receptor y espejo, y nadie los invocaba. Ahora se instala como servicio:
+
+```bash
+libraedge-nodo correr --intervalo 60
+```
+
+Toda la configuración viene del entorno, que es lo que el instalador escribe una vez: `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_CENTRAL_URL`, `LIBRAEDGE_DATABASE_URL`, `LIBRAEDGE_TABLAS_ESPEJO` y `LIBRAEDGE_ESTADO`. `libraedge-nodo estado` imprime el último estado **sin tocar la base ni el central** — tiene que poder contestar con el servicio caído, que es cuando se pregunta.
+
+**El ciclo es la sonda de conectividad.** No hay ping a un `/health`, y es deliberado: el catch-all de una SPA devuelve `200` para cualquier ruta, así que un nodo apuntado a la URL equivocada tendría la sonda en verde eterno; y una sonda separada se desincroniza de lo que mide, con lo cual la pantalla miente justo en el peor momento. El estado sale del resultado real de sincronizar.
+
+> 🔴 Y eso tuvo una trampa: `OutboxWorker` **atrapa** los errores de transporte a propósito —los convierte en reintentos, que es lo que lo hace durable—, así que un `except` alrededor no ve nada, y su cuenta de procesadas incluía a las que fallaron. Por eso ahora devuelve un `ResultadoOutbox` que distingue confirmadas de fallidas: mirar la cuenta sola declaraba el nodo en línea con la cola entera atascada.
+
+**Primero sube, después baja.** Lo que el nodo generó durante el corte no existe en ningún otro lado; los datos de referencia que el central tiene para darle existen igual si el ciclo se corta a la mitad.
+
+**El nodo no se cae porque se caiga internet.** `sincronizar()` nunca propaga un error de transporte: lo registra, marca el nodo fuera de línea y devuelve. Un `raise` acá sería un proceso muerto en la PC de un cliente en el peor momento posible.
+
+**El estado se escribe de forma atómica** (temporal + `os.replace`): lo lee una UI que refresca sola, y un write directo trunca el archivo antes de escribir — si algo falla en el medio, el estado anterior ya no está.
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.

@@ -14,7 +14,13 @@ name = "libraedge"
 #
 # 0.2.0 y no 0.1.1: entre 0.1.0 y hoy entraron los dos motores, la bajada
 # entera (changelog, pull, espejo) y el enqueue sin commit.
-version = "0.2.0"
+# 0.2.0 -> 0.3.0 (2026-08-30): el nodo pasa a ser un proceso --ciclo de
+# sincronizacion, estado y el script libraedge-nodo--. Minor y no patch porque
+# OutboxWorker.run_once() cambia de devolver un int a un ResultadoOutbox: la
+# cuenta sola no distinguia exito de fracaso, asi que un nodo que la mirara se
+# declaraba en linea con la cola atascada. Ningun consumidor actual usa esa
+# clase (verificado con grep en libracommerce y restolibra), pero es API publica.
+version = "0.3.0"
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,6 +47,11 @@ server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
 # La dependencia de tests apunta a un repo de git ().
 # Hatchling rechaza esas referencias directas salvo que se declare esto --
 # mismo fix que necesito LibraCommerce en su momento (commit 0de3975).
+# El proceso del nodo. Hasta la Fase 4 este paquete no tenia entrypoint: era
+# una biblioteca que alguien tenia que invocar, y nadie lo hacia.
+[project.scripts]
+libraedge-nodo = "libraedge.cli:main"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -98,4 +109,7 @@ skip_covered = false
 # toda la cobertura nueva de PostgreSQL sin que nada se pusiera rojo.
 # 91 -> 92 el 2026-08-30: entro la bajada (changelog, pull, espejo de
 # referencia) y la medicion quedo en 94,65%.
-fail_under = 92
+# 92 -> 94 el 2026-08-30: entro el nodo como proceso (ciclo, estado, CLI). La
+# primera medicion dio 90% --por debajo del piso-- y el trinquete hizo lo suyo:
+# el CLI estaba al 54%. Se probo en vez de bajar el numero, y quedo en 96,45%.
+fail_under = 94
