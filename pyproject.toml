@@ -34,7 +34,10 @@ name = "libraedge"
 # operacion colgada en estado sending --por un corte a mitad del envio-- no la
 # reintentaba nadie NUNCA: la venta cobrada no llegaba al central y nada
 # fallaba. Minor porque el worker cambia de comportamiento al arrancar.
-version = "0.5.0"
+# 0.5.0 -> 0.6.0 (2026-08-30): la ventana de bandeja. La decision de que
+# mostrar esta en bandeja.py y probada; el caparazon de Windows no se puede
+# ejecutar en este entorno y esta marcado como tal.
+version = "0.6.0"
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -57,6 +60,10 @@ dev = [
     "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.59.0",
 ]
 server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
+# El icono de bandeja, que solo se instala en la PC del cliente. Va aparte
+# porque el nodo tiene que poder correr como SERVICIO en una maquina sin
+# sesion grafica, y ahi un import de GUI sobra.
+bandeja = ["pystray>=0.19", "Pillow>=10"]
 
 # La dependencia de tests apunta a un repo de git ().
 # Hatchling rechaza esas referencias directas salvo que se declare esto --
@@ -108,7 +115,17 @@ select = [
 [tool.coverage.run]
 source = ["libraedge"]
 branch = true
-omit = ["*/tests/*", "*/migrations/*", "*/.venv/*", "*/__main__.py"]
+# bandeja_windows.py queda afuera y NO es para maquillar el numero: es un
+# caparazon de GUI de Windows que en este entorno no puede ejecutarse ni una
+# linea --no hay Windows ni escritorio--, asi que contarlo mediria la ausencia
+# de Windows y no la calidad del codigo.
+#
+# Lo que se excluye es SOLO el dibujo. Toda la decision de que mostrar vive en
+# bandeja.py, esta cubierta, y su docstring dice por que estan separados. Si
+# alguna vez una regla se muda al caparazon, sale de la cobertura sin que nadie
+# lo note -- por eso la separacion es la que hay que sostener, no el omit.
+omit = ["*/tests/*", "*/migrations/*", "*/.venv/*", "*/__main__.py",
+        "*/bandeja_windows.py"]
 
 [tool.coverage.report]
 show_missing = true
