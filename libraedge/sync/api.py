@@ -135,6 +135,21 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     venta. El changelog sale de la misma conexion, porque en el central las
     tablas de los dos conviven en la misma base -- por eso aca no hay un
     equivalente del 501 de ``create_sync_app``: si hay conexion, hay changelog.
+
+    🔴 **La firma del handler es ``(conexion, operacion)``, no ``(operacion)``.**
+    Es la que ya tienen los dos handlers de la familia --
+    ``apply_confirmed_sale_operation`` y ``aplicar_pedido_cobrado``-- porque un
+    handler necesita la conexion para escribir las filas de dominio.
+    ``SyncReceiver`` llama con **un** argumento, herencia de cuando el receptor
+    era el dueno de la conexion; aca la conexion es del request, asi que se le
+    pasa al handler en un cierre.
+
+    Sin eso, un producto que montara el router con su handler de siempre recibia
+    ``missing 1 required positional argument`` **por cada operacion**, y el
+    receptor lo traducia a ``rejected``: cada venta de cada nodo terminaba en
+    revision manual, con el nodo reportandose en linea y sin errores. Se
+    encontro al cablearlo de verdad contra el producto -- los tests que llamaban
+    al handler directo no podian verlo.
     """
     try:
         from fastapi import APIRouter, HTTPException, Request
@@ -166,8 +181,15 @@ def create_sync_router(abrir_conexion, operation_handler=None,
         with abrir_conexion() as conexion:
             if not NodeRepository(conexion).verify_node_secret(payload["node_id"], secreto):
                 raise HTTPException(401, detail="invalid node credentials")
+            # El handler de la familia toma (conexion, operacion); el receptor
+            # llama con una sola. El cierre le pasa la conexion de ESTE request.
+            handler = None
+            if operation_handler is not None:
+                def handler(op, _conexion=conexion):
+                    return operation_handler(_conexion, op)
+
             receptor = SyncReceiver(
-                conexion, operation_handler=operation_handler,
+                conexion, operation_handler=handler,
                 supported_schema_version=supported_schema_version,
             )
             resultado = receptor.accept(operacion)

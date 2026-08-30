@@ -25,7 +25,12 @@ name = "libraedge"
 # construirse, y eso adentro de un servidor web es una conexion compartida
 # entre requests concurrentes que ademas envejece. Las dos conviven: la app
 # para un proceso dedicado, el router para el central.
-version = "0.4.0"
+# 0.4.0 -> 0.4.1 (2026-08-30): el handler del router recibe la conexion.
+# SyncReceiver llama con un solo argumento y los dos handlers de la familia
+# toman (conexion, operacion), asi que montar el router con el handler de
+# siempre rechazaba TODAS las operaciones con missing 1 required positional
+# argument -- y el nodo se reportaba en linea y sin errores.
+version = "0.4.1"
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
