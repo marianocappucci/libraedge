@@ -1,0 +1,140 @@
+; Instalador del nodo LibraEdge para Windows (Inno Setup 6).
+;
+; 🔴 SIN COMPILAR NI PROBAR. Se escribió en un entorno sin Inno Setup. Ver el
+; README de esta carpeta para la lista de lo que hay que verificar en una
+; máquina real antes de dárselo a un cliente.
+;
+; Compilar con:  ISCC.exe nodo.iss
+;
+; Espera encontrar, al lado de este archivo:
+;   carga\python\        Python embebido (python.org, "Windows embeddable package")
+;   carga\postgres\      PostgreSQL 16 (el ZIP binario, NO el instalador de EDB)
+;   carga\producto\      El producto ya instalado en el Python embebido
+;   carga\herramientas\  nssm.exe
+
+#define Producto      "Restolibra"
+#define NombreNodo    "Nodo LibraEdge"
+#define Version       "0.4.1"
+#define Editor        "Mariano Cappucci"
+
+[Setup]
+; GUID real y fijo: es lo que hace que una reinstalación actualice en vez de
+; instalar una segunda copia al lado. No cambiarlo entre versiones.
+AppId={{F4887308-2B5A-4D5A-B694-1F85F48CBA4B}
+AppName={#NombreNodo} para {#Producto}
+AppVersion={#Version}
+AppPublisher={#Editor}
+DefaultDirName={autopf}\LibraEdge
+DefaultGroupName=LibraEdge
+DisableProgramGroupPage=yes
+OutputBaseFilename=libraedge-nodo-{#Version}
+Compression=lzma2/max
+SolidCompression=yes
+; Registra servicios de Windows y escribe en Archivos de programa.
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+WizardStyle=modern
+
+[Languages]
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+
+[Files]
+Source: "carga\python\*";       DestDir: "{app}\python";       Flags: ignoreversion recursesubdirs
+Source: "carga\postgres\*";     DestDir: "{app}\postgres";     Flags: ignoreversion recursesubdirs
+Source: "carga\producto\*";     DestDir: "{app}";              Flags: ignoreversion recursesubdirs
+Source: "carga\herramientas\*"; DestDir: "{app}\herramientas"; Flags: ignoreversion
+Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador";  Flags: ignoreversion
+Source: "preparar_nodo.ps1";     DestDir: "{app}\instalador";  Flags: ignoreversion
+
+[Dirs]
+; Los datos NO van bajo {app}: la desinstalación no los tiene que tocar. Un
+; outbox con operaciones sin sincronizar no existe en ningún otro lado.
+Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full
+Name: "{app}\logs"
+
+[Run]
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_postgres.ps1"" -RaizPostgres ""{app}\postgres"" -DirectorioDatos ""{commonappdata}\LibraEdge\datos"" -Password ""{code:ClavePostgres}"""; \
+  StatusMsg: "Preparando la base de datos local..."; \
+  Flags: runhidden waituntilterminated
+
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_nodo.ps1"" -RaizNodo ""{app}"" -UrlBase ""{code:UrlBase}"" -UrlCentral ""{code:UrlCentral}"" -NodeId ""{code:NodeId}"" -NodeSecret ""{code:NodeSecret}"" -TablasEspejo ""{code:TablasEspejo}"""; \
+  StatusMsg: "Configurando el nodo y sus servicios..."; \
+  Flags: runhidden waituntilterminated
+
+[UninstallRun]
+; Se detienen y se quitan los servicios, en orden inverso al de creación.
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm";     Flags: runhidden; RunOnceId: "PararNodo"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";   Flags: runhidden; RunOnceId: "QuitarNodo"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "PararProducto"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "QuitarProducto"
+Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgePostgres"; Flags: runhidden; RunOnceId: "QuitarPG"
+
+[Code]
+{ Los datos del nodo se piden en una página propia: el secreto lo emite el
+  central y se muestra UNA sola vez, así que quien instala lo trae anotado.
+  No se puede pedir por API — el instalador no tiene credenciales para eso, y
+  dárselas sería poner una llave del central en cada PC de cada cliente. }
+
+var
+  PaginaNodo: TInputQueryWizardPage;
+  PaginaBase: TInputQueryWizardPage;
+
+procedure InitializeWizard;
+begin
+  PaginaNodo := CreateInputQueryPage(wpSelectDir,
+    'Identidad del nodo',
+    'Los datos que emitió el central al registrar esta sucursal',
+    'Correr en el central:  python -m scripts.nodo_offline registrar <id> --sucursal <nombre>' + #13#10 +
+    'y copiar acá lo que imprime. El secreto se muestra una sola vez.');
+  PaginaNodo.Add('URL del central (ej. https://cliente.restolibra.com.ar):', False);
+  PaginaNodo.Add('LIBRAEDGE_NODE_ID:', False);
+  PaginaNodo.Add('LIBRAEDGE_NODE_SECRET:', True);
+  PaginaNodo.Add('LIBRAEDGE_TABLAS_ESPEJO:', False);
+
+  PaginaBase := CreateInputQueryPage(PaginaNodo.ID,
+    'Base de datos local',
+    'Una contraseña para el PostgreSQL de esta máquina',
+    'Se usa sólo en esta PC: la base escucha únicamente en 127.0.0.1.');
+  PaginaBase.Add('Contraseña:', True);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = PaginaNodo.ID then
+  begin
+    { Falla temprano: un nodo a medio configurar sincroniza contra el lugar
+      equivocado, o contra ninguno, y se ve igual que uno sano. }
+    if (Trim(PaginaNodo.Values[0]) = '') or (Trim(PaginaNodo.Values[1]) = '') or
+       (Trim(PaginaNodo.Values[2]) = '') or (Trim(PaginaNodo.Values[3]) = '') then
+    begin
+      MsgBox('Faltan datos del nodo. Los cuatro salen del comando `registrar` ' +
+             'que se corre en el central.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+  if CurPageID = PaginaBase.ID then
+  begin
+    if Length(Trim(PaginaBase.Values[0])) < 12 then
+    begin
+      MsgBox('La contraseña tiene que tener al menos 12 caracteres.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
+
+function UrlCentral(Param: String): String;    begin Result := Trim(PaginaNodo.Values[0]); end;
+function NodeId(Param: String): String;        begin Result := Trim(PaginaNodo.Values[1]); end;
+function NodeSecret(Param: String): String;    begin Result := Trim(PaginaNodo.Values[2]); end;
+function TablasEspejo(Param: String): String;  begin Result := Trim(PaginaNodo.Values[3]); end;
+function ClavePostgres(Param: String): String; begin Result := PaginaBase.Values[0]; end;
+
+function UrlBase(Param: String): String;
+begin
+  { El puerto no es el 5432 por defecto: la PC del cliente puede tener ya un
+    PostgreSQL de otra cosa, y pisarlo sería la peor forma de empezar. }
+  Result := 'postgresql://postgres:' + ClavePostgres('') + '@127.0.0.1:55432/restolibra';
+end;

@@ -244,6 +244,33 @@ class NodeRepository:
             sent_at=row[14], acknowledged_at=row[15],
         )
 
+    def reclamar_operaciones_colgadas(self) -> int:
+        """Devuelve a `pending` lo que quedó en `sending`. Cuántas rescató.
+
+        🔴 **Sin esto se pierden ventas, y en silencio.**
+        `mark_operation_sending()` pasa la operación a `sending` **antes** de
+        hablar con el central, y `list_pending_operations()` sólo mira `pending`
+        y `retryable_error`. Si el proceso muere en el medio —corte de luz, la PC
+        que alguien apagó, el servicio reiniciado— la operación queda en
+        `sending` y **ningún worker la vuelve a mirar nunca**. La venta que el
+        nodo cobró no llega al central y nada falla: se descubre en el arqueo,
+        días después.
+
+        Se apoya en que **el nodo corre un solo worker**: si al arrancar un ciclo
+        hay algo en `sending`, es de una corrida que murió, porque nadie más pudo
+        haberlo puesto ahí. Y aunque hubiera dos workers y uno reclamara lo que
+        el otro está mandando, el peor caso es un envío repetido — que el
+        receptor central deduplica por `operation_id`.
+        """
+        cursor = self._escribir(
+            "UPDATE sync_outbox SET status = ?, last_error = ? WHERE status = ?",
+            (str(SyncOperationStatus.PENDING),
+             "reclamada: el proceso murió mientras se enviaba",
+             str(SyncOperationStatus.SENDING)),
+        )
+        self._conn.commit()
+        return cursor.rowcount if cursor is not None else 0
+
     def list_pending_operations(self, limit: int = 100) -> tuple[OutboxOperation, ...]:
         rows = self._conn.execute(
             """SELECT operation_id FROM sync_outbox

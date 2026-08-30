@@ -47,6 +47,12 @@ class OutboxWorker:
         self.transport = transport
 
     def run_once(self, limit=100) -> ResultadoOutbox:
+        # Antes de nada, rescatar lo que una corrida anterior dejó en `sending`
+        # al morirse. Sin esto esas operaciones no las vuelve a mirar nadie: la
+        # venta que el nodo cobró no llega al central y nada falla. Ver el
+        # docstring de `reclamar_operaciones_colgadas`.
+        self.repository.reclamar_operaciones_colgadas()
+
         procesadas = confirmadas = fallidas = rechazadas = 0
         ultimo_error = None
         for operation in self.repository.list_pending_operations(limit):
