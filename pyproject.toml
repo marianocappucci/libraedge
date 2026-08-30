@@ -4,7 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "libraedge"
-version = "0.1.0"
+# 0.1.0 -> 0.2.0 (2026-08-30). **Primera version consumible por tag.**
+# Hasta hoy este paquete no tenia ningun tag y sus consumidores lo
+# pinneaban a la rama develop, o sea a lo que hubiera ahi en el momento
+# del build -- un pin flotante en una dependencia de produccion. Dejo de
+# ser aceptable cuando Restolibra paso a consumirlo de verdad (Fase 3 del
+# nodo espejo): sus tablas se crean en la cadena de Alembic, asi que un
+# cambio de schema no anunciado en develop le llegaria al proximo deploy.
+#
+# 0.2.0 y no 0.1.1: entre 0.1.0 y hoy entraron los dos motores, la bajada
+# entera (changelog, pull, espejo) y el enqueue sin commit.
+version = "0.2.0"
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
