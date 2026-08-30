@@ -13,7 +13,28 @@ El nodo **no** es una mini PC dedicada con Ubuntu Server, como se diseñó en ju
 - **El local le habla siempre al nodo, nunca a la nube.** No hay failover que programar: el corte de internet no cambia nada del lado del usuario.
 - **Autoridad asimétrica.** El servidor manda sobre los datos de referencia (el nodo sólo los baja); el nodo manda sólo sobre los eventos nuevos que genera, append-only. Sin merge ni resolución de conflictos.
 
-El plan por fases vive en el wiki (`wiki/analyses/nodo-libraedge-espejo-local.md`). **Falta la mitad de bajada**: no hay `pull`, ni snapshot inicial, ni cursor — el nodo puede emitir ventas pero todavía no puede enterarse de un precio nuevo.
+El plan por fases vive en el wiki (`wiki/analyses/nodo-libraedge-espejo-local.md`).
+
+## Las dos direcciones (Fase 2, 2026-08-30)
+
+No son simétricas, porque la autoridad tampoco lo es:
+
+| | Qué viaja | Quién lo genera | Forma |
+|---|---|---|---|
+| **Subida** | Los *eventos* del corte: una venta, un cobro | El nodo | `OutboxOperation`, append-only |
+| **Bajada** | El *estado* de la referencia: precios, catálogo, clientes | El central | `ReferenceChange`, upsert/delete |
+
+Esa asimetría es lo que hace que **no haya merge ni resolución de conflictos**: no existe una fila que los dos lados quieran escribir.
+
+**La bajada sale de un changelog central con cursor monótono** (`db/changelog.py`), no de comparar `updated_at`. Comparar contra una marca de tiempo tiene tres agujeros: obliga a mantener `updated_at` en cada camino de escritura de cada tabla, dos transacciones pueden commitear fuera de orden de timestamp (y el nodo se saltea esa fila para siempre), y no captura los DELETE.
+
+**Se publica por trigger**, no llamando a una función en cada escritura: son 26 tablas de referencia, y el camino de escritura que se olvide no falla — deja de espejarse en silencio. El trigger no puede saltearse ninguno porque no los conoce. Se instala en el central al aprovisionar, no en las migraciones del producto.
+
+**El snapshot inicial no es un mecanismo aparte**: `sembrar()` vuelca el estado actual al changelog, y un nodo nuevo pide desde el cursor 0. El alta de un nodo y una actualización cualquiera recorren el mismo camino, en vez de tener un segundo lugar donde equivocarse — el que menos se ejercita.
+
+**El nodo aplica primero y avanza el cursor después**, nunca al revés. Si se corta la luz en el medio, lo aplicado queda y lo que falta se vuelve a pedir; los upserts son idempotentes, así que reaplicar es inofensivo. Al revés, el cursor diría que ya se aplicó algo que no se aplicó y ese dato quedaría viejo para siempre.
+
+**`MirrorApplier` sólo escribe en las tablas de su lista.** El nombre de la tabla llega desde la red y termina interpolado en un `INSERT`: sin la lista, un central comprometido —o con un trigger de más— podría hacer que el nodo escriba en una tabla de su propia autoridad, como `ventas`. La lista es el reparto de autoridad hecho código.
 
 ## Estado
 
