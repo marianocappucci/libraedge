@@ -126,6 +126,74 @@ def test_created_at_es_iso_utc_en_los_dos_motores(repo):
     assert abs((ahora - marca).total_seconds()) < 60
 
 
+def test_encolar_sin_commit_no_publica_nada_todavia(repo, conn):
+    """🔴 La propiedad que hace atomico al nodo.
+
+    Un producto encola DENTRO de su transaccion: `cobrar_pedido()` de Restolibra
+    corre pedido, venta, items, pagos, caja, stock, turno y mesa en una sola, y
+    despues commitea. Si `enqueue_operation()` commiteara por su cuenta en el
+    medio, publicaria esa venta a medio hacer.
+    """
+    repo.enqueue_operation(operation(), commit=False)
+    # Dentro de la misma transaccion se ve...
+    assert len(repo.list_pending_operations()) == 1
+    # ...pero deshacerla se la lleva.
+    conn.rollback()
+    assert repo.list_pending_operations() == ()
+
+
+def test_encolar_sin_commit_queda_cuando_el_producto_commitea(repo, conn):
+    """La otra mitad: si la venta se confirma, la operacion queda con ella.
+
+    Sin este par, el test de arriba pasaria igual con un `enqueue` que no
+    escribe nada.
+    """
+    repo.enqueue_operation(operation(), commit=False)
+    conn.commit()
+    assert len(repo.list_pending_operations()) == 1
+
+
+def test_encolar_sin_commit_no_deshace_lo_que_el_producto_hizo_antes(repo, conn, motor):
+    """El enqueue no puede hacer rollback de una transaccion que no es suya.
+
+    Es una frontera de correccion, no una preferencia: si el repositorio hiciera
+    rollback por su cuenta ante un error, se llevaria puesto el trabajo del
+    producto **antes de que el producto se entere**, y le sacaria la decision.
+
+    ⚠️ **Se mide en SQLite porque es donde la diferencia es observable.** En
+    PostgreSQL la sentencia fallida aborta la transaccion entera --es el motor,
+    no este repositorio-- asi que ahi el resultado final es el mismo haga o no
+    haga rollback. Que en el motor del nodo sea indistinguible no vuelve
+    correcto que una biblioteca deshaga trabajo ajeno: el dia que un producto
+    quiera atrapar el error y seguir sin la fila de outbox, tiene que poder.
+    """
+    if motor == "postgres":
+        pytest.skip(
+            "en PostgreSQL la sentencia fallida aborta la transaccion sola, "
+            "asi que el rollback del repositorio no se puede distinguir"
+        )
+    conn.execute("INSERT INTO local_sequences (name, next_value) VALUES (?, ?)", ("marca", 1))
+    repo.enqueue_operation(operation(), commit=False)
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.enqueue_operation(operation(operation_id="node-1:999"), commit=False)
+
+    # El producto decide seguir adelante con lo suyo. Si el repositorio hubiera
+    # hecho rollback, esta fila ya no estaria.
+    conn.commit()
+    fila = conn.execute(
+        "SELECT next_value FROM local_sequences WHERE name = ?", ("marca",)
+    ).fetchone()
+    assert fila is not None, "el repositorio deshizo trabajo del producto"
+
+
+def test_next_sequence_sin_commit_se_deshace_con_la_venta(repo, conn):
+    """Una secuencia reservada dentro de la transaccion del producto no deja
+    hueco si la venta se cae."""
+    primera = repo.next_sequence(commit=False)
+    conn.rollback()
+    assert repo.next_sequence(commit=False) == primera
+
+
 def test_worker_flow_marks_sending_then_retries_on_transport_error(repo):
     from libraedge.sync.worker import OutboxWorker
 

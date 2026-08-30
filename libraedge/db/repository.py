@@ -32,7 +32,7 @@ class NodeRepository:
     def __init__(self, conn):
         self._conn = conn
 
-    def _escribir(self, sql: str, params=()):
+    def _escribir(self, sql: str, params=(), propia: bool = True):
         """Ejecuta una sentencia dejando la conexión utilizable si falla.
 
         🔴 **Esto es una diferencia de comportamiento entre motores, no de
@@ -49,11 +49,21 @@ class NodeRepository:
 
         La excepción se re-lanza igual: el rollback deja la conexión sana, no
         se traga el error.
+
+        `propia=False` dice que **la transacción es del llamador** — el caso de
+        `enqueue_operation(commit=False)`, donde el producto encola dentro de su
+        propia transacción. Ahí el rollback no nos corresponde: se lo llevaría
+        puesto todo lo que el producto hizo antes, y **antes de que el producto
+        se entere**. El dueño de la transacción es el que decide, y en el caso
+        vivo —`cobrar_pedido()` de Restolibra— decide bien: su
+        `except Exception: conn.rollback(); raise` deshace la venta entera, que
+        es lo correcto si el outbox no pudo registrarla.
         """
         try:
             return self._conn.execute(sql, params)
         except Exception:
-            self._conn.rollback()
+            if propia:
+                self._conn.rollback()
             raise
 
     def register_node(self, node_id: str, branch_id: str, schema_version: int = 1) -> str:
@@ -132,7 +142,13 @@ class NodeRepository:
         )
         self._conn.commit()
 
-    def next_sequence(self, name: str = "operations") -> int:
+    def next_sequence(self, name: str = "operations", commit: bool = True) -> int:
+        """La próxima secuencia local del nodo.
+
+        `commit=False` la reserva **dentro de la transacción del llamador**, que
+        además es más fuerte que commitearla aparte: si la venta que la pidió se
+        deshace, la secuencia se deshace con ella y no queda un hueco.
+        """
         row = self._conn.execute(
             "SELECT next_value FROM local_sequences WHERE name = ?", (name,)
         ).fetchone()
@@ -140,19 +156,38 @@ class NodeRepository:
             sequence = 1
             self._escribir(
                 "INSERT INTO local_sequences (name, next_value) VALUES (?, ?)",
-                (name, 2),
+                (name, 2), propia=commit,
             )
         else:
             sequence = row[0]
             self._escribir(
                 "UPDATE local_sequences SET next_value = ? WHERE name = ?",
-                (sequence + 1, name),
+                (sequence + 1, name), propia=commit,
             )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return sequence
 
-    def enqueue_operation(self, operation: OutboxOperation) -> OutboxOperation:
+    def enqueue_operation(
+        self, operation: OutboxOperation, commit: bool = True
+    ) -> OutboxOperation:
         """Persist an outbox operation exactly once by operation_id.
+
+        🔴 **`commit=False` es lo que hace posible la atomicidad del nodo**, y es
+        el modo con el que lo usa un producto. `cobrar_pedido()` de Restolibra
+        corre pedido, venta, ítems, pagos, caja, stock, turno y mesa en **una
+        sola transacción**; si el enqueue commitea por su cuenta en el medio,
+        publica esa venta a medio hacer. Con `commit=False` la operación del
+        outbox entra en la misma transacción que la venta que la origina: o
+        quedan las dos, o no queda ninguna.
+
+        Esa atomicidad es justamente la ventaja que hizo elegir a Restolibra
+        como piloto —el otro consumidor tiene el outbox en otra conexión y no
+        puede tenerla—, y perderla por un `commit()` de más habría sido perder
+        el motivo de haberlo elegido.
+
+        El default sigue siendo `True` para no cambiarle el comportamiento a
+        quien ya lo usaba con el repositorio dueño de su transacción.
 
         ``created_at`` se estampa **acá, en Python y en UTC**, no con el
         ``DEFAULT CURRENT_TIMESTAMP`` de la tabla. Ese default es reloj del
@@ -184,8 +219,10 @@ class NodeRepository:
              operation.last_error,
              operation.created_at or datetime.now(timezone.utc).isoformat(),
              operation.sent_at, operation.acknowledged_at),
+            propia=commit,
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return self.get_operation(operation.operation_id)
 
     def get_operation(self, operation_id: str) -> OutboxOperation | None:
