@@ -13,6 +13,30 @@ from libraedge.db.changelog import listar_cambios
 from libraedge.domain.sync import OutboxOperation
 from libraedge.sync.pull import serializar_cambio
 
+#: Lo que un push tiene que traer. Vive afuera de las dos fabricas para que no
+#: se les vaya desincronizando una de la otra.
+CAMPOS_DEL_PUSH = frozenset({
+    "operation_id", "node_id", "sequence", "operation_type",
+    "aggregate_type", "aggregate_id", "occurred_at", "schema_version", "payload",
+})
+
+
+def operacion_desde_payload(payload: dict) -> OutboxOperation:
+    """El JSON de un push, como `OutboxOperation`. Levanta `ValueError` si no."""
+    try:
+        return OutboxOperation(
+            operation_id=payload["operation_id"], node_id=payload["node_id"],
+            sequence=int(payload["sequence"]),
+            operation_type=payload["operation_type"],
+            aggregate_type=payload["aggregate_type"],
+            aggregate_id=payload["aggregate_id"],
+            occurred_at=payload["occurred_at"],
+            schema_version=int(payload["schema_version"]),
+            payload=payload["payload"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("invalid operation") from exc
+
 
 def create_sync_app(receiver, node_repository, changelog_conn=None):
     """Build the HTTP app around an already-configured SyncReceiver.
@@ -75,31 +99,112 @@ def create_sync_app(receiver, node_repository, changelog_conn=None):
 
     @app.post("/sync/v1/push")
     def push(payload: dict, request: Request):
-        required = {
-            "operation_id", "node_id", "sequence", "operation_type",
-            "aggregate_type", "aggregate_id", "occurred_at",
-            "schema_version", "payload",
-        }
-        missing = sorted(required - payload.keys())
+        missing = sorted(CAMPOS_DEL_PUSH - payload.keys())
         if missing:
             raise HTTPException(422, detail={"missing": missing})
 
         _autenticar(request, payload["node_id"])
 
         try:
-            operation = OutboxOperation(
-                operation_id=payload["operation_id"], node_id=payload["node_id"],
-                sequence=int(payload["sequence"]),
-                operation_type=payload["operation_type"],
-                aggregate_type=payload["aggregate_type"],
-                aggregate_id=payload["aggregate_id"],
-                occurred_at=payload["occurred_at"],
-                schema_version=int(payload["schema_version"]),
-                payload=payload["payload"],
-            )
-        except (KeyError, TypeError, ValueError) as exc:
+            operation = operacion_desde_payload(payload)
+        except ValueError as exc:
             raise HTTPException(422, detail="invalid operation") from exc
         result = receiver.accept(operation)
         return {"operation_id": operation.operation_id, "result": result.result, "error": result.error}
 
     return app
+
+
+def create_sync_router(abrir_conexion, operation_handler=None,
+                       supported_schema_version: int = 1):
+    """Las mismas dos rutas, para montar **dentro del producto** con
+    ``include_router()``.
+
+    🔴 **La diferencia con create_sync_app no es cosmetica: es la conexion.**
+    Aquella recibe conexiones **fijas** al construirse, lo cual sirve para un
+    proceso dedicado y esta mal dentro de un servidor web: una sola conexion
+    compartida entre requests concurrentes no es segura, y ademas envejece --una
+    caida de la base la deja inservible para siempre, sin que nadie la reponga--.
+
+    Aca se recibe ``abrir_conexion``, un invocable que devuelve un **context
+    manager** de conexion (la firma de ``libracore.db.core.get_connection``), y
+    se abre una por request. El producto ya sabe administrar sus conexiones;
+    esto no se mete.
+
+    El ``operation_handler`` lo pone el producto: LibraEdge nunca sabe que es una
+    venta. El changelog sale de la misma conexion, porque en el central las
+    tablas de los dos conviven en la misma base -- por eso aca no hay un
+    equivalente del 501 de ``create_sync_app``: si hay conexion, hay changelog.
+
+    🔴 **La firma del handler es ``(conexion, operacion)``, no ``(operacion)``.**
+    Es la que ya tienen los dos handlers de la familia --
+    ``apply_confirmed_sale_operation`` y ``aplicar_pedido_cobrado``-- porque un
+    handler necesita la conexion para escribir las filas de dominio.
+    ``SyncReceiver`` llama con **un** argumento, herencia de cuando el receptor
+    era el dueno de la conexion; aca la conexion es del request, asi que se le
+    pasa al handler en un cierre.
+
+    Sin eso, un producto que montara el router con su handler de siempre recibia
+    ``missing 1 required positional argument`` **por cada operacion**, y el
+    receptor lo traducia a ``rejected``: cada venta de cada nodo terminaba en
+    revision manual, con el nodo reportandose en linea y sin errores. Se
+    encontro al cablearlo de verdad contra el producto -- los tests que llamaban
+    al handler directo no podian verlo.
+    """
+    try:
+        from fastapi import APIRouter, HTTPException, Request
+    except ImportError as exc:
+        raise RuntimeError("FastAPI es opcional; instalar libraedge[server]") from exc
+
+    from libraedge.db.repository import NodeRepository
+    from libraedge.sync.receiver import SyncReceiver
+
+    router = APIRouter(tags=["sync"])
+
+    def _secreto(request) -> str:
+        cabecera = request.headers.get("authorization", "")
+        if not cabecera.startswith("Bearer "):
+            raise HTTPException(401, detail="missing bearer token")
+        return cabecera.removeprefix("Bearer ")
+
+    @router.post("/sync/v1/push")
+    def push(payload: dict, request: Request):
+        faltan = sorted(CAMPOS_DEL_PUSH - payload.keys())
+        if faltan:
+            raise HTTPException(422, detail={"missing": faltan})
+        secreto = _secreto(request)
+        try:
+            operacion = operacion_desde_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(422, detail="invalid operation") from exc
+
+        with abrir_conexion() as conexion:
+            if not NodeRepository(conexion).verify_node_secret(payload["node_id"], secreto):
+                raise HTTPException(401, detail="invalid node credentials")
+            # El handler de la familia toma (conexion, operacion); el receptor
+            # llama con una sola. El cierre le pasa la conexion de ESTE request.
+            handler = None
+            if operation_handler is not None:
+                def handler(op, _conexion=conexion):
+                    return operation_handler(_conexion, op)
+
+            receptor = SyncReceiver(
+                conexion, operation_handler=handler,
+                supported_schema_version=supported_schema_version,
+            )
+            resultado = receptor.accept(operacion)
+        return {"operation_id": operacion.operation_id,
+                "result": resultado.result, "error": resultado.error}
+
+    @router.get("/sync/v1/pull")
+    def pull(request: Request, node_id: str, cursor: int = 0, limit: int = 500):
+        secreto = _secreto(request)
+        with abrir_conexion() as conexion:
+            if not NodeRepository(conexion).verify_node_secret(node_id, secreto):
+                raise HTTPException(401, detail="invalid node credentials")
+            limit = max(1, min(limit, 1000))
+            cambios = listar_cambios(conexion, desde=cursor, limit=limit)
+        return {"changes": [serializar_cambio(cambio) for cambio in cambios],
+                "cursor": cambios[-1].cursor if cambios else cursor}
+
+    return router
