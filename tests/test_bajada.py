@@ -14,10 +14,12 @@ import pytest
 
 from libraedge.db.changelog import (
     cargar_payload,
+    desinstalar_trigger,
     init_changelog_schema,
     instalar_trigger,
     listar_cambios,
     sembrar,
+    tablas_publicadas,
     validar_identificador,
 )
 from libraedge.db.repository import NodeRepository
@@ -627,3 +629,58 @@ def test_un_nodo_recien_instalado_guarda_su_cursor(repo, nodo, tmp_path):
     assert n.sincronizar().cambios_bajados == 0
     assert transporte.pedidos == [0, 2], (
         "el segundo ciclo tiene que pedir desde 2, no desde 0")
+
+
+def test_desinstalar_trigger_deja_de_publicar(central, motor):
+    """La contracara de instalar, que no existía.
+
+    Sacar una tabla de la lista de un producto no desinstala lo que un
+    aprovisionamiento anterior dejó puesto. El control está en el medio: se
+    verifica que **antes** de desinstalar el trigger sí registraba, porque si no
+    el "0 cambios nuevos" del final lo daría igual un trigger que nunca se
+    instaló.
+    """
+    if motor == "sqlite":
+        pytest.skip("el trigger es PL/pgSQL; el central siempre corre PostgreSQL")
+
+    instalar_trigger(central, "productos")
+    central.execute("INSERT INTO productos (nombre) VALUES (?)", ("yerba",))
+    central.commit()
+    assert len(listar_cambios(central)) == 1, "el trigger no estaba registrando"
+
+    desinstalar_trigger(central, "productos")
+    central.execute("INSERT INTO productos (nombre) VALUES (?)", ("mate",))
+    central.commit()
+
+    assert len(listar_cambios(central)) == 1, "siguió publicando después de sacarlo"
+
+
+def test_desinstalar_un_trigger_que_no_esta_no_rompe(central, motor):
+    """Idempotente, como su gemelo: converger no puede depender del estado previo."""
+    if motor == "sqlite":
+        pytest.skip("el trigger es PL/pgSQL; el central siempre corre PostgreSQL")
+
+    desinstalar_trigger(central, "productos")
+    desinstalar_trigger(central, "productos")
+    central.commit()
+
+
+def test_tablas_publicadas_sale_del_catalogo_y_no_de_una_lista(central, motor):
+    """Lo instalado es un hecho del servidor, no una lista en código.
+
+    Se mira en las dos direcciones: que aparezca la que se instaló y que
+    desaparezca al desinstalarla. Sólo la primera mitad la cumpliría también una
+    función que devolviera todas las tablas de la base.
+    """
+    if motor == "sqlite":
+        pytest.skip("el trigger es PL/pgSQL; el central siempre corre PostgreSQL")
+
+    assert "productos" not in tablas_publicadas(central)
+
+    instalar_trigger(central, "productos")
+    central.commit()
+    assert "productos" in tablas_publicadas(central)
+
+    desinstalar_trigger(central, "productos")
+    central.commit()
+    assert "productos" not in tablas_publicadas(central)
