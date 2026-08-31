@@ -149,16 +149,79 @@ script siguió con código 0. El chequeo agregado para que el collation no pasar
 desapercibido era mudo. Ahora se piden las dos columnas por separado y se grita
 si vuelve vacío.
 
+### Segunda vuelta: `preparar_nodo.ps1` entero, y el nodo levanta solo
+
+> 🟢 **El instalador completo corre y el nodo sobrevive a un reinicio.** Con el
+> producto instalado en el Python embebido, `preparar_nodo.ps1` termina con
+> código 0, deja los dos servicios andando, y **el punto #2 del README pasa**:
+> 51 segundos después de arrancar Windows los tres servicios están arriba y el
+> producto contesta 200, sin que nadie toque nada.
+
+**El paso de empaquetado que el `.iss` despachaba en una línea.** *"El producto
+ya instalado en el Python embebido"* esconde que **no se puede `pip install` en
+un Python embebido**: el paquete no trae `venv` ni `ensurepip` ni `setuptools`,
+así que el aislamiento de construcción de pip falla con
+*"Cannot import 'hatchling.build'"*. Hay que preinstalar los backends
+(`hatchling`, `hatch-vcs`, `setuptools`, `wheel`) y después instalar con
+`--no-build-isolation`. Y hace falta **git** en la máquina que arma la carga,
+porque las dependencias de la familia son `git+https`.
+
+### 🔴 Lo que encontró esta vuelta
+
+**4. Faltaba la mitad de las migraciones.** Acá corría sólo
+`alembic upgrade head` —la cadena **propia** del producto— y falta la del
+**motor**, que es la que crea `facturas`, `cajas`, `usuarios` y el schema entero
+de LibraCore. El central corre las dos: `scripts/panel_admin.py` y
+`scripts/nuevo_cliente.py` del producto tienen exactamente esa tupla.
+
+> Medido: con una sola cadena la migración muere en el `0001` con
+> *relation "facturas" does not exist* y la base del nodo queda con **21**
+> tablas, sin `cajas`, `usuarios` ni `sync_outbox`. Con las dos, **73**.
+
+**5. El producto no levantaba, y el servicio decía `Running`.** El `.env` no
+incluía `SECRET_KEY`, así que `libraauth` abortaba con *"SECRET_KEY no está
+seteado"* en cada arranque. Windows mostraba el servicio **Running** —porque
+NSSM estaba vivo— y no había nada escuchando en el puerto.
+
+> 🔑 **Esto es exactamente por qué el chequeo no puede ser `Get-Service`.** Lo
+> que lo delató fue pedirle la página de salud y mirar los logs de NSSM. Ahora
+> el secreto se genera por nodo con el generador **criptográfico** del sistema
+> —`Get-Random` no sirve para esto— y se escribe en el mismo archivo con la
+> misma ACL.
+
+**6. Y el bucle de reinicio giraba a dos por segundo.** NSSM reintenta a los
+1500 ms por defecto: **24 archivos de log en dos minutos**, quemando disco y
+tapando justamente el log que hacía falta leer. Ahora hay un `AppThrottle` de
+15 s y la rotación es por tamaño, no por arranque.
+
+### Lo que quedó verificado en esta vuelta
+
+| Punto | Resultado |
+|---|---|
+| `preparar_nodo.ps1` completo | exit 0; las dos cadenas de migraciones; **73 tablas** |
+| Los dos servicios | registrados, `Automatic`, y el producto **sirve**: salud 200, y una ruta inventada da **404** (no un 200 de catch-all) |
+| **#2 del README: reiniciar** | los tres servicios levantan solos; salud 200 a los **51 s** de arrancar Windows |
+| El nodo sin central | reporta `en_linea: false` con `HTTP 401` — el motivo real, no un silencio |
+
+### Observación, sin arreglar
+
+Al crear el usuario admin, el producto imprime en el log
+`[WARN] ADMIN_PASSWORD no configurado. Contraseña generada: …`. En el nodo eso
+deja una contraseña en texto plano en un archivo del disco. Es comportamiento
+del producto, no del instalador, pero acá importa más: la PC está en el salón.
+Habría que decidir si el nodo debe crear un admin propio —los usuarios bajan por
+el espejo— o si el instalador tiene que setear `ADMIN_PASSWORD`.
+
+
 ### Lo que sigue sin probarse
 
-- **`preparar_nodo.ps1` de la mitad para abajo**: migraciones, registro de los
-  dos servicios con NSSM y arranque. Falta el producto instalado en el Python
-  embebido, que necesita git y el árbol de dependencias entero.
+- ~~`preparar_nodo.ps1` de la mitad para abajo~~ — **hecho**, ver la seccion
+  "Segunda vuelta" mas arriba.
 - **El `.iss` sin compilar**: la descarga de Inno Setup devolvió un HTML de
   10 KB en vez del ejecutable (detectado por los bytes mágicos: `3C 21`, no
   `4D 5A`).
-- **Los puntos #2, #3, #5 y #6 del README**: reiniciar la PC, el corte sucio, la
-  desinstalación y la actualización. Todos necesitan los servicios andando.
+- **Los puntos #3, #5 y #6**: el corte sucio de energia, la desinstalacion y
+  la actualizacion. El **#2 (reiniciar) ya paso**.
 
 
 ## Lo que hay que verificar en una máquina real
