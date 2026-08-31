@@ -21,7 +21,8 @@ def init_schema(conn) -> None:
             schema_version INTEGER NOT NULL,
             last_server_cursor TEXT,
             active INTEGER NOT NULL DEFAULT 1,
-            secret_hash TEXT NOT NULL DEFAULT ''
+            secret_hash TEXT NOT NULL DEFAULT '',
+            last_seen_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS local_sequences (
@@ -62,3 +63,20 @@ def init_schema(conn) -> None:
         );
         """
     )
+
+    # 🔴 Columnas agregadas DESPUÉS de la primera versión.
+    #
+    # `CREATE TABLE IF NOT EXISTS` no toca una tabla que ya existe: en una
+    # instalación anterior la tabla está y la columna nueva **no**, y nada
+    # falla — hasta que alguien la lee. Por eso el `ALTER` aparte.
+    #
+    # `PRAGMA table_info` y no un `ALTER ... IF NOT EXISTS`: eso último existe
+    # en PostgreSQL y **no** en SQLite, y este DDL corre en los dos. La capa
+    # dual de LibraCore traduce el PRAGMA a `information_schema.columns`.
+    columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(node_identity)").fetchall()}
+    if "last_seen_at" not in columnas:
+        # Cuándo fue la última vez que este nodo se identificó contra el
+        # central. Es el dato del que vive todo el monitoreo: sin él, el central
+        # no tiene forma de saber que una sucursal dejó de sincronizar — y un
+        # nodo callado se ve exactamente igual que uno al día.
+        conn.execute("ALTER TABLE node_identity ADD COLUMN last_seen_at TEXT")

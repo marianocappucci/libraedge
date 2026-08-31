@@ -167,6 +167,23 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             raise HTTPException(401, detail="missing bearer token")
         return cabecera.removeprefix("Bearer ")
 
+    def _autenticar(conexion, node_id: str, secreto: str) -> None:
+        """Verifica el secreto **y anota el contacto**. Las dos cosas juntas.
+
+        🔴 El latido va acá y no en cada `endpoint`, a propósito: éste es el
+        único punto por el que pasa todo nodo que se identifica, así que una
+        ruta nueva no se lo puede olvidar. Es la diferencia entre un mecanismo
+        que hay que acordarse de invocar y uno que no se puede saltear.
+
+        Se anota **después** de verificar: un secreto inválido no es un nodo
+        vivo, es alguien golpeando la puerta, y contarlo como contacto dejaría
+        a un nodo revocado viéndose sano para siempre.
+        """
+        repositorio = NodeRepository(conexion)
+        if not repositorio.verify_node_secret(node_id, secreto):
+            raise HTTPException(401, detail="invalid node credentials")
+        repositorio.registrar_contacto(node_id)
+
     @router.post("/sync/v1/push")
     def push(payload: dict, request: Request):
         faltan = sorted(CAMPOS_DEL_PUSH - payload.keys())
@@ -179,8 +196,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             raise HTTPException(422, detail="invalid operation") from exc
 
         with abrir_conexion() as conexion:
-            if not NodeRepository(conexion).verify_node_secret(payload["node_id"], secreto):
-                raise HTTPException(401, detail="invalid node credentials")
+            _autenticar(conexion, payload["node_id"], secreto)
             # El handler de la familia toma (conexion, operacion); el receptor
             # llama con una sola. El cierre le pasa la conexion de ESTE request.
             handler = None
@@ -200,8 +216,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     def pull(request: Request, node_id: str, cursor: int = 0, limit: int = 500):
         secreto = _secreto(request)
         with abrir_conexion() as conexion:
-            if not NodeRepository(conexion).verify_node_secret(node_id, secreto):
-                raise HTTPException(401, detail="invalid node credentials")
+            _autenticar(conexion, node_id, secreto)
             limit = max(1, min(limit, 1000))
             cambios = listar_cambios(conexion, desde=cursor, limit=limit)
         return {"changes": [serializar_cambio(cambio) for cambio in cambios],
