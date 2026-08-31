@@ -213,6 +213,43 @@ Habría que decidir si el nodo debe crear un admin propio —los usuarios bajan 
 el espejo— o si el instalador tiene que setear `ADMIN_PASSWORD`.
 
 
+### Tercera vuelta: el corte sucio de energia (punto #3)
+
+> 🟢 **Pasa, y con margen.** Se escribieron ventas a ~1000 por segundo, cada una
+> con su fila de outbox **en la misma transaccion**, y se apago la VM de golpe
+> (`Stop-VM -TurnOff`, que es tirar del cable) en plena escritura.
+
+Al volver:
+
+| Medicion | Resultado |
+|---|---|
+| Ventas | 27.840 |
+| Filas de outbox | 27.840 |
+| **Ventas sin su outbox** | **0** |
+| **Outbox sin su venta** | **0** |
+| Ultima venta | `corte-027840` — sin huecos: el ultimo commit y todos los anteriores |
+| Integridad fisica | `sum(total)` sobre la tabla entera, sin errores de lectura |
+| PostgreSQL | se recupero solo y volvio a aceptar conexiones |
+
+> 🔑 **La invariante no necesita un registro externo**, y eso es lo que la hace
+> util: un archivo con "iba por la venta N" se habria perdido en el mismo corte.
+> Lo que se verifica es que **toda venta tenga su outbox y todo outbox su
+> venta**. Si el corte hubiera partido una transaccion al medio, aparece una sin
+> la otra.
+
+**Y lo que este resultado NO prueba.** Que el WAL se recupere bien no dice nada
+sobre lo que el disco haya escrito mal. Por eso el `initdb` ahora lleva
+**`--data-checksums`**: PostgreSQL 16 los deja apagados por defecto, y sin ellos
+una pagina que el disco devuelve corrupta se lee como datos validos --el error
+aparece meses despues, en un arqueo que no cierra--. Es una propiedad del
+cluster que se decide en el `initdb` y no se puede cambiar despues.
+
+> El cluster de esta VM se creo **antes** del cambio, asi que corre con
+> `data_checksums = off`. La linea nueva se verifico aparte: `initdb` sale con 0
+> y dice *"Las sumas de verificacion en paginas de datos han sido activadas"*,
+> sin perder ICU.
+
+
 ### Lo que sigue sin probarse
 
 - ~~`preparar_nodo.ps1` de la mitad para abajo~~ — **hecho**, ver la seccion
@@ -220,8 +257,9 @@ el espejo— o si el instalador tiene que setear `ADMIN_PASSWORD`.
 - **El `.iss` sin compilar**: la descarga de Inno Setup devolvió un HTML de
   10 KB en vez del ejecutable (detectado por los bytes mágicos: `3C 21`, no
   `4D 5A`).
-- **Los puntos #3, #5 y #6**: el corte sucio de energia, la desinstalacion y
-  la actualizacion. El **#2 (reiniciar) ya paso**.
+- **Los puntos #5 y #6**: la desinstalacion y la actualizacion. Los dos
+  necesitan el `.iss` compilado. El **#2 (reiniciar) y el #3 (corte sucio)
+  ya pasaron**.
 
 
 ## Lo que hay que verificar en una máquina real
