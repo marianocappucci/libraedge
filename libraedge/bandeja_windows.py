@@ -1,10 +1,27 @@
 """El ícono de bandeja de Windows. Dibuja lo que decide `bandeja.py`.
 
-> 🔴 **SIN PROBAR.** Se escribió en un entorno sin Windows y sin escritorio, así
-> que nunca se ejecutó: no hay forma de verificar acá que el ícono aparezca, que
-> el menú funcione ni que el color se vea. Lo que **sí** está probado es toda la
-> lógica de qué mostrar (`bandeja.py`, 17 tests) — este archivo no toma ninguna
-> decisión, sólo pinta.
+> 🟢 **Probado en una VM con Windows 11 el 2026-08-31.** Se escribió en un
+> entorno sin Windows y sin escritorio, así que estuvo sin ejecutar hasta esa
+> fecha. Lo verificado, enumerando el área de notificación por UI Automation
+> desde la sesión del usuario:
+>
+> - El ícono aparece en la barra de tareas —elemento entre el Explorador y
+>   Seguridad de Windows— y su tooltip es exactamente lo que produce
+>   `bandeja.py`: *"Al día / Última sincronización hace menos de un minuto."*
+> - **Cambia solo**: al desconectar la red pasó a *"Sin conexión con el central /
+>   Se sigue operando normalmente; lo pendiente se envía solo al volver"*, y al
+>   reconectar volvió.
+> - Los tres colores se dibujan con el valor de su severidad, y la esquina del
+>   PNG queda transparente.
+>
+> Lo que **no** se verificó por píxeles: cómo se ve el círculo a 16 px en la
+> pantalla. La captura GDI no toma la barra de tareas de Windows 11, y el color
+> ya está comprobado leyendo el píxel central de `_icono()`.
+>
+> 🔴 Y el escenario que hay que tener presente: la bandeja **no puede correr
+> como servicio** —Windows no le deja dibujar a la sesión 0—, así que arranca
+> desde un acceso directo del inicio de sesión. Si nadie inicia sesión en esa
+> PC, no hay ícono; y está bien, porque no hay a quién mostrárselo.
 >
 > Para verlo sin Windows y sin ícono: `libraedge-nodo bandeja --una-vez`, que
 > imprime exactamente lo mismo que iría en el tooltip.
