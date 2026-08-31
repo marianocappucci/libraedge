@@ -13,7 +13,11 @@ param(
     [Parameter(Mandatory = $true)][string]$NodeSecret,    # lo emite el central, UNA sola vez
     [Parameter(Mandatory = $true)][string]$TablasEspejo,  # lo imprime `nodo_offline registrar`
     [int]$PuertoProducto = 8000,
-    [int]$IntervaloSegundos = 60
+    [int]$IntervaloSegundos = 60,
+    # El prefijo del producto, que es lo que `libracore-migrar` usa para
+    # encontrar la base del motor. Es un parámetro y no una constante porque el
+    # nodo va a existir para más de un producto de la familia.
+    [string]$Prefijo = "restolibra"
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,6 +77,23 @@ if ($deMas) { throw "La ACL de $archivoEnv dejó cuentas de más: $($deMas -join
 # un `.env` y cualquier lector que no sea PowerShell --un `python-dotenv`, por
 # ejemplo-- se comería el BOM como parte del nombre de la primera variable, y
 # `LIBRAEDGE_NODE_ID` desaparecería sin que nada avise.
+
+# 🔴 **El `SECRET_KEY` del producto, que faltaba.** Sin él la app no levanta:
+# `libraauth.session_auth` aborta con *"SECRET_KEY no está seteado. No se
+# levanta la app sin un secreto propio"*. Medido en la VM el 2026-08-30: el
+# servicio quedaba en bucle de reinicio, Windows lo mostraba **Running**, y no
+# había nada escuchando en el puerto.
+#
+# Se genera acá, uno por nodo, y no se pide al que instala: es un secreto de
+# esta máquina y nadie lo tiene que ver ni transcribir. Va al mismo archivo con
+# la misma ACL que el secreto del nodo.
+#
+# 🔴 Y **no** se usa `Get-Random`: es un generador reproducible, no
+# criptográfico. Para un secreto de sesión eso es exactamente lo que no sirve.
+$bytes = New-Object byte[] 48
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$claveSesion = [Convert]::ToBase64String($bytes)
+
 $contenido = @"
 LIBRAEDGE_NODE_ID=$NodeId
 LIBRAEDGE_NODE_SECRET=$NodeSecret
@@ -81,6 +102,7 @@ LIBRAEDGE_DATABASE_URL=$UrlBase
 LIBRAEDGE_TABLAS_ESPEJO=$TablasEspejo
 LIBRAEDGE_ESTADO=$estado
 RESTOLIBRA_DATABASE_URL=$UrlBase
+SECRET_KEY=$claveSesion
 TZ=America/Argentina/Buenos_Aires
 "@
 [System.IO.File]::WriteAllText(
@@ -119,11 +141,40 @@ if (-not $puedeImportar) {
            "descomentado, entonces sí falta instalar el producto en esa carga.")
 }
 
+#
+# 🔴 **SON DOS CADENAS, no una, y el orden importa.**
+#
+# Hasta el 2026-08-30 acá sólo corría `alembic upgrade head`, o sea la cadena
+# PROPIA del producto. Falta la del motor, que es la que crea `facturas`,
+# `cajas`, `usuarios` y todo el schema de LibraCore. El central corre las dos
+# --ver `scripts/panel_admin.py` y `scripts/nuevo_cliente.py` del producto, que
+# tienen exactamente esta tupla-- y el nodo tiene que correr LAS MISMAS: de eso
+# vive que el espejo pueda escribir fila por fila sin traducir nada.
+#
+# Medido en la VM: con una sola cadena, la migración muere en el `0001` con
+# *relation "facturas" does not exist* y la base del nodo queda con 21 tablas y
+# sin `cajas`, `usuarios`, `sync_outbox` ni `edge_nodes`.
+#
+# `libracore-migrar` es el console script del motor, igual que en el central, y
+# resuelve la base por `<PREFIJO>_DATABASE_URL` cuando no hay una del core
+# aparte. Se invoca el ejecutable y no `python -m`: es la misma forma que usa el
+# central, y las migraciones del motor viajan dentro del wheel.
+$migrar = Join-Path $RaizNodo "python\Scripts\libracore-migrar.exe"
+if (-not (Test-Path $migrar)) {
+    throw ("No está $migrar. La carga del producto se armó sin instalar " +
+           "libracore[migrations] en el Python embebido.")
+}
+
 Push-Location $RaizNodo
 try {
+    Set-Item -Path ("Env:{0}_DATABASE_URL" -f $Prefijo.ToUpper()) -Value $UrlBase
     $env:RESTOLIBRA_DATABASE_URL = $UrlBase
+
+    & $migrar upgrade --prefijo $Prefijo
+    if ($LASTEXITCODE -ne 0) { throw "Las migraciones del motor fallaron con código $LASTEXITCODE" }
+
     & $python -m alembic upgrade head
-    if ($LASTEXITCODE -ne 0) { throw "Las migraciones fallaron con código $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "Las migraciones del producto fallaron con código $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
@@ -151,7 +202,18 @@ function Registrar-Servicio {
     & $nssm set $Nombre Start SERVICE_AUTO_START
     & $nssm set $Nombre AppStdout (Join-Path $RaizNodo "logs\$Nombre.log")
     & $nssm set $Nombre AppStderr (Join-Path $RaizNodo "logs\$Nombre.log")
+    # 🔴 El freno del reinicio. NSSM reintenta a los 1500 ms por defecto, y un
+    # proceso que muere al arrancar --por una variable que falta, digamos-- gira
+    # a dos por segundo. Medido en la VM el 2026-08-30: **24 archivos de log en
+    # dos minutos**, y el bucle escondido detrás de un servicio que Windows
+    # muestra `Running`. Con 15 s el servicio sigue recuperándose solo de una
+    # caída real, pero un arranque roto no quema disco ni tapa el log.
+    & $nssm set $Nombre AppThrottle 15000
     & $nssm set $Nombre AppRotateFiles 1
+    # Y que rote por TAMAÑO, no en cada arranque: con rotación por arranque, un
+    # bucle deja un archivo por intento y el log deja de servir para leerlo.
+    & $nssm set $Nombre AppRotateOnline 1
+    & $nssm set $Nombre AppRotateBytes 10485760
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $RaizNodo "logs") | Out-Null
