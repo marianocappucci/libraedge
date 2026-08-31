@@ -121,6 +121,63 @@ class NodeRepository:
         )
         self._conn.commit()
 
+    def registrar_contacto(self, node_id: str) -> None:
+        """Anota que este nodo se identificó recién contra el central.
+
+        🔴 **Es el único dato del que puede vivir el monitoreo.** Sin él, un
+        nodo que dejó de sincronizar hace seis horas se ve **exactamente igual**
+        que uno al día: la fila de `node_identity` no cambia, el outbox del
+        central no crece porque el nodo no manda nada, y nadie tiene de dónde
+        agarrarse. El nodo sabe que está fuera de línea y lo muestra en su
+        bandeja; el central no se entera de nada.
+
+        Se llama desde la autenticación de las rutas de sincronización, no desde
+        cada `endpoint`: **todo** nodo que hable pasa por ahí, así que una ruta
+        nueva no se lo puede olvidar. Y se anota en el `pull` además del `push`
+        porque un local sin ventas igual baja el espejo: si sólo contara el
+        push, un nodo sano en una noche tranquila se vería caído.
+        """
+        self._escribir(
+            "UPDATE node_identity SET last_seen_at = ? WHERE node_id = ?",
+            (datetime.now(timezone.utc).isoformat(), node_id),
+        )
+        self._conn.commit()
+
+    def nodos_para_vigilar(self) -> list[dict]:
+        """Cada nodo con cuándo se lo vio por última vez, para el central.
+
+        Devuelve los datos crudos y **no** decide si un nodo está caído: el
+        umbral depende del intervalo de sincronización que tenga configurado
+        cada instalación, que este motor no conoce. Quien llama compara.
+
+        `nunca` distingue un nodo recién registrado —que todavía no se instaló
+        en ninguna PC— de uno que hablaba y dejó de hacerlo. Son dos problemas
+        distintos y confundirlos manda a mirar el lugar equivocado.
+        """
+        filas = self._conn.execute(
+            """SELECT node_id, branch_id, active, last_seen_at, last_server_cursor
+                 FROM node_identity ORDER BY node_id"""
+        ).fetchall()
+        ahora = datetime.now(timezone.utc)
+        nodos = []
+        for fila in filas:
+            visto = fila["last_seen_at"] if hasattr(fila, "keys") else fila[3]
+            minutos = None
+            if visto:
+                try:
+                    minutos = (ahora - datetime.fromisoformat(visto)).total_seconds() / 60
+                except ValueError:
+                    minutos = None
+            nodos.append({
+                "node_id": fila[0],
+                "branch_id": fila[1],
+                "activo": bool(fila[2]),
+                "ultima_vez": visto,
+                "minutos_sin_verse": minutos,
+                "cursor": fila[4],
+            })
+        return nodos
+
     def verify_node_secret(self, node_id: str, secret: str) -> bool:
         """True only for an active node whose secret hash matches."""
         row = self._conn.execute(

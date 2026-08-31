@@ -211,3 +211,84 @@ def test_el_router_valida_la_forma_antes_de_tocar_la_base(central):
     assert respuesta.status_code == 422
     assert "sequence" in respuesta.json()["detail"]["missing"]
     assert aperturas == [], "no hacia falta abrir la base para saber que falta un campo"
+
+
+# ── El latido: que el central sepa que el nodo sigue ahí ──────────────────
+
+def test_el_central_no_sabe_nada_de_un_nodo_recien_registrado(central):
+    """El control del caso de abajo: registrar no es haber hablado.
+
+    Un nodo dado de alta que todavía no se instaló en ninguna PC tiene que
+    verse distinto de uno que hablaba y dejó de hacerlo. Si los dos dieran lo
+    mismo, el central mandaría a revisar la sucursal equivocada.
+    """
+    _montar(central)
+    nodos = NodeRepository(central).nodos_para_vigilar()
+    assert len(nodos) == 1
+    assert nodos[0]["ultima_vez"] is None
+    assert nodos[0]["minutos_sin_verse"] is None
+
+
+def test_el_pull_cuenta_como_latido(central):
+    """🔴 Y no sólo el push, que es el error fácil.
+
+    Un local sin ventas no empuja nada, pero igual baja el espejo cada minuto.
+    Si sólo contara el push, un nodo perfectamente sano en una noche tranquila
+    se vería caído — y una alerta que grita cuando no pasa nada es la que se
+    termina apagando.
+    """
+    cliente, secreto, _ = _montar(central)
+
+    respuesta = cliente.get(
+        "/sync/v1/pull", params={"node_id": "node-1"},
+        headers={"authorization": f"Bearer {secreto}"},
+    )
+    assert respuesta.status_code == 200
+
+    nodo = NodeRepository(central).nodos_para_vigilar()[0]
+    assert nodo["ultima_vez"] is not None, "un pull tiene que contar como latido"
+    assert nodo["minutos_sin_verse"] < 1
+
+
+def test_el_push_tambien_cuenta_como_latido(central):
+    cliente, secreto, _ = _montar(central)
+
+    respuesta = cliente.post(
+        "/sync/v1/push", json=_payload(),
+        headers={"authorization": f"Bearer {secreto}"},
+    )
+    assert respuesta.status_code == 200
+
+    nodo = NodeRepository(central).nodos_para_vigilar()[0]
+    assert nodo["ultima_vez"] is not None
+    assert nodo["minutos_sin_verse"] < 1
+
+
+def test_un_secreto_invalido_no_cuenta_como_latido(central):
+    """Alguien golpeando la puerta no es el nodo vivo.
+
+    Si contara, un nodo revocado —o robado— se vería sano para siempre, que es
+    justo el escenario en el que el central tiene que avisar.
+
+    🔑 **Lleva el positivo adentro.** Un `assert ... is None` pasa igual si el
+    latido no existe en absoluto: sin la segunda mitad, este test estaría verde
+    tanto con el mecanismo puesto como con el mecanismo borrado, y no
+    distinguiría nada. Verificado con el control de mutación.
+    """
+    cliente, secreto, _ = _montar(central)
+    repositorio = NodeRepository(central)
+
+    respuesta = cliente.get(
+        "/sync/v1/pull", params={"node_id": "node-1"},
+        headers={"authorization": "Bearer no-es-el-secreto"},
+    )
+    assert respuesta.status_code == 401
+    assert repositorio.nodos_para_vigilar()[0]["ultima_vez"] is None
+
+    # El positivo: con el secreto bueno, el mismo pedido SÍ deja marca. Es lo
+    # que hace que el `None` de arriba diga algo.
+    cliente.get(
+        "/sync/v1/pull", params={"node_id": "node-1"},
+        headers={"authorization": f"Bearer {secreto}"},
+    )
+    assert repositorio.nodos_para_vigilar()[0]["ultima_vez"] is not None
