@@ -1,6 +1,16 @@
 # Instalador del nodo LibraEdge (Windows)
 
-> 🔴 **Al escribirse, nada de esto se había ejecutado.** Desde el 2026-08-30
+> 🟢 **Ya se ejecuto todo.** Al escribirse no se habia ejecutado nada; entre
+> el 2026-08-30 y el 2026-08-31 se probo entero en una VM con Windows 11
+> Enterprise LTSC en espanol: compilado, instalado en silencio, reiniciado,
+> cortado de energia de golpe, actualizado y desinstalado. **Los seis puntos
+> de la lista de verificacion pasan**, y en el camino aparecieron **diez
+> defectos**, todos arreglados. El detalle esta mas abajo, vuelta por vuelta.
+>
+> ⚠️ Lo que sigue sin probarse: nada de este directorio. Lo que falta es
+> darselo a un cliente real, que es otra cosa.
+>
+> El texto original decia: Desde el 2026-08-30
 >  sí corrió, entero y bien, en una VM con Windows 11 LTSC
 > en español — ver más abajo. El resto sigue sin ejecutarse.
 >
@@ -250,16 +260,73 @@ cluster que se decide en el `initdb` y no se puede cambiar despues.
 > sin perder ICU.
 
 
-### Lo que sigue sin probarse
+### Cuarta vuelta: el `.iss` compilado, instalado, actualizado y desinstalado
 
-- ~~`preparar_nodo.ps1` de la mitad para abajo~~ — **hecho**, ver la seccion
-  "Segunda vuelta" mas arriba.
-- **El `.iss` sin compilar**: la descarga de Inno Setup devolvió un HTML de
-  10 KB en vez del ejecutable (detectado por los bytes mágicos: `3C 21`, no
-  `4D 5A`).
-- **Los puntos #5 y #6**: la desinstalacion y la actualizacion. Los dos
-  necesitan el `.iss` compilado. El **#2 (reiniciar) y el #3 (corte sucio)
-  ya pasaron**.
+> 🟢 **Los seis puntos de la lista pasan.** El instalador se compilo (263 MB), se
+> instalo en silencio, se actualizo sobre datos existentes y se desinstalo sin
+> tocarlos. Ya no queda nada de este directorio sin ejecutar.
+
+### 🔴 Los cuatro de esta vuelta
+
+**7. El instalador no se podia desatender.** Los `code:` de las secciones `Run`
+leian `PaginaNodo.Values[0]` directo. En `/VERYSILENT` el asistente no se
+muestra, los campos quedan vacios, y los dos scripts reciben cadenas vacias
+**sin que nada avise**. No es solo un problema para probarlo: un cliente con
+cinco sucursales necesita cinco instalaciones a mano, o sea cinco oportunidades
+de tipear mal un secreto. Ahora los valores salen de la linea de comandos si
+estan y del asistente si no, y en silencio **aborta antes de tocar el disco** si
+falta alguno.
+
+**8. Las llaves en los comentarios de Pascal Script.** El primer intento de
+compilar murio con *"Error on line 108: Syntax error"*: un comentario que
+mencionaba `code:` **entre llaves** cierra el comentario ahi mismo, porque en
+Pascal Script la llave ES el comentario.
+
+**9. El desinstalador dejaba PostgreSQL registrado.** `pg_ctl unregister` corria
+con el servicio andando y fallaba con **codigo 1072**
+(`ERROR_SERVICE_MARKED_FOR_DELETE`): Windows no borra un servicio en marcha,
+solo lo marca. El desinstalador terminaba "bien" y el servicio quedaba
+registrado --`Running` y `Disabled`-- apuntando a binarios que el mismo
+desinstalador acababa de borrar. Ahora se detiene con `net stop` (que espera)
+antes de desregistrar.
+
+**10. Y dejaba el SECRETO DEL NODO en el disco.** `nodo.env` lo escribe
+`preparar_nodo.ps1` en tiempo de instalacion, asi que el desinstalador no sabe
+de el. Con `estado.json` y los `__pycache__` que genera Python al importar --96
+archivos en siete directorios, que tampoco instalo nadie-- la carpeta entera
+sobrevivia. Un secreto que autoriza a escribir en el central, en el disco de una
+PC que se esta dando de baja.
+
+### Lo verificado, punto por punto
+
+| | Que se midio |
+|---|---|
+| Compilacion | `Successful compile`, `libraedge-nodo-0.6.4.exe`, 263 MB |
+| Instalacion silenciosa | los tres pasos con exit 0, en 2m20s |
+| **#1 zona del `initdb`** | `now()` = `-03` con el sistema operativo en **UTC** |
+| Collation | `i\|en-US` (ICU), no `C` |
+| **Checksums** | `data_checksums = on` en un cluster creado por el instalador real |
+| Schema | 73 tablas, con `cajas`, `usuarios`, `facturas` y `sync_outbox` |
+| El producto | salud 200; los tres servicios `Running` y `Automatic` |
+| **#4 el `.env`** | sin BOM, y solo `SYSTEM` y `BUILTIN\Administradores` |
+| **#2 reiniciar** | los tres servicios solos, salud 200 a los 51 s |
+| **#3 corte sucio** | 27.840 ventas, ninguna transaccion partida |
+| **#6 actualizar** | instalado sobre datos existentes: la marca sobrevive con su valor (4242), **la operacion pendiente del outbox tambien**, y el bloque de `postgresql.conf` **no se duplica** |
+| **#5 desinstalar** | los tres servicios quitados, `nodo.env` borrado, la carpeta borrada, y **los datos intactos** |
+
+> 🔑 El #5 y el #6 se probaron **encadenados y con una marca**: se inserto una
+> venta con un total conocido y una operacion en el outbox, se desinstalo, se
+> reinstalo, y se verifico que la marca volviera con su valor exacto. Comprobar
+> que "la carpeta sigue ahi" no habria distinguido datos intactos de datos
+> vacios.
+
+### Observaciones, sin arreglar
+
+- Al reinstalar hay que tipear **la misma contrasena** de PostgreSQL que la vez
+  anterior: el cluster no se re-inicializa, asi que una distinta hace fallar el
+  bucle de espera con un mensaje que no lo dice.
+- El producto imprime en el log `ADMIN_PASSWORD no configurado. Contrasena
+  generada: ...` (ver la seccion anterior).
 
 
 ## Lo que hay que verificar en una máquina real

@@ -23,7 +23,7 @@
 ; ⚠️ Mover esto con el tag de LibraEdge. Estuvo en 0.4.1 mientras el paquete iba
 ; por v0.6.0: un número que nadie mantiene es peor que no tenerlo, porque el
 ; cliente termina reportando una versión que no es la que tiene.
-#define Version       "0.6.0"
+#define Version       "0.6.4"
 #define Editor        "Mariano Cappucci"
 
 [Setup]
@@ -65,7 +65,11 @@ Source: "carga\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 [Dirs]
 ; Los datos NO van bajo {app}: la desinstalación no los tiene que tocar. Un
 ; outbox con operaciones sin sincronizar no existe en ningún otro lado.
-Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full
+; `uninsneveruninstall` explícito: si algún día la carpeta quedara vacía, sin
+; esta bandera el desinstalador la borraría. Verificado que hoy los datos
+; sobreviven (51 MB intactos tras desinstalar), pero eso pasaba por estar llena,
+; no por una decisión.
+Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full; Flags: uninsneveruninstall
 Name: "{app}\logs"
 
 [Run]
@@ -95,7 +99,34 @@ Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";   Flags: runhidden; RunOnceId: "QuitarNodo"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "PararProducto"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "QuitarProducto"
+; 🔴 PostgreSQL se DETIENE antes de desregistrarlo, y esto no es prolijidad.
+; Medido en la VM el 2026-08-31: sin el stop, `pg_ctl unregister` falla con
+; **código 1072** (`ERROR_SERVICE_MARKED_FOR_DELETE`) — Windows no borra un
+; servicio en marcha, sólo lo marca. El desinstalador terminaba "bien" y el
+; servicio quedaba registrado, en estado `Running` y `Disabled`, apuntando a
+; unos binarios que el mismo desinstalador acababa de borrar.
+;
+; `net stop` y no `sc stop`: `net` espera a que el servicio termine de parar,
+; `sc` vuelve enseguida y el `unregister` de abajo llegaría al mismo 1072.
+Filename: "{sys}\net.exe"; Parameters: "stop LibraEdgePostgres /y"; Flags: runhidden; RunOnceId: "PararPG"
 Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgePostgres"; Flags: runhidden; RunOnceId: "QuitarPG"
+
+[UninstallDelete]
+; 🔴 El secreto del nodo NO puede quedar en el disco de una PC que se está
+; dando de baja: autoriza a escribir en el central. Lo escribe
+; `preparar_nodo.ps1` en tiempo de instalación, así que el desinstalador no
+; sabe de él y sin esta línea sobrevive para siempre. Medido en la VM.
+Type: files; Name: "{app}\nodo.env"
+Type: files; Name: "{app}\estado.json"
+Type: filesandordirs; Name: "{app}\logs"
+; Y los `__pycache__`: los genera Python al importar, no los instaló nadie, así
+; que el desinstalador tampoco los borra — y con un solo archivo adentro la
+; carpeta entera queda. En la VM quedaron 96 `.pyc` repartidos en siete
+; directorios.
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\migrations"
+Type: filesandordirs; Name: "{app}\scripts"
+Type: filesandordirs; Name: "{app}\python"
 
 [Code]
 { Los datos del nodo se piden en una página propia: el secreto lo emite el
@@ -103,9 +134,58 @@ Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgeP
   No se puede pedir por API — el instalador no tiene credenciales para eso, y
   dárselas sería poner una llave del central en cada PC de cada cliente. }
 
+{ 🔴 Los valores viven en VARIABLES, no en las paginas del asistente.
+
+  (Ojo con las llaves en los comentarios de esta seccion: en Pascal Script la
+  llave ES el comentario, asi que escribir "code:..." entre llaves lo cierra
+  antes de tiempo. Costo un "Syntax error" en la primera compilacion.)
+
+  El primer diseno leia `PaginaNodo.Values[0]` directo desde los "code:" de las
+  secciones Run. Eso hace que el instalador **no se pueda desatender**: en
+  `/VERYSILENT` el
+  asistente no se muestra, los campos quedan vacios, y los dos scripts reciben
+  cadenas vacias sin que nada avise. No es solo un problema para probarlo: un
+  cliente con cinco sucursales necesita instalarlo cinco veces, y hacerlo a mano
+  cinco veces es cinco oportunidades de tipear mal un secreto.
+
+  Ahora los valores salen de la linea de comandos si estan, y del asistente si
+  no. Ejemplo:
+
+    libraedge-nodo-0.6.4.exe /VERYSILENT /UrlCentral="https://..." /NodeId="..."
+        /NodeSecret="..." /TablasEspejo="..." /ClavePostgres="..." }
 var
   PaginaNodo: TInputQueryWizardPage;
   PaginaBase: TInputQueryWizardPage;
+  vUrlCentral, vNodeId, vNodeSecret, vTablas, vClave: String;
+
+function Parametro(Nombre: String): String;
+begin
+  Result := Trim(ExpandConstant('{param:' + Nombre + '|}'));
+end;
+
+function InitializeSetup: Boolean;
+begin
+  vUrlCentral := Parametro('UrlCentral');
+  vNodeId     := Parametro('NodeId');
+  vNodeSecret := Parametro('NodeSecret');
+  vTablas     := Parametro('TablasEspejo');
+  vClave      := Parametro('ClavePostgres');
+  Result := True;
+  { En silencio no hay a quien preguntarle: si falta algo se aborta ACA, antes
+    de tocar el disco. Un nodo a medio configurar sincroniza contra el lugar
+    equivocado --o contra ninguno-- y se ve igual que uno sano. }
+  if WizardSilent then
+  begin
+    if (vUrlCentral = '') or (vNodeId = '') or (vNodeSecret = '') or
+       (vTablas = '') or (Length(vClave) < 12) then
+    begin
+      MsgBox('Instalacion desatendida incompleta. Hacen falta /UrlCentral, ' +
+             '/NodeId, /NodeSecret, /TablasEspejo y /ClavePostgres (12 ' +
+             'caracteres o mas).', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
 
 { Corre el vc_redist solo si hace falta. Se mira si la DLL esta en el sistema
   y no el registro de programas instalados: lo que a PostgreSQL le importa es
@@ -135,12 +215,19 @@ begin
   PaginaNodo.Add('LIBRAEDGE_NODE_ID:', False);
   PaginaNodo.Add('LIBRAEDGE_NODE_SECRET:', True);
   PaginaNodo.Add('LIBRAEDGE_TABLAS_ESPEJO:', False);
+  { Prellenado con lo que haya venido por linea de comandos: sirve para
+    instalar varias sucursales pasando lo comun y tipeando solo lo distinto. }
+  PaginaNodo.Values[0] := vUrlCentral;
+  PaginaNodo.Values[1] := vNodeId;
+  PaginaNodo.Values[2] := vNodeSecret;
+  PaginaNodo.Values[3] := vTablas;
 
   PaginaBase := CreateInputQueryPage(PaginaNodo.ID,
     'Base de datos local',
     'Una contraseña para el PostgreSQL de esta máquina',
     'Se usa sólo en esta PC: la base escucha únicamente en 127.0.0.1.');
   PaginaBase.Add('Contraseña:', True);
+  PaginaBase.Values[0] := vClave;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -156,6 +243,13 @@ begin
       MsgBox('Faltan datos del nodo. Los cuatro salen del comando `registrar` ' +
              'que se corre en el central.', mbError, MB_OK);
       Result := False;
+    end
+    else
+    begin
+      vUrlCentral := Trim(PaginaNodo.Values[0]);
+      vNodeId     := Trim(PaginaNodo.Values[1]);
+      vNodeSecret := Trim(PaginaNodo.Values[2]);
+      vTablas     := Trim(PaginaNodo.Values[3]);
     end;
   end;
   if CurPageID = PaginaBase.ID then
@@ -164,15 +258,20 @@ begin
     begin
       MsgBox('La contraseña tiene que tener al menos 12 caracteres.', mbError, MB_OK);
       Result := False;
-    end;
+    end
+    else
+      vClave := PaginaBase.Values[0];
   end;
 end;
 
-function UrlCentral(Param: String): String;    begin Result := Trim(PaginaNodo.Values[0]); end;
-function NodeId(Param: String): String;        begin Result := Trim(PaginaNodo.Values[1]); end;
-function NodeSecret(Param: String): String;    begin Result := Trim(PaginaNodo.Values[2]); end;
-function TablasEspejo(Param: String): String;  begin Result := Trim(PaginaNodo.Values[3]); end;
-function ClavePostgres(Param: String): String; begin Result := PaginaBase.Values[0]; end;
+{ Los getters leen las VARIABLES, no las paginas: asi el mismo codigo sirve para
+  una instalacion con asistente y para una desatendida, donde las paginas no
+  existen. }
+function UrlCentral(Param: String): String;    begin Result := vUrlCentral; end;
+function NodeId(Param: String): String;        begin Result := vNodeId; end;
+function NodeSecret(Param: String): String;    begin Result := vNodeSecret; end;
+function TablasEspejo(Param: String): String;  begin Result := vTablas; end;
+function ClavePostgres(Param: String): String; begin Result := vClave; end;
 
 function UrlBase(Param: String): String;
 begin
