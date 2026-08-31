@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -37,11 +37,27 @@ name = "libraedge"
 # 0.5.0 -> 0.6.0 (2026-08-30): la ventana de bandeja. La decision de que
 # mostrar esta en bandeja.py y probada; el caparazon de Windows no se puede
 # ejecutar en este entorno y esta marcado como tal.
-version = "0.6.0"
+# 🔴 La version sale del TAG, no de esta linea.
+#
+# Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
+# se publicaron las seis reportando 0.6.0. Lo agarro el chequeo de pines del
+# CI de Restolibra --pin=0.6.6 instalado=0.6.0-- y no una persona.
+#
+# Un numero de version que se escribe a mano se desvia siempre; el que sale
+# de `git describe` no puede. Es lo mismo que hace libracore desde el dia uno.
+dynamic = ["version"]
 description = "Infraestructura edge offline reutilizable de la familia Libra"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Tags sin 'v' inicial (v0.6.6 -> 0.6.6), y sin sufijo local para que un
+# commit sin tag no produzca una version que pip rechace.
+local_scheme = "no-local-version"
 
 [project.optional-dependencies]
 dev = [
