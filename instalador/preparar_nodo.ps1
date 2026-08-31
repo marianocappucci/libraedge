@@ -17,7 +17,13 @@ param(
     # El prefijo del producto, que es lo que `libracore-migrar` usa para
     # encontrar la base del motor. Es un parámetro y no una constante porque el
     # nodo va a existir para más de un producto de la familia.
-    [string]$Prefijo = "restolibra"
+    [string]$Prefijo = "restolibra",
+    # La clave del superusuario de PostgreSQL. Va SUELTA y no se saca de
+    # `$UrlBase` a propósito: parsear una URL para recuperar una contraseña
+    # falla en cuanto la contraseña tiene un `@`, un `/` o un `:`, y falla
+    # devolviendo una cadena que parece válida. La necesita la tarea de
+    # respaldo, que se conecta sin pasar por la URL.
+    [string]$ClavePostgres = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -233,6 +239,74 @@ Registrar-Servicio -Nombre "LibraEdgeNodo" -Ejecutable $python `
 foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo")) {
     & $nssm set $servicio AppEnvironmentExtra $pares
     Start-Service -Name $servicio
+}
+
+# --- El respaldo del nodo -------------------------------------------------
+#
+# 🔴 El `sync_outbox` es **el único lugar del mundo** donde vive una venta
+# cobrada sin internet: todavía no llegó al central, y en el central no está. Si
+# el disco muere entre el cobro y la sincronización, esa plata no está en ningún
+# lado. Hasta el 2026-08-31 el instalador no contemplaba ningún respaldo.
+#
+# Cada hora, y no una vez por día, porque lo que se pierde es exactamente lo
+# cobrado desde el último: con el enlace sano el outbox se vacía en un minuto,
+# pero un local que estuvo el día entero sin internet acumula el día entero.
+#
+# Va como tarea programada de SISTEMA y no como servicio: corre un rato cada
+# hora, no permanentemente, y el planificador ya sabe recuperarse de un apagón
+# --si la PC estaba apagada a la hora en punto, corre al encender--.
+$tareaRespaldo = "LibraEdgeRespaldo"
+$accion = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$RaizNodo\instalador\respaldo.ps1`"" +
+               " -RaizPostgres `"$RaizNodo\postgres`" -Password `"$ClavePostgres`"")
+$disparador = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+    -RepetitionInterval (New-TimeSpan -Hours 1)
+$opciones = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+    -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+Unregister-ScheduledTask -TaskName $tareaRespaldo -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName $tareaRespaldo -Action $accion -Trigger $disparador `
+    -Settings $opciones -User "SYSTEM" -RunLevel Highest | Out-Null
+Write-Host "Respaldo programado cada hora en $((Get-ScheduledTask -TaskName $tareaRespaldo).State)."
+
+# --- La bandeja -------------------------------------------------------------
+#
+# 🔴 **No puede ser un servicio.** Windows no le deja dibujar nada a un servicio
+# desde la sesión 0, así que el ícono al lado del reloj tiene que arrancar en la
+# sesión del operador. Va como acceso directo en el inicio COMÚN: cualquiera que
+# entre a esa PC lo ve, y se apaga sacándolo de ahí, sin tocar el instalador.
+#
+# La ruta del estado va como ARGUMENTO y no por entorno: un acceso directo del
+# inicio no hereda el entorno que NSSM le da a los servicios, y una variable de
+# máquina ensuciaría el sistema entero por un dato de una sola aplicación.
+$inicio = [Environment]::GetFolderPath("CommonStartup")
+$acceso = Join-Path $inicio "LibraEdge - estado del nodo.lnk"
+$shell = New-Object -ComObject WScript.Shell
+$lnk = $shell.CreateShortcut($acceso)
+# `pythonw.exe` y no `python.exe`: con el segundo queda una consola negra
+# abierta toda la jornada al lado del ícono.
+$pythonw = Join-Path $RaizNodo "python\pythonw.exe"
+$lnk.TargetPath = $(if (Test-Path $pythonw) { $pythonw } else { $python })
+$lnk.Arguments = "-m libraedge bandeja --estado `"$estado`" --intervalo $IntervaloSegundos"
+$lnk.WorkingDirectory = $RaizNodo
+$lnk.Description = "Muestra si el nodo esta sincronizando"
+$lnk.Save()
+Write-Host "Bandeja: acceso directo en el inicio -> $acceso"
+if (-not (Test-Path $pythonw)) {
+    Write-Warning ("No esta pythonw.exe: la bandeja va a abrir una consola. " +
+                   "El paquete embebido de python.org lo trae; revisar la carga.")
+}
+# Que pystray este NO se puede dar por hecho: viaja en el extra `bandeja`, que
+# no es una dependencia del producto. Sin el, el acceso directo no hace nada y
+# nadie se entera hasta que alguien pregunta por que no aparece el icono.
+$preferenciaPystray = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& $python -c "import pystray" 2>&1 | Out-Null
+$hayPystray = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $preferenciaPystray
+if (-not $hayPystray) {
+    Write-Warning ("Falta pystray: el acceso directo de la bandeja no va a mostrar " +
+                   "nada. Se instala con `pip install libraedge[bandeja]` al armar " +
+                   "la carga, no en la PC del cliente.")
 }
 
 Write-Host ""

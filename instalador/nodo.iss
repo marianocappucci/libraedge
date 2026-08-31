@@ -55,6 +55,10 @@ Source: "carga\producto\*";     DestDir: "{app}";              Flags: ignorevers
 Source: "carga\herramientas\*"; DestDir: "{app}\herramientas"; Flags: ignoreversion
 Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador";  Flags: ignoreversion
 Source: "preparar_nodo.ps1";     DestDir: "{app}\instalador";  Flags: ignoreversion
+; El respaldo del nodo. Lo corre una tarea programada cada hora, no el
+; instalador: el `sync_outbox` es el unico lugar donde vive una venta cobrada
+; sin internet, y entre el cobro y la sincronizacion no esta en ningun otro lado.
+Source: "respaldo.ps1";          DestDir: "{app}\instalador";  Flags: ignoreversion
 ; 🔴 El runtime de Visual C++. NO es opcional y no es una dependencia teorica:
 ; el ZIP binario de PostgreSQL no lo trae y un Windows limpio tampoco. Sin el,
 ; initdb/psql/pg_ctl/postgres mueren con 0xC0000135 sin escribir una linea.
@@ -89,7 +93,7 @@ Filename: "powershell.exe"; \
   Flags: runhidden waituntilterminated
 
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_nodo.ps1"" -RaizNodo ""{app}"" -UrlBase ""{code:UrlBase}"" -UrlCentral ""{code:UrlCentral}"" -NodeId ""{code:NodeId}"" -NodeSecret ""{code:NodeSecret}"" -TablasEspejo ""{code:TablasEspejo}"""; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_nodo.ps1"" -RaizNodo ""{app}"" -UrlBase ""{code:UrlBase}"" -UrlCentral ""{code:UrlCentral}"" -NodeId ""{code:NodeId}"" -NodeSecret ""{code:NodeSecret}"" -TablasEspejo ""{code:TablasEspejo}"" -ClavePostgres ""{code:ClavePostgres}"""; \
   StatusMsg: "Configurando el nodo y sus servicios..."; \
   Flags: runhidden waituntilterminated
 
@@ -110,6 +114,11 @@ Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeProducto c
 ; `sc` vuelve enseguida y el `unregister` de abajo llegaría al mismo 1072.
 Filename: "{sys}\net.exe"; Parameters: "stop LibraEdgePostgres /y"; Flags: runhidden; RunOnceId: "PararPG"
 Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgePostgres"; Flags: runhidden; RunOnceId: "QuitarPG"
+; La tarea de respaldo la crea `preparar_nodo.ps1`, asi que el desinstalador no
+; sabe de ella: sin esta linea queda una tarea programada que cada hora intenta
+; correr un script que ya no existe. Es el mismo agujero que dejaba el
+; `nodo.env` en el disco.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN LibraEdgeRespaldo /F"; Flags: runhidden; RunOnceId: "QuitarRespaldo"
 
 [UninstallDelete]
 ; 🔴 El secreto del nodo NO puede quedar en el disco de una PC que se está
@@ -118,6 +127,10 @@ Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgeP
 ; sabe de él y sin esta línea sobrevive para siempre. Medido en la VM.
 Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
+; El acceso directo de la bandeja lo crea `preparar_nodo.ps1` en el inicio
+; comun, no el instalador, asi que tampoco lo borraria solo: quedaria intentando
+; arrancar un python que ya no esta, en cada inicio de sesion.
+Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
 Type: filesandordirs; Name: "{app}\logs"
 ; Y los `__pycache__`: los genera Python al importar, no los instaló nadie, así
 ; que el desinstalador tampoco los borra — y con un solo archivo adentro la
