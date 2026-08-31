@@ -88,6 +88,39 @@ class NodeRepository:
         self._conn.commit()
         return secret
 
+    def asegurar_identidad_local(self, node_id: str, branch_id: str = "",
+                                 schema_version: int = 1) -> None:
+        """Crea la fila de ESTE nodo si falta, sin tocar ningún secreto.
+
+        🔴 **Sin esta fila el cursor del espejo no se guarda nunca**, y el modo
+        de fallar es de los que no se ven: `set_server_cursor` hace
+        `UPDATE ... WHERE node_id = ?`, sin fila actualiza cero, y un UPDATE de
+        cero filas **es un éxito**. Como los upserts del aplicador son
+        idempotentes, el nodo vuelve a bajar el espejo **entero en cada ciclo,
+        para siempre**, y los datos quedan bien igual.
+
+        Medido cerrando el circuito contra el central de demo el 2026-08-31: el
+        nodo bajó los mismos 102 cambios en dos ciclos seguidos, con
+        `node_identity` vacía y `last_server_cursor` en NULL.
+
+        Los tests no lo agarraron porque **todos llaman a `register_node()`
+        primero**: el fixture hacía el trabajo que en producción no hace nadie.
+
+        No se usa `register_node` acá: ese es del **central** y emite un
+        secreto. El secreto de este nodo lo emitió el central y viaja en el
+        entorno; del lado del nodo sólo hace falta un lugar donde anotar hasta
+        dónde espejó.
+        """
+        self._escribir(
+            """INSERT INTO node_identity
+                (node_id, branch_id, installed_at, schema_version)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(node_id) DO NOTHING""",
+            (node_id, branch_id, datetime.now(timezone.utc).isoformat(),
+             schema_version),
+        )
+        self._conn.commit()
+
     def verify_node_secret(self, node_id: str, secret: str) -> bool:
         """True only for an active node whose secret hash matches."""
         row = self._conn.execute(
