@@ -106,8 +106,21 @@ if (Test-Path (Join-Path $DirectorioDatos "PG_VERSION")) {
         # arranque y no de credencial.
         [System.IO.File]::WriteAllText(
             $archivoPass, $Password, (New-Object System.Text.UTF8Encoding($false)))
+        # 🔴 `--data-checksums` en un nodo que va a sufrir cortes de luz no es
+        # opcional. PostgreSQL 16 los deja **apagados** por defecto: sin ellos,
+        # una página que el disco devuelve mal por un corte a destiempo se lee
+        # como datos válidos y el error aparece meses después, en un arqueo que
+        # no cierra. Con ellos, la lectura falla y dice qué página está rota.
+        #
+        # Sólo se puede decidir ACÁ: es una propiedad del clúster que el initdb
+        # graba una sola vez. Cuesta un poco de CPU por página leída, que en la
+        # PC de un restaurante no se nota.
+        #
+        # El corte sucio del 2026-08-30 salió bien --27.840 ventas, ninguna
+        # transacción partida-- pero eso prueba el WAL, no el disco: la
+        # corrupción silenciosa es justamente la que no se ve al recuperarse.
         & $initdb --pgdata="$DirectorioDatos" --username=postgres `
-            --pwfile="$archivoPass" --encoding=UTF8 `
+            --pwfile="$archivoPass" --encoding=UTF8 --data-checksums `
             --locale-provider=icu --icu-locale=$Locale --locale=C `
             --auth-local=scram-sha-256 --auth-host=scram-sha-256
         if ($LASTEXITCODE -ne 0) {
