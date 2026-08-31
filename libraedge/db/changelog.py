@@ -108,6 +108,11 @@ def init_changelog_schema(conn) -> None:
 #: --es el mismo defecto que tenia `created_at` del outbox, encontrado en la
 #: Fase 1-- y aca ademas convivirian en la misma tabla las filas del trigger con
 #: las de `sembrar()`.
+#: El sufijo del trigger, en UN solo lugar. Lo comparten instalar, desinstalar y
+#: el listado: si cada uno lo escribiera aparte, desinstalar podría no encontrar
+#: lo que instalar dejó puesto, y el listado no vería ninguno de los dos.
+_SUFIJO_TRIGGER = "_libraedge_changelog"
+
 _FUNCION_TRIGGER = """
 CREATE OR REPLACE FUNCTION libraedge_registrar_cambio() RETURNS trigger AS $libraedge$
 DECLARE
@@ -139,11 +144,46 @@ def instalar_trigger(conn, tabla: str, pk: str = "id") -> None:
     tabla = validar_identificador(tabla)
     pk = validar_identificador(pk)
     conn.execute(_FUNCION_TRIGGER)
-    conn.execute(f"DROP TRIGGER IF EXISTS {tabla}_libraedge_changelog ON {tabla}")
+    conn.execute(f"DROP TRIGGER IF EXISTS {tabla}{_SUFIJO_TRIGGER} ON {tabla}")
     conn.execute(
-        f"CREATE TRIGGER {tabla}_libraedge_changelog"
+        f"CREATE TRIGGER {tabla}{_SUFIJO_TRIGGER}"
         f" AFTER INSERT OR UPDATE OR DELETE ON {tabla}"
         f" FOR EACH ROW EXECUTE FUNCTION libraedge_registrar_cambio('{pk}')"
+    )
+
+
+def tablas_publicadas(conn) -> tuple[str, ...]:
+    """Las tablas que HOY tienen instalado el trigger del changelog.
+
+    Se lee del catálogo de PostgreSQL y no de una lista en código, por el mismo
+    motivo por el que la PK se lee de la base: lo que está instalado es un hecho
+    del servidor, y una lista escrita a mano se desactualiza en silencio.
+    """
+    if _es_sqlite(conn):
+        return ()
+    filas = conn.execute(
+        "SELECT DISTINCT event_object_table FROM information_schema.triggers"
+        " WHERE trigger_name LIKE ?"
+        " ORDER BY event_object_table",
+        ("%" + _SUFIJO_TRIGGER,),
+    ).fetchall()
+    return tuple(fila[0] for fila in filas)
+
+
+def desinstalar_trigger(conn, tabla: str) -> None:
+    """Deja de publicar `tabla` al changelog.
+
+    🔴 La contracara de `instalar_trigger`, y no existía. Sacar una tabla de la
+    lista de un producto **no desinstala** lo que un aprovisionamiento anterior
+    ya dejó puesto: el trigger sigue ahí, escribiendo al changelog de una tabla
+    que el nodo ya no espera. Pasó en el central de demo de Restolibra el
+    2026-08-31, con tres tablas.
+
+    Idempotente: `DROP TRIGGER IF EXISTS`, así que correrlo de más no rompe.
+    """
+    tabla = validar_identificador(tabla)
+    conn.execute(
+        f"DROP TRIGGER IF EXISTS {tabla}{_SUFIJO_TRIGGER} ON {tabla}"
     )
 
 
