@@ -579,3 +579,51 @@ def test_el_cursor_no_avanza_mas_alla_de_lo_aplicado(repo, nodo):
 
     assert repo.get_server_cursor("node-1") == 1
     assert nodo.execute("SELECT COUNT(*) FROM productos").fetchone()[0] == 1
+
+
+# ── El nodo que nadie registró localmente ────────────────────────────────
+
+def test_un_nodo_recien_instalado_guarda_su_cursor(repo, nodo, tmp_path):
+    """🔴 El defecto que apareció al cerrar el circuito contra el central real.
+
+    **Ningún test de este archivo llamaba a `register_node()` de más ni de
+    menos: todos lo llamaban.** Y en producción, del lado del nodo, no lo llama
+    nadie — el central registra el nodo en SU base, el instalador escribe el
+    `.env`, y la tabla `node_identity` del nodo queda vacía.
+
+    Con esa tabla vacía, `set_server_cursor` hace `UPDATE ... WHERE node_id = ?`
+    sobre cero filas. Eso **no falla**: un UPDATE que no toca nada es un éxito.
+    Así que el cursor nunca se guarda y el nodo vuelve a bajar el espejo entero
+    en cada ciclo, para siempre. Como los upserts del aplicador son
+    idempotentes, los datos quedan bien y nadie se entera.
+
+    Medido contra el central de demo el 2026-08-31: 102 cambios bajados, y otra
+    vez los mismos 102 al minuto siguiente.
+
+    Este test arranca **sin `register_node`**, como una instalación de verdad.
+    """
+    from libraedge.nodo import Nodo
+
+    assert repo._conn.execute(
+        "SELECT COUNT(*) FROM node_identity").fetchone()[0] == 0, (
+        "el arranque de este test es una base SIN la fila del nodo: si algún "
+        "fixture la crea, el test deja de medir lo que dice medir")
+
+    transporte = TransporteFalso([
+        cambio(cursor=1, row_id="1", payload={"id": 1, "nombre": "yerba"}),
+        cambio(cursor=2, row_id="2", payload={"id": 2, "nombre": "mate"}),
+    ])
+    worker = PullWorker(repo, transporte, MirrorApplier(nodo, {"productos": "id"}))
+    n = Nodo(repo, "node-1", pull_worker=worker,
+             ruta_estado=str(tmp_path / "estado.json"))
+
+    assert n.sincronizar().cambios_bajados == 2
+    nodo.commit()
+    assert repo.get_server_cursor("node-1") == 2, (
+        "el cursor no se guardó: la fila propia del nodo no existía")
+
+    # Y la consecuencia observable, que es la que se vio en la VM: el segundo
+    # ciclo no puede volver a pedir desde cero.
+    assert n.sincronizar().cambios_bajados == 0
+    assert transporte.pedidos == [0, 2], (
+        "el segundo ciclo tiene que pedir desde 2, no desde 0")

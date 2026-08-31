@@ -131,6 +131,14 @@ class Nodo:
         bajados = 0
         error: str | None = None
 
+        # 🔴 La fila propia del nodo, antes de tocar el cursor. Es idempotente y
+        # va en cada ciclo a propósito: si falta, `set_server_cursor` hace un
+        # UPDATE de cero filas --que es un éxito-- y el nodo vuelve a bajar el
+        # espejo entero para siempre, sin que nada falle. Ponerlo acá y no en el
+        # instalador hace que valga para cualquier nodo, se haya instalado como
+        # se haya instalado.
+        self.repository.asegurar_identidad_local(self.node_id)
+
         try:
             if self.outbox_worker is not None:
                 # 🔴 El worker **no levanta** cuando el transporte falla: atrapa
