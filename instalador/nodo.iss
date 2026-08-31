@@ -55,6 +55,12 @@ Source: "carga\producto\*";     DestDir: "{app}";              Flags: ignorevers
 Source: "carga\herramientas\*"; DestDir: "{app}\herramientas"; Flags: ignoreversion
 Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador";  Flags: ignoreversion
 Source: "preparar_nodo.ps1";     DestDir: "{app}\instalador";  Flags: ignoreversion
+; 🔴 El runtime de Visual C++. NO es opcional y no es una dependencia teorica:
+; el ZIP binario de PostgreSQL no lo trae y un Windows limpio tampoco. Sin el,
+; initdb/psql/pg_ctl/postgres mueren con 0xC0000135 sin escribir una linea.
+; Verificado en una VM con Windows 11 LTSC recien instalado, el 2026-08-30.
+; Bajar de https://aka.ms/vs/17/release/vc_redist.x64.exe al armar la carga.
+Source: "carga\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Dirs]
 ; Los datos NO van bajo {app}: la desinstalación no los tiene que tocar. Un
@@ -63,6 +69,16 @@ Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full
 Name: "{app}\logs"
 
 [Run]
+; PRIMERO el runtime de Visual C++: sin el, el paso siguiente no puede ni
+; preguntarle la version a initdb. Los codigos de salida que NO son un fallo:
+; 0 = instalado, 1638 = ya hay una version mas nueva, 3010 = pide reinicio
+; --el reinicio no hace falta ahora: las DLLs ya quedaron en System32--.
+Filename: "{tmp}\vc_redist.x64.exe"; \
+  Parameters: "/install /quiet /norestart"; \
+  StatusMsg: "Instalando el runtime de Visual C++ (lo necesita PostgreSQL)..."; \
+  Flags: waituntilterminated; \
+  Check: HaceFaltaVCRuntime
+
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_postgres.ps1"" -RaizPostgres ""{app}\postgres"" -DirectorioDatos ""{commonappdata}\LibraEdge\datos"" -Password ""{code:ClavePostgres}"""; \
   StatusMsg: "Preparando la base de datos local..."; \
@@ -90,6 +106,23 @@ Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgeP
 var
   PaginaNodo: TInputQueryWizardPage;
   PaginaBase: TInputQueryWizardPage;
+
+{ Corre el vc_redist solo si hace falta. Se mira si la DLL esta en el sistema
+  y no el registro de programas instalados: lo que a PostgreSQL le importa es
+  poder CARGAR la DLL, no que figure una entrada de desinstalacion. Y son dos
+  archivos: vcruntime140_1.dll es la parte de C++ y en algunas maquinas viejas
+  esta una y falta la otra.
+
+  Si el chequeo se equivoca y corre de mas, no pasa nada: el instalador de
+  Microsoft detecta que ya esta y sale con 1638. Equivocarse para el otro lado
+  --saltearlo cuando hacia falta-- deja los binarios de PostgreSQL sin arrancar,
+  asi que ante la duda se corre. }
+function HaceFaltaVCRuntime: Boolean;
+begin
+  Result := (not FileExists(ExpandConstant('{sys}\vcruntime140.dll')))
+         or (not FileExists(ExpandConstant('{sys}\vcruntime140_1.dll')))
+         or (not FileExists(ExpandConstant('{sys}\msvcp140.dll')));
+end;
 
 procedure InitializeWizard;
 begin

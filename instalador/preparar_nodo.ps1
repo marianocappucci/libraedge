@@ -97,8 +97,22 @@ TZ=America/Argentina/Buenos_Aires
 # al path y `-m alembic` muere con "No module named alembic" aunque alembic esté
 # instalado ahí mismo. El error apunta a una dependencia faltante y el problema
 # es un archivo de configuración de dos líneas.
-& $python -c "import alembic" *> $null
-if ($LASTEXITCODE -ne 0) {
+#
+# 🔴 **Y el chequeo se hace con `$ErrorActionPreference` bajado a mano.**
+# Con `Stop` --que es como arranca este script-- PowerShell convierte lo que un
+# programa nativo escribe en stderr en un error terminante, y `*> $null` NO lo
+# evita: redirige la salida, no la conversión. O sea que el `python -c` que
+# falla **lanza en esa misma línea** y las cinco de abajo no se ejecutan nunca.
+#
+# Medido en la VM el 2026-08-30: el instalador escupió un traceback de Python
+# crudo y salió con 1, sin decir una palabra del `import site`. El guard estaba
+# escrito, probado a ojo, y **no podía hablar**.
+$preferenciaPrevia = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& $python -c "import alembic" 2>&1 | Out-Null
+$puedeImportar = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $preferenciaPrevia
+if (-not $puedeImportar) {
     throw ("El Python embebido no puede importar alembic. Casi seguro es el " +
            "'import site' comentado en el archivo python3XX._pth de " +
            "$RaizNodo\python: descomentarlo y volver a correr. Si ya está " +

@@ -1,6 +1,10 @@
 # Instalador del nodo LibraEdge (Windows)
 
-> 🔴 **NADA DE ESTO SE EJECUTÓ.** Se escribió en un entorno sin Inno Setup, sin
+> 🔴 **Al escribirse, nada de esto se había ejecutado.** Desde el 2026-08-30
+>  sí corrió, entero y bien, en una VM con Windows 11 LTSC
+> en español — ver más abajo. El resto sigue sin ejecutarse.
+>
+> Lo que sigue es el texto original: Se escribió en un entorno sin Inno Setup, sin
 > NSIS y sin PostgreSQL para Windows, así que **no está compilado ni probado** —
 > ni el `.iss`, ni los scripts, ni el registro de servicios. Lo que sí se hizo es
 > revisarlo a mano contra la documentación de cada herramienta y dejar
@@ -85,6 +89,77 @@ el central y lo trae:
 ```
 python -m scripts.nodo_offline registrar <node-id> --sucursal <sucursal>
 ```
+
+## Se ejecutó: VM con Windows 11 LTSC en español (2026-08-30)
+
+> 🟢 **`preparar_postgres.ps1` corrió entero y terminó bien.** Se probó sobre una
+> VM de Hyper-V con Windows 11 Enterprise LTSC 2024 **es-ES** recién instalado,
+> manejada por PowerShell Direct. Ya no es un borrador revisado: esta parte
+> anduvo.
+
+**El montaje, y por qué así.** La zona horaria del Windows invitado se dejó en
+**UTC** a propósito. Con el sistema ya en Argentina, "el script puso la zona" y
+"la heredó del sistema operativo" dan el mismo resultado y la prueba no
+distingue nada. Y el idioma es español porque el defecto de las cuentas sólo
+existe ahí.
+
+### Lo que quedó verificado
+
+| Punto | Resultado |
+|---|---|
+| **#1 del README: `initdb` y la zona** | `now()` del servidor = `2026-08-30 21:47:42.031166-03` **con el sistema operativo en UTC**. El `-03` lo puso el script. |
+| Collation | `datlocprovider = i`, `daticulocale = en-US`. Y el orden **cambió de verdad**: la base ordena `Anana banana Banana cereza`; con `C` sería `Anana Banana banana cereza`. |
+| BOM en el `--pwfile` | `psql` se conectó con esa contraseña y creó la base. Con BOM, la contraseña habría sido otra y el bucle de espera habría vencido. |
+| BOM en el `nodo.env` | Primeros bytes `4C 49 42` (`LIB`). Sin BOM. |
+| ACL del `nodo.env` | Exactamente `NT AUTHORITY\SYSTEM` y `BUILTIN\Administradores`, nada más. En español, y sin excepción. |
+| El `._pth` del Python embebido | Confirmado: trae `#import site` comentado, tal como decía el comentario del `.iss`. |
+
+### 🔴 Lo que la corrida encontró y el paso estático no podía
+
+**1. Los binarios de PostgreSQL no arrancan en un Windows limpio.** El ZIP no
+trae el runtime de Visual C++ y Windows 11 LTSC tampoco: los cuatro ejecutables
+—`initdb`, `psql`, `pg_ctl`, `postgres`— mueren con `0xC0000135`
+(*STATUS_DLL_NOT_FOUND*) **sin escribir una sola línea**, ni siquiera para
+`--version`. Ninguna de las DLLs del runtime estaba en `System32`, ninguna venía
+en el ZIP. Instalando `vc_redist.x64.exe` los mismos binarios arrancaron sin
+tocar nada más.
+
+> Esto voltea la instalación entera y es exactamente lo que el instalador de EDB
+> hace y el ZIP no. Ahora el `.iss` lo instala **antes** de todo, y
+> `preparar_postgres.ps1` tiene una guarda que convierte ese código de salida
+> negativo —que no lleva a ningún lado— en un mensaje que dice qué instalar.
+
+**2. Los dos guards estaban escritos y no podían hablar.** Con
+`$ErrorActionPreference = 'Stop'`, PowerShell convierte lo que un programa
+nativo escribe en **stderr** en un error terminante, y `*> $null` **no** lo
+evita: redirige la salida, no la conversión. El `python -c "import alembic"` que
+falla lanzaba en esa misma línea, así que el instalador escupía un traceback de
+Python crudo y el mensaje sobre el `import site` no se imprimía nunca.
+
+> El mismo patrón estaba en el **bucle de espera de PostgreSQL**: el primer
+> `psql` fallido —el caso normal mientras la base arranca— abortaba en vez de
+> reintentar. Acá no se vio porque la VM aceptó conexiones al primer intento; en
+> la PC de un restaurante, más lenta, el bucle es justamente lo que hace falta.
+
+**3. Y la verificación de collation que se había agregado no podía fallar.** La
+consulta usaba `datlocprovider || '/' || ...` y moría con *operator is not
+unique: "char" || unknown*. Lo grave no fue el error: `psql` devolvió **vacío**,
+el bloque imprimió la etiqueta sin valor, el `-match` sobre vacío dio falso y el
+script siguió con código 0. El chequeo agregado para que el collation no pasara
+desapercibido era mudo. Ahora se piden las dos columnas por separado y se grita
+si vuelve vacío.
+
+### Lo que sigue sin probarse
+
+- **`preparar_nodo.ps1` de la mitad para abajo**: migraciones, registro de los
+  dos servicios con NSSM y arranque. Falta el producto instalado en el Python
+  embebido, que necesita git y el árbol de dependencias entero.
+- **El `.iss` sin compilar**: la descarga de Inno Setup devolvió un HTML de
+  10 KB en vez del ejecutable (detectado por los bytes mágicos: `3C 21`, no
+  `4D 5A`).
+- **Los puntos #2, #3, #5 y #6 del README**: reiniciar la PC, el corte sucio, la
+  desinstalación y la actualización. Todos necesitan los servicios andando.
+
 
 ## Lo que hay que verificar en una máquina real
 

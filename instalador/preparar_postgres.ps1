@@ -40,6 +40,36 @@ foreach ($exe in @($initdb, $pgctl, $psql)) {
     if (-not (Test-Path $exe)) { throw "No está $exe. ¿La ruta de PostgreSQL es correcta?" }
 }
 
+# 🔴 **Que el archivo esté NO quiere decir que el programa corra**, y esto
+# voltea la instalación entera en una máquina recién formateada.
+#
+# El ZIP binario de PostgreSQL --el que este instalador usa a propósito, en vez
+# del instalador de EDB-- **no trae el runtime de Visual C++**, y un Windows 11
+# limpio tampoco lo tiene. Sin `vcruntime140.dll` y compañía, los cuatro
+# ejecutables (`initdb`, `psql`, `pg_ctl`, `postgres`) mueren con
+# `0xC0000135` / `-1073741515` = STATUS_DLL_NOT_FOUND, **sin escribir una sola
+# línea de error**: ni siquiera `--version` contesta.
+#
+# Medido en una VM con Windows 11 Enterprise LTSC recién instalado el
+# 2026-08-30: ninguna de las cuatro DLLs del runtime estaba en System32, ninguna
+# venía en el ZIP, y los cuatro binarios fallaban igual. Instalando
+# `vc_redist.x64.exe` los mismos binarios arrancaron sin tocar nada más.
+#
+# El instalador lo instala antes de llegar acá (ver `nodo.iss`). Esta guarda
+# está para el caso en que no lo haya hecho: sin ella el síntoma es un código
+# de salida negativo y nada más, que no lleva a ningún lado.
+& $initdb --version *> $null
+if ($LASTEXITCODE -eq -1073741515) {
+    throw ("Los binarios de PostgreSQL no arrancan: falta el runtime de " +
+           "Visual C++ (STATUS_DLL_NOT_FOUND). El ZIP de PostgreSQL no lo trae " +
+           "y un Windows limpio no lo tiene. Instalar vc_redist.x64.exe " +
+           "(https://aka.ms/vs/17/release/vc_redist.x64.exe) con " +
+           "/install /quiet /norestart y volver a correr.")
+}
+if ($LASTEXITCODE -ne 0) {
+    throw "initdb no pudo ejecutarse (código $LASTEXITCODE) antes de empezar."
+}
+
 # El puerto NO es el 5432 por defecto, a propósito: la PC del cliente puede tener
 # ya un PostgreSQL de otra cosa, y pisarlo sería la peor forma de empezar.
 if (Get-Service -Name $NombreServicio -ErrorAction SilentlyContinue) {
@@ -131,13 +161,29 @@ Start-Service -Name $NombreServicio
 
 # Esperar a que acepte conexiones. El servicio "Running" NO quiere decir que la
 # base esté lista: el proceso arrancó, la recuperación puede seguir corriendo.
+#
+# 🔴 **`$ErrorActionPreference` baja a `Continue` para todo lo que hable con
+# `psql`, y sin eso el bucle de reintentos no existe.** Con `Stop`, PowerShell
+# convierte lo que un programa nativo escribe en stderr en un error terminante,
+# y `*> $null` no lo evita: redirige la salida, no la conversión. El primer
+# intento fallido --que es el caso NORMAL mientras la base todavía arranca--
+# abortaba el script en vez de reintentar, y el mensaje era el de psql, no el de
+# acá.
+#
+# Acá no se notó porque en la VM la base aceptó conexiones en el primer intento.
+# En la PC de un restaurante, más lenta, el bucle es justamente lo que hace
+# falta. Se descubrió por el mismo defecto en `preparar_nodo.ps1`, donde sí se
+# vio (2026-08-30).
+$preferenciaPrevia = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $env:PGPASSWORD = $Password
 $listo = $false
 foreach ($intento in 1..30) {
-    & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -c "SELECT 1" *> $null
+    & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -c "SELECT 1" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { $listo = $true; break }
     Start-Sleep -Seconds 1
 }
+$ErrorActionPreference = $preferenciaPrevia
 if (-not $listo) { throw "PostgreSQL arrancó pero no acepta conexiones en el puerto $Puerto." }
 
 $existe = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -tAc `
@@ -162,13 +208,37 @@ if ($ahora -notmatch "-03") {
 }
 
 # 2. Con qué criterio ordena. `C` ordena por bytes y el central no.
+#
+# 🔴 **No se concatena en SQL, y por algo.** La primera versión de esto hacía
+# `datlocprovider || '/' || coalesce(...)` y moría con
+# *operator is not unique: "char" || unknown*: `datlocprovider` es del tipo
+# `"char"` y PostgreSQL no sabe qué `||` elegir.
+#
+# Lo grave no fue el error sino cómo falló. Medido en la VM el 2026-08-30:
+# `psql` devolvió **vacío**, este bloque imprimió "Collation del nodo:" sin
+# valor, el `-match` sobre la cadena vacía dio falso, y el script siguió con
+# código 0. La verificación que se agregó justamente para que el collation no
+# pasara desapercibido **no podía fallar**.
+#
+# Se piden las dos columnas por separado y las junta `psql` con su separador
+# (`-tA` usa `|`): sin concatenación no hay operador que resolver.
 $orden = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d $Base -tAc `
-    "SELECT datlocprovider || '/' || coalesce(daticulocale, datcollate) FROM pg_database WHERE datname = current_database()"
-Write-Host "Collation del nodo: $orden   (el central es libc/en_US.utf8)"
-if ($orden -match "/C$") {
-    Write-Warning ("El cluster quedó en collation C: ordena por BYTES, con todas " +
-                   "las mayúsculas antes que las minúsculas. La carta va a salir " +
-                   "en otro orden que en el central. Rehacer el cluster.")
+    "SELECT datlocprovider, coalesce(daticulocale, datcollate) FROM pg_database WHERE datname = current_database()"
+$orden = ($orden | Out-String).Trim()
+if (-not $orden) {
+    # Y si vuelve vacío, se grita. Un chequeo mudo es peor que no tenerlo:
+    # ocupa el lugar del que sí habría avisado.
+    Write-Warning ("No se pudo leer el collation del cluster (la consulta no " +
+                   "devolvió nada). Verificar a mano con: " +
+                   "select datlocprovider, daticulocale, datcollate from pg_database.")
+} else {
+    Write-Host "Collation del nodo: $orden   (el central es c|en_US.utf8)"
+    # `i|...` es ICU, que es lo buscado. `c|C` es libc con collation C: bytes.
+    if ($orden -match "\|C$") {
+        Write-Warning ("El cluster quedó en collation C: ordena por BYTES, con todas " +
+                       "las mayúsculas antes que las minúsculas. La carta va a salir " +
+                       "en otro orden que en el central. Rehacer el cluster.")
+    }
 }
 
 $env:PGPASSWORD = $null
