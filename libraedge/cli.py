@@ -117,6 +117,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     bandeja.add_argument("--intervalo", type=int, default=60,
                          help="cada cuanto cicla el nodo, para decidir si esta caido")
+    # 🔴 La ruta como ARGUMENTO, no solo por entorno. La bandeja no corre como
+    # servicio --Windows no le deja dibujar a un servicio-- sino desde un acceso
+    # directo del inicio de sesion del operador, y ese acceso directo no hereda
+    # el entorno que NSSM le da a los servicios. Sin esto, la unica forma de que
+    # la encuentre seria una variable de entorno de MAQUINA, que ensucia el
+    # sistema entero para un dato de una sola aplicacion.
+    bandeja.add_argument(
+        "--estado", default=None,
+        help="ruta del estado.json; si falta, se usa LIBRAEDGE_ESTADO",
+    )
 
     args = parser.parse_args(argv)
 
@@ -129,9 +139,12 @@ def main(argv: list[str] | None = None) -> int:
         from libraedge.bandeja import resumen_para_la_bandeja
         from libraedge.nodo import leer_estado
 
-        ruta = os.environ.get("LIBRAEDGE_ESTADO")
+        ruta = args.estado or os.environ.get("LIBRAEDGE_ESTADO")
         if not ruta:
-            raise SystemExit("Falta LIBRAEDGE_ESTADO: no hay estado que mostrar.")
+            raise SystemExit(
+                "No se sabe que estado mostrar: pasar --estado <ruta> o definir "
+                "LIBRAEDGE_ESTADO."
+            )
 
         if args.una_vez:
             resumen = resumen_para_la_bandeja(
