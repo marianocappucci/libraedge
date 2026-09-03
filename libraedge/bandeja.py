@@ -21,7 +21,7 @@ mira `resumen_para_la_bandeja` es **cuándo** se escribió, no qué dice.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from enum import StrEnum
 
 
@@ -61,7 +61,7 @@ def _antiguedad(marca: str | None, ahora: datetime) -> timedelta | None:
     except ValueError:
         return None
     if cuando.tzinfo is None:
-        cuando = cuando.replace(tzinfo=timezone.utc)
+        cuando = cuando.replace(tzinfo=UTC)
     return ahora - cuando
 
 
@@ -88,7 +88,7 @@ def resumen_para_la_bandeja(estado, ahora: datetime | None = None,
     El orden de las preguntas importa y es el de la gravedad: primero si el nodo
     está vivo, después si hay enlace, después si quedó algo sin mandar.
     """
-    ahora = ahora or datetime.now(timezone.utc)
+    ahora = ahora or datetime.now(UTC)
 
     if estado is None:
         return ResumenBandeja(

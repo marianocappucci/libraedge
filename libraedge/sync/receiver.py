@@ -1,9 +1,9 @@
 """Generic central-side idempotent receiver."""
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Callable
+from datetime import UTC, datetime, timezone
 
 from libraedge.domain.sync import OutboxOperation
 from libraedge.sync.worker import PushResult
@@ -36,7 +36,7 @@ class SyncReceiver:
             self.conn.execute(
                 """INSERT INTO sync_inbox (operation_id, applied_at, status)
                    VALUES (?, ?, 'applied')""",
-                (operation.operation_id, datetime.now(timezone.utc).isoformat()),
+                (operation.operation_id, datetime.now(UTC).isoformat()),
             )
             self.conn.commit()
         except sqlite3.IntegrityError:

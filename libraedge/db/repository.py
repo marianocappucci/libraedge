@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from libraedge.domain.sync import OutboxOperation, SyncOperationStatus
 
@@ -82,7 +82,7 @@ class NodeRepository:
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(node_id) DO UPDATE SET
                 secret_hash = excluded.secret_hash, active = 1""",
-            (node_id, branch_id, datetime.now(timezone.utc).isoformat(),
+            (node_id, branch_id, datetime.now(UTC).isoformat(),
              schema_version, _hash_secret(secret)),
         )
         self._conn.commit()
@@ -116,7 +116,7 @@ class NodeRepository:
                 (node_id, branch_id, installed_at, schema_version)
                VALUES (?, ?, ?, ?)
                ON CONFLICT(node_id) DO NOTHING""",
-            (node_id, branch_id, datetime.now(timezone.utc).isoformat(),
+            (node_id, branch_id, datetime.now(UTC).isoformat(),
              schema_version),
         )
         self._conn.commit()
@@ -139,7 +139,7 @@ class NodeRepository:
         """
         self._escribir(
             "UPDATE node_identity SET last_seen_at = ? WHERE node_id = ?",
-            (datetime.now(timezone.utc).isoformat(), node_id),
+            (datetime.now(UTC).isoformat(), node_id),
         )
         self._conn.commit()
 
@@ -158,7 +158,7 @@ class NodeRepository:
             """SELECT node_id, branch_id, active, last_seen_at, last_server_cursor
                  FROM node_identity ORDER BY node_id"""
         ).fetchall()
-        ahora = datetime.now(timezone.utc)
+        ahora = datetime.now(UTC)
         nodos = []
         for fila in filas:
             visto = fila["last_seen_at"] if hasattr(fila, "keys") else fila[3]
@@ -307,7 +307,7 @@ class NodeRepository:
              operation.occurred_at, operation.schema_version, operation.payload_json(),
              str(operation.status), operation.attempts, operation.next_attempt_at,
              operation.last_error,
-             operation.created_at or datetime.now(timezone.utc).isoformat(),
+             operation.created_at or datetime.now(UTC).isoformat(),
              operation.sent_at, operation.acknowledged_at),
             propia=commit,
         )

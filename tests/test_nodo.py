@@ -464,10 +464,9 @@ def test_el_cli_sincroniza_sin_central_y_sale_1_sin_romperse(monkeypatch, tmp_pa
     terminar ordenado, escribir el estado y salir 1, no reventar con un
     traceback en la PC de un cliente.
     """
-    from tests.conftest import url_postgres
-
     from libraedge.cli import main
     from libraedge.db.schema import init_schema
+    from tests.conftest import url_postgres
 
     url = url_postgres()
     from libracore.db import core
@@ -509,10 +508,9 @@ def test_el_cli_correr_cicla_y_espera(monkeypatch, tmp_path):
     Se corta con un `sleep` que levanta a la segunda vuelta -- sin eso el test
     no terminaria nunca, que es justamente lo que el comando tiene que hacer.
     """
-    from tests.conftest import url_postgres
-
     from libraedge.cli import main
     from libraedge.db.schema import init_schema
+    from tests.conftest import url_postgres
 
     url = url_postgres()
     from libracore.db import core

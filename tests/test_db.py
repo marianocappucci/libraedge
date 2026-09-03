@@ -7,6 +7,7 @@ LibraCore y no una de psycopg cruda.
 """
 
 import sqlite3
+from datetime import UTC
 
 import pytest
 
@@ -120,9 +121,9 @@ def test_created_at_es_iso_utc_en_los_dos_motores(repo):
     guardada = repo.enqueue_operation(operation())
     marca = datetime.fromisoformat(guardada.created_at)
     assert marca.tzinfo is not None, "sin zona, no se puede comparar entre nodos"
-    assert marca.utcoffset() == timezone.utc.utcoffset(None)
+    assert marca.utcoffset() == UTC.utcoffset(None)
 
-    ahora = datetime.now(timezone.utc)
+    ahora = datetime.now(UTC)
     assert abs((ahora - marca).total_seconds()) < 60
 
 
