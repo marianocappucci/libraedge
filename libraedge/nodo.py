@@ -41,7 +41,7 @@ import json
 import os
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class EstadoNodo:
 
 
 def _ahora() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def escribir_estado(ruta: str, estado: EstadoNodo) -> None:

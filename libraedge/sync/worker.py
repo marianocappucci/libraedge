@@ -1,7 +1,7 @@
 """Durable local outbox worker, independent from HTTP transport."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Protocol
 
 from libraedge.domain.sync import OutboxOperation
@@ -84,4 +84,4 @@ class OutboxWorker:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
