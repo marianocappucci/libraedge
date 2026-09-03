@@ -30,6 +30,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import UTC
 
 
 def _requerido(nombre: str) -> str:
@@ -148,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.una_vez:
             resumen = resumen_para_la_bandeja(
-                leer_estado(ruta), datetime.now(timezone.utc), args.intervalo)
+                leer_estado(ruta), datetime.now(UTC), args.intervalo)
             print(f"[{resumen.severidad}] {resumen.titulo}")
             if resumen.detalle:
                 print(f"  {resumen.detalle}")

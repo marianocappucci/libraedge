@@ -32,7 +32,7 @@ sesión gráfica, y ahí un import de GUI sobra.
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from libraedge.bandeja import Severidad, resumen_para_la_bandeja
 from libraedge.nodo import leer_estado
@@ -74,7 +74,7 @@ def correr(ruta_estado: str, intervalo_segundos: int = 60,
 
     def _resumen():
         return resumen_para_la_bandeja(
-            leer_estado(ruta_estado), datetime.now(timezone.utc), intervalo_segundos
+            leer_estado(ruta_estado), datetime.now(UTC), intervalo_segundos
         )
 
     inicial = _resumen()

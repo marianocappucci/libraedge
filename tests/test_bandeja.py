@@ -4,14 +4,14 @@ Esto es la parte con reglas; el caparazon grafico --que es de Windows y no se
 puede probar en este entorno-- solo dibuja lo que estas funciones devuelven.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from libraedge.bandeja import Severidad, resumen_para_la_bandeja
 from libraedge.nodo import EstadoNodo
 
-AHORA = datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc)
+AHORA = datetime(2026, 8, 30, 12, 0, 0, tzinfo=UTC)
 
 
 def estado(**cambios):
@@ -170,7 +170,7 @@ def test_bandeja_una_vez_imprime_lo_mismo_que_el_tooltip(tmp_path, monkeypatch, 
     ruta = str(tmp_path / "estado.json")
     escribir_estado(ruta, EstadoNodo(
         "node-1", en_linea=False, pendientes=3, cursor=1,
-        ultimo_intento=datetime.now(timezone.utc).isoformat(),
+        ultimo_intento=datetime.now(UTC).isoformat(),
     ))
     monkeypatch.setenv("LIBRAEDGE_ESTADO", ruta)
 
@@ -191,7 +191,7 @@ def test_bandeja_una_vez_sale_cero_cuando_esta_al_dia(tmp_path, monkeypatch, cap
     ruta = str(tmp_path / "estado.json")
     escribir_estado(ruta, EstadoNodo(
         "node-1", en_linea=True, pendientes=0, cursor=1,
-        ultimo_intento=datetime.now(timezone.utc).isoformat(),
+        ultimo_intento=datetime.now(UTC).isoformat(),
     ))
     monkeypatch.setenv("LIBRAEDGE_ESTADO", ruta)
 

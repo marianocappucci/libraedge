@@ -34,6 +34,7 @@ del producto: el nodo corre las mismas migraciones y no publica nada.
 import decimal
 import json
 import sqlite3
+from datetime import UTC
 
 from libraedge.domain.sync import ReferenceChange, ReferenceOperation
 
@@ -203,7 +204,7 @@ def sembrar(conn, tabla: str, pk: str = "id", ahora: str | None = None) -> int:
 
     tabla = validar_identificador(tabla)
     pk = validar_identificador(pk)
-    ahora = ahora or datetime.now(timezone.utc).isoformat()
+    ahora = ahora or datetime.now(UTC).isoformat()
 
     if _es_sqlite(conn):
         cursor = conn.execute(f"SELECT * FROM {tabla}")
