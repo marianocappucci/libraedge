@@ -1,0 +1,2 @@
+Control positivo del gate de gitleaks. NO ES UNA CLAVE REAL.
+api_key = "p4GLAVnDub0wiYO7EHHgRcSf0NoPGao"
