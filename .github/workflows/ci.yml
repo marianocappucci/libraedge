@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches: [develop, main]
-    tags: ["v*"]
+  # F3 (2026-09-05): sin `push`. Los tags no disparan nada mas que esta misma
+  # suite sobre un commit que el PR de promocion ya probo (no hay job de
+  # release), y el push a develop/main duplicaba el run del PR. Medido en la
+  # auditoria de F3, ver el wiki.
   pull_request:
     branches: [develop, main]
 
