@@ -507,8 +507,8 @@ wheels = [
 
 [[package]]
 name = "libracore"
-version = "1.59.0"
-source = { git = "https://github.com/marianocappucci/libracore.git?rev=v1.59.0#15fbda63ff4ee4407a9633399aed5bc6577ae431" }
+version = "1.84.0"
+source = { git = "https://github.com/marianocappucci/libracore.git?rev=v1.84.0#9a60ad14d5962042b200990200efe30acf838641" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
@@ -518,6 +518,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
     { name = "python-multipart" },
     { name = "qrcode" },
     { name = "starlette" },
@@ -548,7 +549,7 @@ server = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx2", marker = "extra == 'server'", specifier = ">=0.1" },
-    { name = "libracore", marker = "extra == 'dev'", git = "https://github.com/marianocappucci/libracore.git?rev=v1.59.0" },
+    { name = "libracore", marker = "extra == 'dev'", git = "https://github.com/marianocappucci/libracore.git?rev=v1.84.0" },
     { name = "pillow", marker = "extra == 'bandeja'", specifier = ">=10" },
     { name = "pystray", marker = "extra == 'bandeja'", specifier = ">=0.19" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
