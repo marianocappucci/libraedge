@@ -6,9 +6,12 @@
 # contra la rama default (main) y libra-bump lo mergea ahi, mientras todo lo
 # demas entra por develop: la siguiente promocion develop -> main choca en el
 # archivo que las dos ramas tocaron (paso en los ocho productos con ci.yml).
+# Ecosistema uv, no pip (2026-09-06): con pip dependabot actualizaba pyproject y
+# no uv.lock, y la imagen y el CI instalan desde el lock, asi que el bump nunca
+# llegaba al producto. Igual que los otros 15 repos.
 version: 2
 updates:
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     target-branch: develop
     directory: "/"
     schedule:
