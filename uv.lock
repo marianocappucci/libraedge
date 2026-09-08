@@ -507,8 +507,8 @@ wheels = [
 
 [[package]]
 name = "libracore"
-version = "1.88.0"
-source = { git = "https://github.com/marianocappucci/libracore.git?rev=v1.88.0#2e2adb79e649b831ea78ebcb81e498861fa020ec" }
+version = "1.89.0"
+source = { git = "https://github.com/marianocappucci/libracore.git?rev=v1.89.0#3d2e4b5008d3c7446fdbda2bf87ec57b9ec11571" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
@@ -549,7 +549,7 @@ server = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx2", marker = "extra == 'server'", specifier = ">=0.1" },
-    { name = "libracore", marker = "extra == 'dev'", git = "https://github.com/marianocappucci/libracore.git?rev=v1.88.0" },
+    { name = "libracore", marker = "extra == 'dev'", git = "https://github.com/marianocappucci/libracore.git?rev=v1.89.0" },
     { name = "pillow", marker = "extra == 'bandeja'", specifier = ">=10" },
     { name = "pystray", marker = "extra == 'bandeja'", specifier = ">=0.19" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
