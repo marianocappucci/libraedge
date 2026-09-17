@@ -209,6 +209,12 @@ tapando justamente el log que hacía falta leer. Ahora hay un `AppThrottle` de
 | Punto | Resultado |
 |---|---|
 | `preparar_nodo.ps1` completo | exit 0; las dos cadenas de migraciones; **73 tablas** |
+
+> ⚠️ **Desde el 2026-09-17 son tres cadenas**, no dos: `preparar_nodo.ps1` corre
+> también `libraauth-migrar upgrade --prefijo P --base $BaseAuth` entre la del motor y la
+> del producto, porque libraauth v0.45.0 hace que el arranque **exija** la cadena de auth
+> en vez de crear las tablas. Esa vuelta **no se probó en la VM**: la fila de arriba es
+> de la segunda vuelta, con dos cadenas.
 | Los dos servicios | registrados, `Automatic`, y el producto **sirve**: salud 200, y una ruta inventada da **404** (no un 200 de catch-all) |
 | **#2 del README: reiniciar** | los tres servicios levantan solos; salud 200 a los **51 s** de arrancar Windows |
 | El nodo sin central | reporta `en_linea: false` con `HTTP 401` — el motivo real, no un silencio |

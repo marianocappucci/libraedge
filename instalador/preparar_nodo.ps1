@@ -18,6 +18,9 @@ param(
     # encontrar la base del motor. Es un parámetro y no una constante porque el
     # nodo va a existir para más de un producto de la familia.
     [string]$Prefijo = "restolibra",
+    # En qué base viven las tablas de auth para `libraauth-migrar --base`:
+    # `dominio` en Restolibra (una sola base). Ver `libraauth.migrar`.
+    [ValidateSet("core", "dominio")][string]$BaseAuth = "dominio",
     # La clave del superusuario de PostgreSQL. Va SUELTA y no se saca de
     # `$UrlBase` a propósito: parsear una URL para recuperar una contraseña
     # falla en cuanto la contraseña tiene un `@`, un `/` o un `:`, y falla
@@ -171,6 +174,19 @@ if (-not (Test-Path $migrar)) {
            "libracore[migrations] en el Python embebido.")
 }
 
+# 🔴 **Y la de LibraAuth (2026-09-17).** Hasta acá las seis tablas de auth
+# (`usuarios`, `auth_log`, ...) las creaba el `create_all()` del arranque del
+# producto. Desde libraauth v0.45.0 el arranque EXIGE la cadena en vez de
+# crearla (`exigir_schema_al_dia`): un nodo instalado sin este paso no levanta.
+# Va después de la del motor y antes de la del producto, el mismo orden que
+# declara `scripts/panel_admin.py` del central. `--base dominio` porque en
+# Restolibra auth vive en la única base; con otro producto, `$BaseAuth`.
+$migrarAuth = Join-Path $RaizNodo "python\Scripts\libraauth-migrar.exe"
+if (-not (Test-Path $migrarAuth)) {
+    throw ("No está $migrarAuth. La carga del producto se armó sin instalar " +
+           "libraauth[migrations] en el Python embebido.")
+}
+
 Push-Location $RaizNodo
 try {
     Set-Item -Path ("Env:{0}_DATABASE_URL" -f $Prefijo.ToUpper()) -Value $UrlBase
@@ -178,6 +194,9 @@ try {
 
     & $migrar upgrade --prefijo $Prefijo
     if ($LASTEXITCODE -ne 0) { throw "Las migraciones del motor fallaron con código $LASTEXITCODE" }
+
+    & $migrarAuth upgrade --prefijo $Prefijo --base $BaseAuth
+    if ($LASTEXITCODE -ne 0) { throw "Las migraciones de libraauth fallaron con código $LASTEXITCODE" }
 
     & $python -m alembic upgrade head
     if ($LASTEXITCODE -ne 0) { throw "Las migraciones del producto fallaron con código $LASTEXITCODE" }
