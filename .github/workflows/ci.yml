@@ -34,21 +34,6 @@ jobs:
     # La imagen es la de Debian (`postgres:16`) y no la alpine: es la de
     # Restolibra, que es el producto piloto del nodo, y el collation viene de
     # la imagen.
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: libraedge
-          POSTGRES_USER: libraedge
-          POSTGRES_PASSWORD: libraedge-ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U libraedge -d libraedge"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
     env:
       # La lee `tests/conftest.py`. Su ausencia **falla** en CI en vez de
       # saltear: una suite verde que no toco PostgreSQL seria peor que no
@@ -56,6 +41,15 @@ jobs:
       LIBRACORE_POSTGRES_URL: postgresql://libraedge:libraedge-ci@localhost:5432/libraedge
 
     steps:
+      # El PostgreSQL sale de la Action compartida de libra-web-kit (`postgres-ci-v1`, desde el espejo de ECR;
+      # reglas/ci.md del wiki), con los mismos datos y el mismo healthcheck que el `services:` de antes.
+      - name: PostgreSQL de la suite
+        uses: marianocappucci/libra-web-kit/.github/actions/postgres-ci@postgres-ci-v1
+        with:
+          variante: debian
+          base: libraedge
+          usuario: libraedge
+          clave: libraedge-ci
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
