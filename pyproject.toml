@@ -82,7 +82,7 @@ dev = [
     # v1.148.0 -> v1.149.0 (2026-10-09): en una demo (`DEMO_MODE=1`) la empresa es siempre ficticia (`config_manager`, ADR-038 de libracore). Fuera de una demo no cambia nada. Sin migracion.
     # v1.149.0 -> v1.151.0 (2026-10-09): un plan retirado se resuelve con `PLANES_RETIRADOS` en el alta y en el cambio de plan (`provisioning.resolver_plan`, libracore#375). Este producto no retira planes: no cambia nada. Sin migracion.
     # v1.152.0 -> v1.166.0 (2026-10-14): sucursales contratadas y abono por unidad (ADR-041), retiro de cc_resumen con migracion 0024 (ADR-042), auditoria de escrituras (ADR-043), candados y registro de errores (ADR-044/045), concepto sin «Factura» doble con migracion 0025, nota de debito por importe (ADR-049), rastro de envios por mail con migracion 0026 (ADR-050), almacen de secretos fuera de la app (v1.165.0) y filtro `envio=` (ADR-051). Este motor no importa libracore en runtime: el pin es SOLO PARA TESTS.
-    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.167.0",
+    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.168.0",
 ]
 server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
 # El icono de bandeja, que solo se instala en la PC del cliente. Va aparte
