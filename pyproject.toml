@@ -85,7 +85,8 @@ dev = [
     # v1.168.0 -> v1.182.0 (2026-10-18): alta con 2 workers, ND pendiente visible (ADR-066), NC sin CAE con destino (ADR-067, migracion 0027 aditiva), `create_remito(conn=)` (ADR-068), HEAD en `montar_spa` (ADR-069) y un solo reloj de Argentina (`libracore.fechas.hoy()/ahora()`, ADR-070). Pin SOLO PARA TESTS.
     # v1.182.0 -> v1.183.0 (2026-10-18): tokens de servicio e integracion propios de cada instancia (ADR-071); con libraauth v0.52.0 (ADR-025, token anterior para rotar sin corte). Sin migracion.
     # v1.183.0 -> v1.184.0 (2026-10-18): los cobros de MercadoPago con el CUIT de quien factura nacen ignorados y no se auto-facturan (ADR-072); `admin.services.clientes_dir()` publica. Sin migracion.
-    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.184.0",
+    # v1.184.0 -> v1.184.1 (2026-10-18): tokens por instancia, `${VAR:?mensaje}` se lee del .env (corrige ADR-071). Sin migracion.
+    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.184.1",
 ]
 server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
 # El icono de bandeja, que solo se instala en la PC del cliente. Va aparte
