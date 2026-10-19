@@ -20,6 +20,20 @@ dice `-SinCentral` en la verificación.
   `net user Administrador /active:yes` y ponerle clave) o apagar UAC (`EnableLUA=0` y reiniciar).
 - Un snapshot de la VM limpia antes de empezar, para repetir.
 
+## Lo que se aprendió en la primera prueba (2026-10-19)
+
+- **`guestcontrol` pierde las comillas** de `-Command` cuando el comando tiene rutas con espacios o `[...]`: cada paso
+  conviene escribirlo en un `.ps1`, copiarlo a la VM y correrlo por ruta. Si la política de ejecución lo bloquea, en la
+  VM de prueba: `Set-ExecutionPolicy Bypass -Scope LocalMachine -Force`.
+- **Los pasos largos (compilar, instalar), desacoplados**: `Start-Process powershell ... *> salida.out` y consultar
+  después si terminó. Con 4 GB de RAM, la sesión de `guestcontrol` se corta por tiempo (`VERR_TIMEOUT`) y, tras
+  varios cortes, VBoxService deja de aceptar sesiones (`VERR_DUPLICATE`, «Error starting guest session»): se arregla
+  reiniciando la VM.
+- **`copyfrom` no escribe en `\\wsl.localhost\...`**: traer los archivos a una carpeta de `C:` y moverlos desde ahí.
+- **No sacar un snapshot con la VM prendida** (`--live`): con 4 GB tardó más de hora y media y hubo que matar la VM.
+- **La bandeja corre en la sesión del usuario conectado en la pantalla**: para probar una actualización de verdad,
+  abrirla antes (el acceso directo de Inicio) y reinstalar encima (V10).
+
 ## 1. En el WSL: armar lo que se copia
 
 ```bash

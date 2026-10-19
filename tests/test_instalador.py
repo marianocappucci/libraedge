@@ -132,6 +132,21 @@ def test_dos_respaldos_a_la_vez_no_comparten_la_base_de_verificacion():
     assert '$verificacion = "libraedge_verificar_respaldo_$PID"' in script
 
 
+def test_la_actualizacion_cierra_la_bandeja_y_rearranca_si_se_aborta():
+    """La bandeja corre en la sesion del usuario y el RestartManager no la cierra (Session Mismatch): tenia tomado
+    libffi-8.dll, Inno abortaba y los servicios quedaban parados (VM, 2026-10-19)."""
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    prepara = iss[iss.index("function PrepareToInstall"):]
+    prepara = prepara[:prepara.index("\nend;")]
+    assert "Stop-Process -Force" in prepara and "ServiciosParados := True" in prepara
+    deinit = iss[iss.index("procedure DeinitializeSetup"):]
+    deinit = deinit[:deinit.index("\nend;")]
+    for servicio in ("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo"):
+        assert f"start {servicio}" in deinit
+    post = iss[iss.index("if CurStep = ssPostInstall then"):]
+    assert post.index("ServiciosParados := False") < post.index("instalar.ps1")
+
+
 def test_los_textos_de_los_scripts_son_ascii():
     """Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI e ISCC un .iss tambien: un acento en un texto sale
     roto y un emoji puede cerrar la cadena (paso el 2026-08-30). En los comentarios no importa."""

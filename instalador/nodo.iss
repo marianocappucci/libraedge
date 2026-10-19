@@ -149,6 +149,7 @@ var
   PaginaCarga: TInputFileWizardPage;
   vCarga: String;
   CodigoDeSalida: Integer;
+  ServiciosParados: Boolean;
 
 function ArchivoDeProducto: String;
 begin
@@ -234,6 +235,33 @@ begin
     deshace (medido en la VM, 2026-10-19). preparar_postgres.ps1 lo vuelve a
     arrancar, e instalar.ps1 si falla antes de tocar nada. }
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgePostgres /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  ServiciosParados := True;
+  { Y todo proceso que corra desde el Python del nodo, de cualquier sesion: la
+    bandeja corre en la sesion del usuario conectado, y el RestartManager no
+    cierra procesos de otra sesion (Session Mismatch). Tenia tomado
+    libffi-8.dll y la actualizacion se abortaba (VM, 2026-10-19). La bandeja
+    vuelve sola en el proximo inicio de sesion. }
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $_.Path -like ''' +
+    ExpandConstant('{app}') + '\python\*'' } | Stop-Process -Force"',
+    '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+end;
+
+{ Si la instalacion se aborta despues de parar los servicios (un archivo que no
+  se pudo reemplazar), Inno deshace la copia pero nadie los arrancaba: el local
+  quedaba sin sistema hasta reiniciar la PC (VM, 2026-10-19). Desde
+  ssPostInstall se encarga instalar.ps1. }
+procedure DeinitializeSetup;
+var
+  Codigo: Integer;
+begin
+  if ServiciosParados then
+  begin
+    Log('La instalacion no llego a configurar el nodo: se vuelven a arrancar los servicios.');
+    Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgePostgres', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+    Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgeProducto', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+    Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgeNodo', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  end;
 end;
 
 { Todo lo que no es copiar archivos lo hace instalar.ps1, y su codigo de salida
@@ -248,6 +276,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    ServiciosParados := False;
     Registro := ExpandConstant('{app}\logs\instalacion.log');
     WizardForm.StatusLabel.Caption := 'Preparando la base local y el nodo (puede tardar unos minutos)...';
     Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\instalador\instalar.ps1') +
