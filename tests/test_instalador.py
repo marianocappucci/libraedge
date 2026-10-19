@@ -155,6 +155,13 @@ def test_al_terminar_bien_se_abre_la_bandeja_en_la_sesion_del_usuario():
     assert "ShellExecAsOriginalUser" in bien and "LibraEdge - estado del nodo.lnk" in bien and "ewNoWait" in bien
 
 
+def test_instalar_no_hereda_los_modulos_de_powershell_7():
+    """Desde pwsh, la 5.1 heredaba PSModulePath y Get-Acl no cargaba (CI de Windows, 2026-10-19)."""
+    script = (CARPETA / "instalar.ps1").read_text(encoding="utf-8")
+    assert '$env:PSModulePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")' in script
+    assert script.index("PSModulePath") < script.index("Start-Transcript")
+
+
 def test_los_textos_de_los_scripts_son_ascii():
     """Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI e ISCC un .iss tambien: un acento en un texto sale
     roto y un emoji puede cerrar la cadena (paso el 2026-08-30). En los comentarios no importa."""

@@ -20,6 +20,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Lanzado desde PowerShell 7 (una consola pwsh, o el runner de GitHub), Windows
+# PowerShell 5.1 hereda su PSModulePath y carga los modulos de la 7: chocan y
+# Get-Acl no carga ("The member AuditToString is already present", CI
+# 2026-10-19). Se usa el de la maquina, que es el de la 5.1.
+if ($PSVersionTable.PSEdition -eq "Desktop") {
+    $env:PSModulePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+}
 $logs = Join-Path $RaizNodo "logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 Start-Transcript -Path (Join-Path $logs "instalacion.log") -Append | Out-Null
