@@ -175,14 +175,14 @@ jobs:
             grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1 \
               || { echo "apt no instalaria $p"; exit 1; }
           done
-          # La extension, y que Ubuntu Desktop la trae habilitada para todos: la sesion «ubuntu»
-          # la lista en enabled-extensions (ubuntu-settings / ubuntu-session, segun la version).
+          # La extension, y que Ubuntu Desktop la trae habilitada para todos: el modo «ubuntu» de
+          # GNOME Shell (gnome-shell-common, modes/ubuntu.json) la lista en enabledExtensions.
           mkdir -p _pkgs && cd _pkgs
-          apt-get download -q gnome-shell-extension-appindicator ubuntu-settings ubuntu-session
+          apt-get download -q gnome-shell-extension-appindicator gnome-shell-common
           dpkg-deb -c gnome-shell-extension-appindicator_*.deb | grep -o "extensions/ubuntu-appindicators@ubuntu.com/metadata.json"
-          for d in ubuntu-settings_*.deb ubuntu-session_*.deb; do mkdir -p "x-$d" && dpkg-deb -x "$d" "x-$d"; done
-          grep -rl "ubuntu-appindicators@ubuntu.com" x-* | tee habilitada.txt
-          test -s habilitada.txt
+          dpkg-deb -x gnome-shell-common_*.deb x
+          cat x/usr/share/gnome-shell/modes/ubuntu.json
+          grep -q '"ubuntu-appindicators@ubuntu.com"' x/usr/share/gnome-shell/modes/ubuntu.json
       - name: Instalar sin carga no configura
         run: |
           sudo apt-get install -y -q --no-install-recommends "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-sin-carga.log"
