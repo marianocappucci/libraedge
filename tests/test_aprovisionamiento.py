@@ -558,3 +558,108 @@ def test_una_base_de_antes_suma_la_columna_del_prefijo():
     vieja.execute("UPDATE node_identity SET prefijo = 'S01' WHERE node_id = 'a'")
     with pytest.raises(sqlite3.IntegrityError):
         vieja.execute("UPDATE node_identity SET prefijo = 'S01' WHERE node_id = 'b'")
+
+
+def test_registrar_con_carga_escribe_el_archivo_del_instalador(conectar, capsys, monkeypatch, tmp_path):
+    """ADR-010: con --carga el secreto no se imprime; va a un archivo 600 con la URL y el emisor."""
+    import json
+    import stat
+
+    from libraedge.central import main
+    from libraedge.instalador import leer_carga
+
+    monkeypatch.setenv("LIBRAEDGE_DATABASE_URL", "x")
+    monkeypatch.setenv("LIBRAEDGE_APROVISIONAMIENTO", "tests.test_aprovisionamiento:APROV")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(ap, "es_interactivo", lambda: False)
+    (tmp_path / "config.json").write_text(json.dumps({
+        "empresa_nombre": "Comercio de Prueba S.A.", "empresa_cuit": "30-99999904-9",
+        "empresa_iva_condition": "Responsable Inscripto", "mp_access_token": "APP-USR-no-viaja"}), encoding="utf-8")
+    ruta = tmp_path / "carga-nodo.json"
+
+    assert main(["nodo", "registrar", "node-1", "--carga", str(ruta), "--central-url",
+                 "https://juguete.ejemplo.com.ar/"], conectar=conectar) == 0
+    salida = capsys.readouterr().out
+    assert "LIBRAEDGE_NODE_SECRET" not in salida and "prefijo S01" in salida and str(ruta) in salida
+    assert stat.S_IMODE(ruta.stat().st_mode) == 0o600
+    carga = leer_carga(str(ruta), "juguete")
+    assert carga.entorno["LIBRAEDGE_CENTRAL_URL"] == "https://juguete.ejemplo.com.ar"
+    assert carga.entorno["LIBRAEDGE_PREFIJO"] == "S01"
+    assert carga.entorno["LIBRAEDGE_TABLAS_ESPEJO"] == "categorias:id,party_roles:party_id+role,productos:id"
+    assert dict(carga.sucursal) == {"id": "1", "nombre": "Centro"}
+    assert carga.emisor == {"empresa_nombre": "Comercio de Prueba S.A.", "empresa_cuit": "30-99999904-9",
+                            "empresa_iva_condition": "Responsable Inscripto"}
+    assert carga.entorno["LIBRAEDGE_NODE_SECRET"] not in salida
+
+    # No pisa una carga que ya esta, y lo dice ANTES de registrar (un alta emite un secreto nuevo).
+    assert main(["nodo", "registrar", "node-1", "--carga", str(ruta), "--central-url",
+                 "https://juguete.ejemplo.com.ar"], conectar=conectar) == 1
+    assert "ya existe" in capsys.readouterr().err
+    assert leer_carga(str(ruta), "juguete").entorno == carga.entorno
+
+
+@pytest.mark.parametrize("argumentos, error", [
+    (["--carga", "{carga}"], "--central-url"),
+    (["--carga", "{carga}", "--central-url", "http://juguete.com.ar"], "https"),
+    (["--central-url", "https://juguete.com.ar"], "van con --carga"),
+    (["--carga", "{carga}", "--central-url", "https://j.com.ar", "--config-emisor", "{cuit_malo}"], "CUIT"),
+])
+def test_registrar_con_carga_valida_antes_de_dar_el_alta(conectar, capsys, monkeypatch, tmp_path, argumentos, error):
+    import json
+
+    from libraedge.central import main
+
+    monkeypatch.setenv("LIBRAEDGE_DATABASE_URL", "x")
+    monkeypatch.setenv("LIBRAEDGE_APROVISIONAMIENTO", "tests.test_aprovisionamiento:APROV")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(ap, "es_interactivo", lambda: False)
+    cuit_malo = tmp_path / "malo.json"
+    cuit_malo.write_text(json.dumps({"empresa_cuit": "30-99999904-1"}), encoding="utf-8")
+    argumentos = [a.format(carga=tmp_path / "c.json", cuit_malo=cuit_malo) for a in argumentos]
+    assert main(["nodo", "registrar", "node-1", *argumentos], conectar=conectar) == 1
+    assert error in capsys.readouterr().err
+    assert not (tmp_path / "c.json").exists()
+    assert main(["nodo", "estado"], conectar=conectar) == 0
+    assert "node-1" not in capsys.readouterr().out  # no se registro nada
+
+
+def test_registrar_con_carga_sin_config_del_central_avisa(conectar, capsys, monkeypatch, tmp_path):
+    from libraedge.central import main
+    from libraedge.instalador import leer_carga
+
+    monkeypatch.setenv("LIBRAEDGE_DATABASE_URL", "x")
+    monkeypatch.setenv("LIBRAEDGE_APROVISIONAMIENTO", "tests.test_aprovisionamiento:APROV")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(ap, "es_interactivo", lambda: False)
+    ruta = tmp_path / "carga.json"
+    assert main(["nodo", "registrar", "node-1", "--carga", str(ruta), "--central-url", "https://j.com.ar"],
+                conectar=conectar) == 0
+    assert "no va a poder facturar" in capsys.readouterr().out
+    assert leer_carga(str(ruta), "juguete").emisor == {}
+
+
+def test_registrar_con_carga_avisa_el_emisor_incompleto_y_un_fallo_al_escribir(conectar, capsys, monkeypatch,
+                                                                                tmp_path):
+    import json
+
+    from libraedge import central
+    from libraedge.central import main
+
+    monkeypatch.setenv("LIBRAEDGE_DATABASE_URL", "x")
+    monkeypatch.setenv("LIBRAEDGE_APROVISIONAMIENTO", "tests.test_aprovisionamiento:APROV")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(ap, "es_interactivo", lambda: False)
+    (tmp_path / "config.json").write_text(json.dumps({"empresa_nombre": "Comercio de Prueba S.A."}),
+                                          encoding="utf-8")
+    assert main(["nodo", "registrar", "node-1", "--carga", str(tmp_path / "a.json"), "--central-url",
+                 "https://j.com.ar"], conectar=conectar) == 0
+    assert "no tiene empresa_cuit, empresa_iva_condition" in capsys.readouterr().out
+
+    def falla(ruta, carga):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(central, "escribir_carga", falla)
+    assert main(["nodo", "registrar", "node-1", "--carga", str(tmp_path / "b.json"), "--central-url",
+                 "https://j.com.ar"], conectar=conectar) == 1
+    error = capsys.readouterr().err
+    assert "quedo registrado" in error and "mismo node_id" in error

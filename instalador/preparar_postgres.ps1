@@ -1,18 +1,25 @@
-# Prepara el PostgreSQL local del nodo: initdb, servicio y base.
+# Prepara el PostgreSQL local del nodo: clave, initdb, servicio y bases.
 #
-# 🔴 SIN PROBAR. Escrito en un entorno sin PostgreSQL para Windows. Ver el
-# README de esta carpeta.
+# Lo corre `instalar.ps1` (como Administrador), en la primera instalacion y en
+# cada reinstalacion: todo lo que hace es idempotente. Las bases salen de la
+# definicion del producto (`productos/<producto>.json`).
 #
-# Se ejecuta como Administrador, una sola vez, desde el instalador.
+# La clave del superusuario NO se pide ni viaja por la linea de comandos: se
+# genera la primera vez y queda en `-ArchivoClave` (SYSTEM y Administradores).
+# Antes se tipeaba en el asistente, iba como parametro --y por lo tanto al log
+# de Inno Setup y al del transcript-- y al reinstalar habia que acordarse de la
+# misma o el bucle de espera vencia con un mensaje que no lo decia.
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RaizPostgres,   # donde estan los binarios (bin\initdb.exe)
     [Parameter(Mandatory = $true)][string]$DirectorioDatos, # el cluster
-    [Parameter(Mandatory = $true)][string]$Password,        # del superusuario local
+    [Parameter(Mandatory = $true)][string]$ArchivoClave,    # la clave del superusuario (se crea si falta)
+    # Las bases del producto. Un texto con comas y no un [string[]]: con
+    # `powershell -File` un arreglo llega como un solo texto.
+    [Parameter(Mandatory = $true)][string]$Bases,
     [string]$NombreServicio = "LibraEdgePostgres",
     [int]$Puerto = 55432,
-    [string]$Base = "restolibra",
     [string]$Zona = "America/Argentina/Buenos_Aires",
     # 🔴 El collation tiene que parecerse al del central, y `C` no se parece a
     # nada: ordena por bytes, o sea todas las mayúsculas antes que cualquier
@@ -32,12 +39,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "comun.ps1")
+
+$listaBases = @($Bases -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($listaBases.Count -eq 0) { throw "No hay bases que crear." }
+foreach ($b in $listaBases) {
+    if ($b -notmatch '^[a-z][a-z0-9_]{0,62}$') { throw "Nombre de base no valido: $b" }
+}
 
 $initdb = Join-Path $RaizPostgres "bin\initdb.exe"
 $pgctl  = Join-Path $RaizPostgres "bin\pg_ctl.exe"
 $psql   = Join-Path $RaizPostgres "bin\psql.exe"
 foreach ($exe in @($initdb, $pgctl, $psql)) {
-    if (-not (Test-Path $exe)) { throw "No está $exe. ¿La ruta de PostgreSQL es correcta?" }
+    if (-not (Test-Path $exe)) { throw "No esta $exe. La ruta de PostgreSQL es correcta?" }
 }
 
 # 🔴 **Que el archivo esté NO quiere decir que el programa corra**, y esto
@@ -67,17 +81,41 @@ if ($LASTEXITCODE -eq -1073741515) {
            "/install /quiet /norestart y volver a correr.")
 }
 if ($LASTEXITCODE -ne 0) {
-    throw "initdb no pudo ejecutarse (código $LASTEXITCODE) antes de empezar."
+    throw "initdb no pudo ejecutarse (codigo $LASTEXITCODE) antes de empezar."
+}
+
+# --- La clave del superusuario ------------------------------------------------
+# Hex de 64 caracteres: nada que codificar al meterla en una URL de conexion.
+$hayCluster = Test-Path (Join-Path $DirectorioDatos "PG_VERSION")
+$Password = ""
+if (Test-Path $ArchivoClave) {
+    Proteger-Archivo -Ruta $ArchivoClave
+    $Password = ([System.IO.File]::ReadAllText($ArchivoClave)).Trim()
+}
+if (-not $Password) {
+    if ($hayCluster) {
+        throw ("Hay un cluster en $DirectorioDatos pero no su clave en $ArchivoClave. " +
+               "Si es de una instalacion anterior, escribir en ese archivo la clave con la " +
+               "que se creo (una linea, sin BOM) y volver a correr.")
+    }
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $Password = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+    Proteger-Archivo -Ruta $ArchivoClave
+    Escribir-SinBom -Ruta $ArchivoClave -Texto $Password
+    Write-Host "Clave del PostgreSQL local generada en $ArchivoClave (solo SYSTEM y Administradores)."
 }
 
 # El puerto NO es el 5432 por defecto, a propósito: la PC del cliente puede tener
 # ya un PostgreSQL de otra cosa, y pisarlo sería la peor forma de empezar.
-if (Get-Service -Name $NombreServicio -ErrorAction SilentlyContinue) {
+#
+# Con el servicio ya registrado (una reinstalacion) no se toca el cluster, pero
+# el script SIGUE: antes salia aca con `exit 0`, y una base nueva de la
+# definicion no se creaba nunca.
+$servicioExiste = [bool](Get-Service -Name $NombreServicio -ErrorAction SilentlyContinue)
+if ($servicioExiste) {
     Write-Host "El servicio $NombreServicio ya existe: no se toca el cluster."
-    exit 0
-}
-
-if (Test-Path (Join-Path $DirectorioDatos "PG_VERSION")) {
+} elseif ($hayCluster) {
     # ${...} y no $...: PowerShell lee `$Variable:` como una variable con ámbito
     # --la forma de $env:RUTA-- y el parser lo rechaza.
     Write-Host "Ya hay un cluster en ${DirectorioDatos}: no se re-inicializa."
@@ -129,9 +167,9 @@ if (Test-Path (Join-Path $DirectorioDatos "PG_VERSION")) {
             # bytes no avisa de nada, sólo muestra la carta en otro orden.
             # Sin backticks en el mensaje: adentro de comillas dobles PowerShell
             # los lee como carácter de escape y se los come.
-            throw ("initdb falló con código $LASTEXITCODE. Si el motivo es que " +
+            throw ("initdb fallo con codigo $LASTEXITCODE. Si el motivo es que " +
                    "este build no tiene ICU, hay que decidir el collation a mano " +
-                   "y dejarlo escrito. Caer al collation C NO es una opción " +
+                   "y dejarlo escrito. Caer al collation C NO es una opcion " +
                    "silenciosa: ordena por bytes y nada avisa.")
         }
     } finally {
@@ -153,7 +191,9 @@ if (Test-Path (Join-Path $DirectorioDatos "PG_VERSION")) {
 # Se aplica siempre y es idempotente: si la marca ya está, no se duplica.
 $conf = Join-Path $DirectorioDatos "postgresql.conf"
 $marca = "# --- LibraEdge ---"
-if ((Get-Content $conf -Raw -ErrorAction SilentlyContinue) -notmatch [regex]::Escape($marca)) {
+if ($servicioExiste) {
+    # Reinstalacion: el bloque ya se escribio con el cluster.
+} elseif ((Get-Content $conf -Raw -ErrorAction SilentlyContinue) -notmatch [regex]::Escape($marca)) {
     Add-Content -Path $conf -Encoding utf8 -Value @"
 
 $marca
@@ -168,9 +208,13 @@ listen_addresses = '127.0.0.1'
     Write-Host "postgresql.conf ya tiene el bloque de LibraEdge: no se duplica."
 }
 
-& $pgctl register -N $NombreServicio -D "$DirectorioDatos" -S auto
-if ($LASTEXITCODE -ne 0) { throw "pg_ctl register falló con código $LASTEXITCODE" }
-Start-Service -Name $NombreServicio
+if (-not $servicioExiste) {
+    & $pgctl register -N $NombreServicio -D "$DirectorioDatos" -S auto
+    if ($LASTEXITCODE -ne 0) { throw "pg_ctl register fallo con codigo $LASTEXITCODE" }
+}
+if ((Get-Service -Name $NombreServicio).Status -ne "Running") {
+    Start-Service -Name $NombreServicio
+}
 
 # Esperar a que acepte conexiones. El servicio "Running" NO quiere decir que la
 # base esté lista: el proceso arrancó, la recuperación puede seguir corriendo.
@@ -191,20 +235,27 @@ $preferenciaPrevia = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $env:PGPASSWORD = $Password
 $listo = $false
-foreach ($intento in 1..30) {
+foreach ($intento in 1..60) {
     & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -c "SELECT 1" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { $listo = $true; break }
     Start-Sleep -Seconds 1
 }
 $ErrorActionPreference = $preferenciaPrevia
-if (-not $listo) { throw "PostgreSQL arrancó pero no acepta conexiones en el puerto $Puerto." }
+if (-not $listo) { throw "PostgreSQL arranco pero no acepta conexiones en el puerto $Puerto." }
 
-$existe = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -tAc `
-    "SELECT 1 FROM pg_database WHERE datname = '$Base'"
-if ($existe -ne "1") {
-    & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -c "CREATE DATABASE $Base"
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la base $Base." }
+foreach ($nombreBase in $listaBases) {
+    $existe = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -tAc `
+        "SELECT 1 FROM pg_database WHERE datname = '$nombreBase'"
+    if ($existe -ne "1") {
+        & $psql -h 127.0.0.1 -p $Puerto -U postgres -d postgres -c "CREATE DATABASE $nombreBase"
+        if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la base $nombreBase." }
+        Write-Host "Base $nombreBase creada."
+    } else {
+        Write-Host "La base $nombreBase ya existe."
+    }
 }
+# Las verificaciones de abajo son del CLUSTER (zona y collation): con una base alcanza.
+$Base = $listaBases[0]
 
 # --- Las dos verificaciones que no se pueden posponer -----------------------
 # Las dos miran el estado REAL del servidor, no los flags que se le pasaron:
@@ -216,7 +267,7 @@ if ($existe -ne "1") {
 $ahora = & $psql -h 127.0.0.1 -p $Puerto -U postgres -d $Base -tAc "SELECT now()"
 Write-Host "PostgreSQL listo en el puerto $Puerto. now() del servidor: $ahora"
 if ($ahora -notmatch "-03") {
-    Write-Warning ("La zona NO quedó en -03 (now() = $ahora). El initdb no tomó " +
+    Write-Warning ("La zona NO quedo en -03 (now() = $ahora). El initdb no tomo " +
                    "'$Zona' y hay que rehacer el cluster ANTES de cargar datos.")
 }
 
@@ -242,14 +293,14 @@ if (-not $orden) {
     # Y si vuelve vacío, se grita. Un chequeo mudo es peor que no tenerlo:
     # ocupa el lugar del que sí habría avisado.
     Write-Warning ("No se pudo leer el collation del cluster (la consulta no " +
-                   "devolvió nada). Verificar a mano con: " +
+                   "devolvio nada). Verificar a mano con: " +
                    "select datlocprovider, daticulocale, datcollate from pg_database.")
 } else {
     Write-Host "Collation del nodo: $orden   (el central es c|en_US.utf8)"
     # `i|...` es ICU, que es lo buscado. `c|C` es libc con collation C: bytes.
     if ($orden -match "\|C$") {
-        Write-Warning ("El cluster quedó en collation C: ordena por BYTES, con todas " +
-                       "las mayúsculas antes que las minúsculas. La carta va a salir " +
+        Write-Warning ("El cluster quedo en collation C: ordena por BYTES, con todas " +
+                       "las mayusculas antes que las minusculas. La carta va a salir " +
                        "en otro orden que en el central. Rehacer el cluster.")
     }
 }

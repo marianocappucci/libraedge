@@ -1,0 +1,56 @@
+{
+  "formato": "libraedge-producto/1",
+  "_nota": "Una sola base (libracore.db.url_de_instancia: comparte base con el dominio); auth en la del dominio. Migraciones = las de scripts/panel_admin.py de restolibra. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "producto": "restolibra",
+  "nombre": "RestoLibra",
+  "app_id": "F4887308-2B5A-4D5A-B694-1F85F48CBA4B",
+  "prefijo_variables": "RESTOLIBRA",
+  "bases": [
+    {
+      "nombre": "restolibra",
+      "variables": [
+        "RESTOLIBRA_DATABASE_URL",
+        "RESTOLIBRA_LIBRACORE_DATABASE_URL"
+      ],
+      "nodo": true
+    }
+  ],
+  "asgi": "app.asgi:app",
+  "puerto": 8000,
+  "salud": "/health",
+  "base_auth": "dominio",
+  "migraciones": [
+    [
+      "libracore-migrar",
+      "upgrade",
+      "--prefijo",
+      "restolibra"
+    ],
+    [
+      "libraauth-migrar",
+      "upgrade",
+      "--prefijo",
+      "restolibra",
+      "--base",
+      "dominio"
+    ],
+    [
+      "libracommerce-migrar",
+      "upgrade",
+      "--prefijo",
+      "restolibra"
+    ],
+    [
+      "alembic",
+      "upgrade",
+      "head"
+    ]
+  ],
+  "extras": [
+    "tzdata",
+    "pystray>=0.19",
+    "Pillow>=10"
+  ],
+  "variables": {},
+  "version_esquema": "alembic"
+}

@@ -1,45 +1,70 @@
-; Instalador del nodo LibraEdge para Windows (Inno Setup 6).
+; Instalador del nodo LibraEdge para Windows (Inno Setup 6.3 o superior).
 ;
-; 🔴 SIN COMPILAR NI PROBAR. Se escribió en un entorno sin Inno Setup. Ver el
-; README de esta carpeta para la lista de lo que hay que verificar en una
-; máquina real antes de dárselo a un cliente.
+; UNO para todos los productos (ADR-010). Se compila por producto:
 ;
-; Compilar con:  ISCC.exe nodo.iss
+;     ISCC.exe /DProducto=ventalibra nodo.iss
+;     ISCC.exe /DProducto=restolibra /DVersion=0.10.0 nodo.iss
 ;
-; Espera encontrar, al lado de este archivo:
-;   carga\python\        Python embebido (python.org, "Windows embeddable package")
-;   carga\postgres\      PostgreSQL 16 (el ZIP binario, NO el instalador de EDB)
-;   carga\producto\      El producto ya instalado en el Python embebido
-;   carga\herramientas\  nssm.exe
+; Lo propio del producto esta en productos\<producto>.json (bases, variables,
+; modulo ASGI, migraciones, puerto) y lo lee instalar.ps1 al instalar. Aca solo
+; hace falta el nombre visible y el AppId, en la tabla de abajo: un test
+; (tests/test_instalador.py) verifica que coincida con los .json.
 ;
-; 🔴 Al armar `carga\python\`: el paquete embebido trae un `python3XX._pth` con
-; la línea `import site` COMENTADA. Con eso apagado `site-packages` no entra al
-; path, y `python -m alembic` falla con "No module named alembic" aunque esté
-; instalado justo al lado. Hay que descomentarla al preparar la carga;
-; `preparar_nodo.ps1` lo verifica antes de correr las migraciones.
+; Espera, al lado de este archivo (lo arma armar_paquete.sh, ver README):
+;   paquete\<producto>\python\     Python embebido con el producto y sus dependencias
+;   paquete\<producto>\producto\   app\, migrations\, alembic.ini y frontend\dist
+;   paquete\postgres\              PostgreSQL 16 (el ZIP binario, NO el instalador de EDB)
+;   paquete\herramientas\          nssm.exe y vc_redist.x64.exe
+;
+; Instalacion desatendida (la carga la emite el central, ver README):
+;     libraedge-nodo-ventalibra-0.10.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+;
+; Codigos de salida: 0 bien; 1 no arranco (falta /CARGA, u otro producto ya
+; instalado); 20 los archivos se copiaron pero la configuracion del nodo fallo
+; (el detalle esta en {app}\logs\instalacion.log). Los demas son los de Inno.
+;
+; Los textos van SIN acentos: sin BOM, ISCC lee este archivo con la pagina de
+; codigos del sistema.
 
-#define Producto      "Restolibra"
-#define NombreNodo    "Nodo LibraEdge"
-; ⚠️ Mover esto con el tag de LibraEdge. Estuvo en 0.4.1 mientras el paquete iba
-; por v0.6.0: un número que nadie mantiene es peor que no tenerlo, porque el
-; cliente termina reportando una versión que no es la que tiene.
-#define Version       "0.6.4"
-#define Editor        "Mariano Cappucci"
+#ifndef Producto
+  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra nodo.iss
+#endif
+
+#if Producto == "restolibra"
+  #define NombreProducto "RestoLibra"
+  #define AppIdProducto  "F4887308-2B5A-4D5A-B694-1F85F48CBA4B"
+#elif Producto == "ventalibra"
+  #define NombreProducto "VentaLibra"
+  #define AppIdProducto  "ED40FA78-DE81-4F77-8006-2930D4ADBCAB"
+#elif Producto == "contalibra"
+  #define NombreProducto "ContaLibra"
+  #define AppIdProducto  "4BE6AB1D-4F2C-4255-9D16-C119C22D1DFC"
+#else
+  #error Producto desconocido: agregar productos\<producto>.json y su fila en esta tabla
+#endif
+
+; La version del instalador es la del tag de LibraEdge que lo construye.
+#ifndef Version
+  #define Version "0.10.0"
+#endif
+#define NombreNodo "Nodo LibraEdge"
+#define Editor     "Mariano Cappucci"
 
 [Setup]
-; GUID real y fijo: es lo que hace que una reinstalación actualice en vez de
-; instalar una segunda copia al lado. No cambiarlo entre versiones.
-AppId={{F4887308-2B5A-4D5A-B694-1F85F48CBA4B}
-AppName={#NombreNodo} para {#Producto}
+; El AppId es por producto y fijo: es lo que hace que una reinstalacion
+; actualice en vez de instalar una segunda copia. El de RestoLibra es el de
+; siempre (F4887308-...).
+AppId={{{#AppIdProducto}}
+AppName={#NombreNodo} para {#NombreProducto}
 AppVersion={#Version}
 AppPublisher={#Editor}
 DefaultDirName={autopf}\LibraEdge
 DefaultGroupName=LibraEdge
 DisableProgramGroupPage=yes
-OutputBaseFilename=libraedge-nodo-{#Version}
+OutputDir=salida
+OutputBaseFilename=libraedge-nodo-{#Producto}-{#Version}
 Compression=lzma2/max
 SolidCompression=yes
-; Registra servicios de Windows y escribe en Archivos de programa.
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -49,246 +74,197 @@ WizardStyle=modern
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Files]
-Source: "carga\python\*";       DestDir: "{app}\python";       Flags: ignoreversion recursesubdirs
-Source: "carga\postgres\*";     DestDir: "{app}\postgres";     Flags: ignoreversion recursesubdirs
-Source: "carga\producto\*";     DestDir: "{app}";              Flags: ignoreversion recursesubdirs
-Source: "carga\herramientas\*"; DestDir: "{app}\herramientas"; Flags: ignoreversion
-Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador";  Flags: ignoreversion
-Source: "preparar_nodo.ps1";     DestDir: "{app}\instalador";  Flags: ignoreversion
-; El respaldo del nodo. Lo corre una tarea programada cada hora, no el
-; instalador: el `sync_outbox` es el unico lugar donde vive una venta cobrada
-; sin internet, y entre el cobro y la sincronizacion no esta en ningun otro lado.
-Source: "respaldo.ps1";          DestDir: "{app}\instalador";  Flags: ignoreversion
-; 🔴 El runtime de Visual C++. NO es opcional y no es una dependencia teorica:
-; el ZIP binario de PostgreSQL no lo trae y un Windows limpio tampoco. Sin el,
-; initdb/psql/pg_ctl/postgres mueren con 0xC0000135 sin escribir una linea.
-; Verificado en una VM con Windows 11 LTSC recien instalado, el 2026-08-30.
-; Bajar de https://aka.ms/vs/17/release/vc_redist.x64.exe al armar la carga.
-Source: "carga\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "paquete\{#Producto}\python\*";   DestDir: "{app}\python";       Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "paquete\{#Producto}\producto\*"; DestDir: "{app}";              Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "paquete\postgres\*";             DestDir: "{app}\postgres";     Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "paquete\herramientas\nssm.exe";  DestDir: "{app}\herramientas"; Flags: ignoreversion
+; El runtime de Visual C++: el ZIP de PostgreSQL no lo trae y un Windows limpio
+; tampoco (0xC0000135, medido 2026-08-30). Lo instala instalar.ps1 si falta;
+; queda en {app} para poder reparar sin el instalador.
+Source: "paquete\herramientas\vc_redist.x64.exe"; DestDir: "{app}\herramientas"; Flags: ignoreversion
+Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
+; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
+Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
+Source: "comun.ps1";             DestDir: "{app}\instalador"; Flags: ignoreversion
+Source: "instalar.ps1";          DestDir: "{app}\instalador"; Flags: ignoreversion
+Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador"; Flags: ignoreversion
+Source: "preparar_nodo.ps1";     DestDir: "{app}\instalador"; Flags: ignoreversion
+Source: "respaldo.ps1";          DestDir: "{app}\instalador"; Flags: ignoreversion
+Source: "verificar_nodo.ps1";    DestDir: "{app}\instalador"; Flags: ignoreversion
 
 [Dirs]
-; Los datos NO van bajo {app}: la desinstalación no los tiene que tocar. Un
-; outbox con operaciones sin sincronizar no existe en ningún otro lado.
-; `uninsneveruninstall` explícito: si algún día la carpeta quedara vacía, sin
-; esta bandera el desinstalador la borraría. Verificado que hoy los datos
-; sobreviven (51 MB intactos tras desinstalar), pero eso pasaba por estar llena,
-; no por una decisión.
+; Los datos NO van bajo {app}: la desinstalacion no los tiene que tocar. Un
+; outbox con operaciones sin sincronizar no existe en ningun otro lado.
 Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full; Flags: uninsneveruninstall
 Name: "{app}\logs"
 
-[Run]
-; PRIMERO el runtime de Visual C++: sin el, el paso siguiente no puede ni
-; preguntarle la version a initdb. Los codigos de salida que NO son un fallo:
-; 0 = instalado, 1638 = ya hay una version mas nueva, 3010 = pide reinicio
-; --el reinicio no hace falta ahora: las DLLs ya quedaron en System32--.
-Filename: "{tmp}\vc_redist.x64.exe"; \
-  Parameters: "/install /quiet /norestart"; \
-  StatusMsg: "Instalando el runtime de Visual C++ (lo necesita PostgreSQL)..."; \
-  Flags: waituntilterminated; \
-  Check: HaceFaltaVCRuntime
-
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_postgres.ps1"" -RaizPostgres ""{app}\postgres"" -DirectorioDatos ""{commonappdata}\LibraEdge\datos"" -Password ""{code:ClavePostgres}"""; \
-  StatusMsg: "Preparando la base de datos local..."; \
-  Flags: runhidden waituntilterminated
-
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\instalador\preparar_nodo.ps1"" -RaizNodo ""{app}"" -UrlBase ""{code:UrlBase}"" -UrlCentral ""{code:UrlCentral}"" -NodeId ""{code:NodeId}"" -NodeSecret ""{code:NodeSecret}"" -TablasEspejo ""{code:TablasEspejo}"" -ClavePostgres ""{code:ClavePostgres}"""; \
-  StatusMsg: "Configurando el nodo y sus servicios..."; \
-  Flags: runhidden waituntilterminated
-
 [UninstallRun]
-; Se detienen y se quitan los servicios, en orden inverso al de creación.
-Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm";     Flags: runhidden; RunOnceId: "PararNodo"
-Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";   Flags: runhidden; RunOnceId: "QuitarNodo"
-Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "PararProducto"
+; Se detienen y se quitan los servicios, en orden inverso al de creacion.
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm";       Flags: runhidden; RunOnceId: "PararNodo"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";     Flags: runhidden; RunOnceId: "QuitarNodo"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeProducto confirm";   Flags: runhidden; RunOnceId: "PararProducto"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeProducto confirm"; Flags: runhidden; RunOnceId: "QuitarProducto"
-; 🔴 PostgreSQL se DETIENE antes de desregistrarlo, y esto no es prolijidad.
-; Medido en la VM el 2026-08-31: sin el stop, `pg_ctl unregister` falla con
-; **código 1072** (`ERROR_SERVICE_MARKED_FOR_DELETE`) — Windows no borra un
-; servicio en marcha, sólo lo marca. El desinstalador terminaba "bien" y el
-; servicio quedaba registrado, en estado `Running` y `Disabled`, apuntando a
-; unos binarios que el mismo desinstalador acababa de borrar.
-;
-; `net stop` y no `sc stop`: `net` espera a que el servicio termine de parar,
-; `sc` vuelve enseguida y el `unregister` de abajo llegaría al mismo 1072.
+; PostgreSQL se DETIENE antes de desregistrarlo: sin el stop, pg_ctl unregister
+; falla con 1072 (ERROR_SERVICE_MARKED_FOR_DELETE) y el servicio queda
+; registrado apuntando a binarios borrados (medido 2026-08-31). `net stop` y no
+; `sc stop`: net espera a que termine de parar.
 Filename: "{sys}\net.exe"; Parameters: "stop LibraEdgePostgres /y"; Flags: runhidden; RunOnceId: "PararPG"
 Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgePostgres"; Flags: runhidden; RunOnceId: "QuitarPG"
-; La tarea de respaldo la crea `preparar_nodo.ps1`, asi que el desinstalador no
-; sabe de ella: sin esta linea queda una tarea programada que cada hora intenta
-; correr un script que ya no existe. Es el mismo agujero que dejaba el
-; `nodo.env` en el disco.
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN LibraEdgeRespaldo /F"; Flags: runhidden; RunOnceId: "QuitarRespaldo"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LibraEdge producto"""; Flags: runhidden; RunOnceId: "QuitarFirewall"
 
 [UninstallDelete]
-; 🔴 El secreto del nodo NO puede quedar en el disco de una PC que se está
-; dando de baja: autoriza a escribir en el central. Lo escribe
-; `preparar_nodo.ps1` en tiempo de instalación, así que el desinstalador no
-; sabe de él y sin esta línea sobrevive para siempre. Medido en la VM.
+; El secreto del nodo NO puede quedar en el disco de una PC que se da de baja:
+; nodo.env lo escribe instalar.ps1, asi que el desinstalador no sabe de el.
 Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
-; El acceso directo de la bandeja lo crea `preparar_nodo.ps1` en el inicio
-; comun, no el instalador, asi que tampoco lo borraria solo: quedaria intentando
-; arrancar un python que ya no esta, en cada inicio de sesion.
 Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
 Type: filesandordirs; Name: "{app}\logs"
-; Y los `__pycache__`: los genera Python al importar, no los instaló nadie, así
-; que el desinstalador tampoco los borra — y con un solo archivo adentro la
-; carpeta entera queda. En la VM quedaron 96 `.pyc` repartidos en siete
-; directorios.
+; Los __pycache__ los genera Python al importar: sin esto la carpeta queda.
 Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\migrations"
 Type: filesandordirs; Name: "{app}\scripts"
+Type: filesandordirs; Name: "{app}\frontend"
+Type: filesandordirs; Name: "{app}\instalador"
 Type: filesandordirs; Name: "{app}\python"
+; Quedan a proposito, en {commonappdata}\LibraEdge: datos\ (el cluster),
+; postgres.clave (sin ella esos datos no se abren), app\ (config.json),
+; respaldos\ y producto.txt (un nodo por PC).
 
 [Code]
-{ Los datos del nodo se piden en una página propia: el secreto lo emite el
-  central y se muestra UNA sola vez, así que quien instala lo trae anotado.
-  No se puede pedir por API — el instalador no tiene credenciales para eso, y
-  dárselas sería poner una llave del central en cada PC de cada cliente. }
+{ La carga del nodo es un ARCHIVO (carga-nodo.json) que emite el central con
+  libraedge-central nodo registrar ... --carga. Se elige en el asistente o se
+  pasa con /CARGA= en una instalacion desatendida.
 
-{ 🔴 Los valores viven en VARIABLES, no en las paginas del asistente.
+  Nunca se pasan secretos por la linea de comandos: Inno Setup escribe su linea
+  de comandos en el log (/LOG), y los scripts de PowerShell la suya en el
+  transcript. Viaja la RUTA de la carga; el secreto lo lee el ayudante.
 
-  (Ojo con las llaves en los comentarios de esta seccion: en Pascal Script la
-  llave ES el comentario, asi que escribir "code:..." entre llaves lo cierra
-  antes de tiempo. Costo un "Syntax error" en la primera compilacion.)
-
-  El primer diseno leia `PaginaNodo.Values[0]` directo desde los "code:" de las
-  secciones Run. Eso hace que el instalador **no se pueda desatender**: en
-  `/VERYSILENT` el
-  asistente no se muestra, los campos quedan vacios, y los dos scripts reciben
-  cadenas vacias sin que nada avise. No es solo un problema para probarlo: un
-  cliente con cinco sucursales necesita instalarlo cinco veces, y hacerlo a mano
-  cinco veces es cinco oportunidades de tipear mal un secreto.
-
-  Ahora los valores salen de la linea de comandos si estan, y del asistente si
-  no. Ejemplo:
-
-    libraedge-nodo-0.6.4.exe /VERYSILENT /UrlCentral="https://..." /NodeId="..."
-        /NodeSecret="..." /TablasEspejo="..." /ClavePostgres="..." }
+  (Ojo con las llaves en estos comentarios: en Pascal Script la llave ES el
+  comentario y una de mas lo cierra antes de tiempo.) }
 var
-  PaginaNodo: TInputQueryWizardPage;
-  PaginaBase: TInputQueryWizardPage;
-  vUrlCentral, vNodeId, vNodeSecret, vTablas, vClave: String;
+  PaginaCarga: TInputFileWizardPage;
+  vCarga: String;
+  CodigoDeSalida: Integer;
 
-function Parametro(Nombre: String): String;
+function ArchivoDeProducto: String;
 begin
-  Result := Trim(ExpandConstant('{param:' + Nombre + '|}'));
+  Result := ExpandConstant('{commonappdata}\LibraEdge\producto.txt');
 end;
 
 function InitializeSetup: Boolean;
+var
+  Previo: AnsiString;
+  Instalado: String;
 begin
-  vUrlCentral := Parametro('UrlCentral');
-  vNodeId     := Parametro('NodeId');
-  vNodeSecret := Parametro('NodeSecret');
-  vTablas     := Parametro('TablasEspejo');
-  vClave      := Parametro('ClavePostgres');
   Result := True;
-  { En silencio no hay a quien preguntarle: si falta algo se aborta ACA, antes
-    de tocar el disco. Un nodo a medio configurar sincroniza contra el lugar
-    equivocado --o contra ninguno-- y se ve igual que uno sano. }
-  if WizardSilent then
+  CodigoDeSalida := 0;
+  vCarga := Trim(ExpandConstant('{param:CARGA|}'));
+  if vCarga <> '' then
+    vCarga := ExpandFileName(vCarga);
+
+  { Un nodo por PC: los servicios, el puerto de PostgreSQL y la carpeta de
+    datos son unos solos. }
+  if LoadStringFromFile(ArchivoDeProducto, Previo) then
   begin
-    if (vUrlCentral = '') or (vNodeId = '') or (vNodeSecret = '') or
-       (vTablas = '') or (Length(vClave) < 12) then
+    Instalado := Trim(String(Previo));
+    if (Instalado <> '') and (CompareText(Instalado, '{#Producto}') <> 0) then
     begin
-      MsgBox('Instalacion desatendida incompleta. Hacen falta /UrlCentral, ' +
-             '/NodeId, /NodeSecret, /TablasEspejo y /ClavePostgres (12 ' +
-             'caracteres o mas).', mbError, MB_OK);
+      Log('Esta PC ya tiene el nodo de ' + Instalado + '.');
+      SuppressibleMsgBox('Esta PC ya tiene un nodo LibraEdge de ' + Instalado +
+        '. Va uno solo por PC: desinstalarlo y retirar la carpeta de datos antes de instalar {#NombreProducto}.',
+        mbError, MB_OK, IDOK);
       Result := False;
+      Exit;
     end;
   end;
-end;
 
-{ Corre el vc_redist solo si hace falta. Se mira si la DLL esta en el sistema
-  y no el registro de programas instalados: lo que a PostgreSQL le importa es
-  poder CARGAR la DLL, no que figure una entrada de desinstalacion. Y son dos
-  archivos: vcruntime140_1.dll es la parte de C++ y en algunas maquinas viejas
-  esta una y falta la otra.
-
-  Si el chequeo se equivoca y corre de mas, no pasa nada: el instalador de
-  Microsoft detecta que ya esta y sale con 1638. Equivocarse para el otro lado
-  --saltearlo cuando hacia falta-- deja los binarios de PostgreSQL sin arrancar,
-  asi que ante la duda se corre. }
-function HaceFaltaVCRuntime: Boolean;
-begin
-  Result := (not FileExists(ExpandConstant('{sys}\vcruntime140.dll')))
-         or (not FileExists(ExpandConstant('{sys}\vcruntime140_1.dll')))
-         or (not FileExists(ExpandConstant('{sys}\msvcp140.dll')));
+  { En silencio no hay a quien preguntarle: sin carga se aborta antes de tocar
+    el disco. }
+  if WizardSilent and ((vCarga = '') or (not FileExists(vCarga))) then
+  begin
+    Log('Instalacion desatendida sin /CARGA o con un archivo que no existe.');
+    SuppressibleMsgBox('Instalacion desatendida: falta /CARGA=<ruta de carga-nodo.json> o el archivo no existe.',
+      mbError, MB_OK, IDOK);
+    Result := False;
+  end;
 end;
 
 procedure InitializeWizard;
 begin
-  PaginaNodo := CreateInputQueryPage(wpSelectDir,
-    'Identidad del nodo',
-    'Los datos que emitió el central al registrar esta sucursal',
-    'Correr en el central:  python -m scripts.nodo_offline registrar <id> --sucursal <nombre>' + #13#10 +
-    'y copiar acá lo que imprime. El secreto se muestra una sola vez.');
-  PaginaNodo.Add('URL del central (ej. https://cliente.restolibra.com.ar):', False);
-  PaginaNodo.Add('LIBRAEDGE_NODE_ID:', False);
-  PaginaNodo.Add('LIBRAEDGE_NODE_SECRET:', True);
-  PaginaNodo.Add('LIBRAEDGE_TABLAS_ESPEJO:', False);
-  { Prellenado con lo que haya venido por linea de comandos: sirve para
-    instalar varias sucursales pasando lo comun y tipeando solo lo distinto. }
-  PaginaNodo.Values[0] := vUrlCentral;
-  PaginaNodo.Values[1] := vNodeId;
-  PaginaNodo.Values[2] := vNodeSecret;
-  PaginaNodo.Values[3] := vTablas;
-
-  PaginaBase := CreateInputQueryPage(PaginaNodo.ID,
-    'Base de datos local',
-    'Una contraseña para el PostgreSQL de esta máquina',
-    'Se usa sólo en esta PC: la base escucha únicamente en 127.0.0.1.');
-  PaginaBase.Add('Contraseña:', True);
-  PaginaBase.Values[0] := vClave;
+  PaginaCarga := CreateInputFilePage(wpSelectDir,
+    'Carga del nodo',
+    'El archivo que emitio el central al registrar este nodo',
+    'En el central: libraedge-central nodo registrar <node_id> --sucursal <sucursal> ' +
+    '--carga carga-nodo.json --central-url https://... ' + #13#10 +
+    'Elegir ese archivo. Tiene el secreto del nodo: borrarlo despues de instalar.');
+  PaginaCarga.Add('Archivo de carga:', 'Carga del nodo (*.json)|*.json|Todos los archivos|*.*', '.json');
+  PaginaCarga.Values[0] := vCarga;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if CurPageID = PaginaNodo.ID then
+  if CurPageID = PaginaCarga.ID then
   begin
-    { Falla temprano: un nodo a medio configurar sincroniza contra el lugar
-      equivocado, o contra ninguno, y se ve igual que uno sano. }
-    if (Trim(PaginaNodo.Values[0]) = '') or (Trim(PaginaNodo.Values[1]) = '') or
-       (Trim(PaginaNodo.Values[2]) = '') or (Trim(PaginaNodo.Values[3]) = '') then
+    vCarga := Trim(PaginaCarga.Values[0]);
+    if (vCarga = '') or (not FileExists(vCarga)) then
     begin
-      MsgBox('Faltan datos del nodo. Los cuatro salen del comando `registrar` ' +
-             'que se corre en el central.', mbError, MB_OK);
+      SuppressibleMsgBox('Elegir el archivo de carga del nodo (carga-nodo.json).', mbError, MB_OK, IDOK);
       Result := False;
-    end
-    else
-    begin
-      vUrlCentral := Trim(PaginaNodo.Values[0]);
-      vNodeId     := Trim(PaginaNodo.Values[1]);
-      vNodeSecret := Trim(PaginaNodo.Values[2]);
-      vTablas     := Trim(PaginaNodo.Values[3]);
     end;
-  end;
-  if CurPageID = PaginaBase.ID then
-  begin
-    if Length(Trim(PaginaBase.Values[0])) < 12 then
-    begin
-      MsgBox('La contraseña tiene que tener al menos 12 caracteres.', mbError, MB_OK);
-      Result := False;
-    end
-    else
-      vClave := PaginaBase.Values[0];
   end;
 end;
 
-{ Los getters leen las VARIABLES, no las paginas: asi el mismo codigo sirve para
-  una instalacion con asistente y para una desatendida, donde las paginas no
-  existen. }
-function UrlCentral(Param: String): String;    begin Result := vUrlCentral; end;
-function NodeId(Param: String): String;        begin Result := vNodeId; end;
-function NodeSecret(Param: String): String;    begin Result := vNodeSecret; end;
-function TablasEspejo(Param: String): String;  begin Result := vTablas; end;
-function ClavePostgres(Param: String): String; begin Result := vClave; end;
-
-function UrlBase(Param: String): String;
+{ En una actualizacion, los servicios tienen abiertos los archivos del Python
+  embebido: se paran antes de copiar. Si no existen, net stop falla y no pasa
+  nada. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Codigo: Integer;
 begin
-  { El puerto no es el 5432 por defecto: la PC del cliente puede tener ya un
-    PostgreSQL de otra cosa, y pisarlo sería la peor forma de empezar. }
-  Result := 'postgresql://postgres:' + ClavePostgres('') + '@127.0.0.1:55432/restolibra';
+  Result := '';
+  Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeNodo /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeProducto /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+end;
+
+{ Todo lo que no es copiar archivos lo hace instalar.ps1, y su codigo de salida
+  pasa a ser el del instalador (GetCustomSetupExitCode). Antes eran entradas de
+  [Run], cuyo codigo de salida Inno no mira: un paso fallido terminaba igual
+  con 0. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Parametros, Registro: String;
+  Codigo: Integer;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Registro := ExpandConstant('{app}\logs\instalacion.log');
+    WizardForm.StatusLabel.Caption := 'Preparando la base local y el nodo (puede tardar unos minutos)...';
+    Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\instalador\instalar.ps1') +
+      '" -RaizNodo "' + ExpandConstant('{app}') + '" -Carga "' + vCarga +
+      '" -Datos "' + ExpandConstant('{commonappdata}\LibraEdge') + '"';
+    Log('Configurando el nodo con instalar.ps1; el detalle queda en ' + Registro);
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Parametros,
+                ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Codigo) then
+    begin
+      Log('No se pudo ejecutar PowerShell: ' + SysErrorMessage(Codigo));
+      CodigoDeSalida := 20;
+    end
+    else if Codigo <> 0 then
+    begin
+      Log('instalar.ps1 termino con codigo ' + IntToStr(Codigo) + '.');
+      CodigoDeSalida := 20;
+    end
+    else
+      Log('instalar.ps1 termino bien.');
+    if CodigoDeSalida <> 0 then
+      SuppressibleMsgBox('La configuracion del nodo fallo. El detalle esta en ' + Registro +
+        '. Se puede reintentar corriendo instalar.ps1 a mano (ver el README).', mbError, MB_OK, IDOK);
+  end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  Result := CodigoDeSalida;
 end;

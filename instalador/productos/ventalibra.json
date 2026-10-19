@@ -1,0 +1,56 @@
+{
+  "formato": "libraedge-producto/1",
+  "_nota": "Una sola base, pero VENTALIBRA_LIBRACORE_DATABASE_URL es obligatoria: sin ella app/main.py cae a un SQLite en ./data. Auth con --base core (que resuelve a la misma base). Migraciones = las de scripts/panel_admin.py de ventalibra. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "producto": "ventalibra",
+  "nombre": "VentaLibra",
+  "app_id": "ED40FA78-DE81-4F77-8006-2930D4ADBCAB",
+  "prefijo_variables": "VENTALIBRA",
+  "bases": [
+    {
+      "nombre": "ventalibra",
+      "variables": [
+        "VENTALIBRA_DATABASE_URL",
+        "VENTALIBRA_LIBRACORE_DATABASE_URL"
+      ],
+      "nodo": true
+    }
+  ],
+  "asgi": "app.asgi:app",
+  "puerto": 8000,
+  "salud": "/health",
+  "base_auth": "core",
+  "migraciones": [
+    [
+      "libracore-migrar",
+      "upgrade",
+      "--prefijo",
+      "ventalibra"
+    ],
+    [
+      "libraauth-migrar",
+      "upgrade",
+      "--prefijo",
+      "ventalibra",
+      "--base",
+      "core"
+    ],
+    [
+      "libracommerce-migrar",
+      "upgrade",
+      "--prefijo",
+      "ventalibra"
+    ],
+    [
+      "alembic",
+      "upgrade",
+      "head"
+    ]
+  ],
+  "extras": [
+    "tzdata",
+    "pystray>=0.19",
+    "Pillow>=10"
+  ],
+  "variables": {},
+  "version_esquema": "alembic"
+}

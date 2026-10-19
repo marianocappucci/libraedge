@@ -1,36 +1,192 @@
 # Instalador del nodo LibraEdge (Windows)
 
-> 🟢 **Ya se ejecuto todo.** Al escribirse no se habia ejecutado nada; entre
-> el 2026-08-30 y el 2026-08-31 se probo entero en una VM con Windows 11
-> Enterprise LTSC en espanol: compilado, instalado en silencio, reiniciado,
-> cortado de energia de golpe, actualizado y desinstalado. **Los seis puntos
-> de la lista de verificacion pasan**, y en el camino aparecieron **diez
-> defectos**, todos arreglados. El detalle esta mas abajo, vuelta por vuelta.
->
-> ⚠️ Lo que sigue sin probarse: nada de este directorio. Lo que falta es
-> darselo a un cliente real, que es otra cosa.
->
-> El texto original decia: Desde el 2026-08-30
->  sí corrió, entero y bien, en una VM con Windows 11 LTSC
-> en español — ver más abajo. El resto sigue sin ejecutarse.
->
-> Lo que sigue es el texto original: Se escribió en un entorno sin Inno Setup, sin
-> NSIS y sin PostgreSQL para Windows, así que **no está compilado ni probado** —
-> ni el `.iss`, ni los scripts, ni el registro de servicios. Lo que sí se hizo es
-> revisarlo a mano contra la documentación de cada herramienta y dejar
-> explícitas, abajo, las cosas que hay que verificar en una máquina real antes
-> de dárselo a un cliente.
->
-> Tratarlo como un **borrador revisado**, no como algo que anduvo.
+**Un solo instalador para todos los productos** (ADR-010, E7 de la fase 1): se compila por producto con
+`ISCC /DProducto=<producto> nodo.iss` y lo propio de cada uno vive en `productos/<producto>.json`. Hoy hay
+definiciones para **RestoLibra, VentaLibra y ContaLibra**.
 
-> ⚠️ **Actualización 2026-08-30: sigue sin ejecutarse, pero ya no está sin
-> revisar.** Se le hizo un paso estático que encontró **cinco defectos**, cuatro
-> de ellos suficientes para voltear una instalación real. Están arreglados. Lo
-> que sigue faltando es la máquina: Hyper-V no está instalado en la PC del
-> humano (corren `HvHost` y `vmcompute`, que es el hipervisor que usa WSL2, pero
-> no el rol de Hyper-V) y no hay ISO de Windows 11 a mano.
+> ⚠️ **Estado.** La versión anterior, atada a RestoLibra, se probó entera en una VM entre el 2026-08-30 y el
+> 2026-08-31 (historia abajo). **Esta versión parametrizada todavía no corrió en Windows**: lo verificado es el
+> parser de Windows PowerShell 5.1 sobre los seis `.ps1`, las funciones de `comun.ps1` corridas en 5.1 y los tests
+> del ayudante (`tests/test_instalador.py`). Lo que falta, en orden, está en [`PROBAR_EN_VM.md`](PROBAR_EN_VM.md).
 
-## Lo que encontró el paso estático (2026-08-30)
+## Qué instala
+
+En la PC designada del local (Windows 10/11 x64, una sola por sucursal; las cajas son navegadores en la red interna):
+
+1. **PostgreSQL 16** desde el ZIP binario oficial (no el instalador de EDB), como servicio `LibraEdgePostgres`, sólo
+   en `127.0.0.1:55432`, con `initdb` en ICU `en-US`, zona `America/Argentina/Buenos_Aires` y `--data-checksums`.
+2. **El producto** sobre un **Python 3.12 embebido**, como servicio `LibraEdgeProducto` (`uvicorn <asgi> --port 8000`),
+   y el **proceso del nodo** como `LibraEdgeNodo` (`python -m libraedge correr`). Los dos con NSSM.
+3. La tarea programada `LibraEdgeRespaldo` (cada hora, con verificación), la regla de firewall del puerto del producto
+   (perfiles Privado y Dominio) y el ícono de bandeja en el inicio común.
+
+Sin Docker Desktop: su licencia para empresas no es gratuita y es una capa más que soportar en la PC de un comercio.
+
+**Un nodo por PC.** Servicios, puerto y carpeta de datos son unos solos: si la PC ya tiene el nodo de otro producto
+(`C:\ProgramData\LibraEdge\producto.txt`), el instalador no arranca.
+
+| Dónde | Qué | ¿Lo borra desinstalar? |
+|---|---|---|
+| `C:\Program Files\LibraEdge\` | Python, producto, PostgreSQL, scripts, `nodo.env` (ACL: SYSTEM y Administradores), `estado.json`, `logs\` | sí |
+| `C:\ProgramData\LibraEdge\datos\` | el clúster de PostgreSQL | **no** |
+| `C:\ProgramData\LibraEdge\postgres.clave` | la clave del superusuario (generada, ACL restringida) | **no**: sin ella los datos no se abren |
+| `C:\ProgramData\LibraEdge\app\` | `DATA_DIR` del producto: `config.json` del emisor, backups, errores (ACL restringida) | **no** |
+| `C:\ProgramData\LibraEdge\respaldos\` | los volcados de `LibraEdgeRespaldo` (ACL restringida) | **no** |
+
+## La definición del producto
+
+`productos/<producto>.json` (formato `libraedge-producto/1`; las claves que empiezan con `_` son comentarios, una clave
+desconocida es un error):
+
+| Clave | Qué es |
+|---|---|
+| `producto`, `nombre`, `app_id` | id en minúsculas, nombre visible y el GUID de Inno Setup (**fijo para siempre**: es lo que hace que reinstalar actualice). El de RestoLibra es el de siempre. |
+| `prefijo_variables` | `<PRODUCTO>` en mayúsculas: `<PRODUCTO>_DATABASE_URL`, `<PRODUCTO>_ADMIN_PASSWORD` |
+| `bases` | una o varias: `{nombre, variables, nodo}`. Cada variable apunta a esa base; la que lleva `nodo: true` es también `LIBRAEDGE_DATABASE_URL` (donde vive el outbox). Hoy las tres son de una sola base con `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL`, como escribe el alta de libracore. |
+| `base_auth` | el `--base` de `libraauth-migrar` (`dominio` en RestoLibra y ContaLibra, `core` en VentaLibra); se valida contra `migraciones` |
+| `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Hoy cuatro cadenas: libracore, libraauth, libracommerce y la del producto |
+| `asgi`, `puerto`, `salud` | `app.asgi:app`, `8000` y `/health` (la salud tiene que devolver un objeto JSON) |
+| `extras` | requisitos de pip que el nodo suma a los del producto: `tzdata` (zoneinfo en Windows no trae la base de zonas) y `pystray`/`Pillow` (bandeja) |
+| `variables` | variables fijas de más para el `nodo.env` (hoy ninguna) |
+| `version_esquema` | `LIBRAEDGE_VERSION_ESQUEMA` (`alembic`) |
+
+La tabla de `nodo.iss` (nombre y `AppId` por producto) tiene que coincidir con los `.json`: lo verifica un test.
+
+## La carga del nodo
+
+Lo que el central emite para **un** nodo llega al instalador como **un archivo**, `carga-nodo.json` (formato
+`libraedge-carga/1`), que escribe el mismo comando que registra el nodo, adentro del contenedor del cliente:
+
+```bash
+export LIBRAEDGE_APROVISIONAMIENTO=app.offline:aprovisionamiento
+libraedge-central nodo registrar <node_id> --sucursal <id o nombre> \
+    --carga /app/data/carga-nodo.json --central-url https://<cliente>.<producto>.com.ar
+```
+
+Trae `LIBRAEDGE_CENTRAL_URL`, `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_PREFIJO` y
+`LIBRAEDGE_TABLAS_ESPEJO`, la sucursal, y **los datos del emisor** copiados del `config.json` de la instancia. Con
+`--carga`, `registrar` no imprime el secreto; el archivo se crea con permisos 600 y no pisa uno existente. Se lleva a la
+PC del local (scp, pendrive) y **se borra de los dos lados después de instalar**. Ver `carga-de-prueba.json` (datos
+ficticios, para la VM).
+
+**El `config.json` del emisor viaja en la carga** y no se baja del central en la instalación: se toma en el mismo paso
+que ya emite el secreto (sin una ruta nueva en el central ni credenciales en el instalador), la instalación no
+necesita internet, y es una lista cerrada de claves (`empresa_*` y `ticket_*`): las credenciales de MercadoPago y SMTP y
+el estado del servicio no viajan nunca. El instalador las **fusiona** en `C:\ProgramData\LibraEdge\app\config.json`.
+Lo que no hace: seguir los cambios del central (si cambia la razón social, se reinstala con una carga nueva o se edita a
+mano). Un CUIT con dígito verificador inválido se rechaza al registrar, antes de emitir el secreto.
+
+## Compilar
+
+Se arma en dos lugares:
+
+1. **El paquete, en Linux (el WSL):** `armar_paquete.sh <producto> <repo del producto>` baja el Python embebido
+   (3.12.10), PostgreSQL 16 (ZIP de EDB), NSSM 2.24 y el runtime de Visual C++, e instala el producto **para Windows**
+   con `uv pip install --python-platform x86_64-pc-windows-msvc` desde su `uv.lock`. Necesita `uv`, `git` con acceso a
+   los repos privados de la familia, `curl`, `unzip`, y `npm` con acceso a `libra-ui` para el frontend (o
+   `--frontend-dist RUTA` / `--sin-frontend`). Usa el `HEAD` del repo del producto: hacer antes el checkout de la
+   versión que se quiere (por ejemplo un worktree de `origin/develop`). Deja todo en `instalador/paquete/`
+   (ignorado por git). Las versiones se cambian con `PYTHON_VERSION`, `POSTGRES_VERSION` y `NSSM_VERSION`.
+2. **El `.exe`, en Windows:** **Inno Setup 6.3 o superior** (por `x64compatible`) y, en esta carpeta con `paquete\` al
+   lado:
+
+   ```powershell
+   & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DProducto=ventalibra /DVersion=0.10.0 nodo.iss
+   ```
+
+   Sale en `salida\libraedge-nodo-ventalibra-0.10.0.exe`. `/DVersion` es la del tag de LibraEdge (por defecto la que
+   dice el `.iss`). Hace falta la carpeta `libraedge\` del repo al lado de `instalador\`: el ayudante se copia de ahí.
+
+## Instalar
+
+- **Con el asistente:** pide la carpeta y el archivo de carga. Nada más: la clave de PostgreSQL ya no se tipea (se
+  genera la primera vez y queda en `postgres.clave`).
+- **Desatendida:**
+
+  ```powershell
+  .\libraedge-nodo-ventalibra-0.10.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+  ```
+
+  Sin `/CARGA` (o con un archivo que no existe) aborta antes de tocar el disco.
+
+**Ningún secreto pasa por una línea de comandos**: Inno Setup escribe la suya en `/LOG` y `Start-Transcript` la suya en
+`logs\instalacion.log`. Viaja la **ruta** de la carga; el secreto lo lee `libraedge_instalador.py` y los mensajes nombran
+variables, nunca valores.
+
+**Códigos de salida:** `0` bien; `1` no arrancó (falta `/CARGA` u otro producto ya instalado); `20` se copiaron los
+archivos pero la configuración falló (el motivo está en `C:\Program Files\LibraEdge\logs\instalacion.log`); el resto,
+los de Inno Setup. Antes los pasos eran entradas de `[Run]`, cuyo código Inno no mira: un paso roto terminaba con 0.
+
+**Reparar o reintentar** sin el instalador (todo es idempotente; conserva `SECRET_KEY` y la clave del admin local):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\LibraEdge\instalador\instalar.ps1" -RaizNodo "C:\Program Files\LibraEdge" -Carga C:\ruta\carga-nodo.json
+```
+
+### Qué hace `instalar.ps1`, en orden
+
+1. Valida la carga contra el producto (otro producto, una variable de más, una URL sin https, un salto de línea en un
+   valor: error **antes** de crear nada).
+2. Un nodo por PC; el runtime de Visual C++ si falta.
+3. `preparar_postgres.ps1`: clave (generada o leída), `initdb` sólo si no hay clúster, servicio, **las bases de la
+   definición**, y verifica zona (`now()` en -03) y collation.
+4. `preparar_nodo.ps1`: para los servicios si existían; escribe `nodo.env` (ACL primero, contenido después) y el
+   `config.json` del emisor; corre **las migraciones de la definición**; hace **una primera sincronización antes de
+   arrancar el producto** (si el espejo ya bajó los usuarios, el producto no crea un admin local; sin central sólo
+   avisa); registra y arranca los servicios; firewall; respaldo; bandeja.
+
+### El `nodo.env`
+
+Lo arma `libraedge_instalador.py entorno` (probado en `tests/test_instalador.py`): las cinco variables de la carga,
+`LIBRAEDGE_DATABASE_URL`, `LIBRAEDGE_ESTADO`, `LIBRAEDGE_VERSION_ESQUEMA`, las de cada base, `DATA_DIR`, `SECRET_KEY`,
+`ADMIN_PASSWORD` y `<P>_ADMIN_PASSWORD` (aleatoria: sin ella unos productos no arrancan y otros la inventan y la
+escriben en el log; nadie la usa porque los usuarios bajan del central), `TZ` y las fijas de la definición. En una
+reinstalación conserva `SECRET_KEY` y la clave del admin: un `SECRET_KEY` nuevo deja ilegible lo que libraauth cifró.
+
+## Verificar
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\LibraEdge\instalador\verificar_nodo.ps1" [-SinCentral]
+```
+
+Chequea los tres servicios (corriendo y automáticos), la ACL y las variables de `nodo.env` (sin mostrar valores),
+PostgreSQL (`now()` en -03, `data_checksums`), las cadenas de migraciones contra la definición y `sync_outbox`,
+`libraedge-nodo estado`, que el `estado.json` se escriba (el servicio cicla), que la salud del producto sea un objeto
+JSON, el emisor en `config.json` y la tarea de respaldo. Sale con la cantidad de fallas. `-SinCentral` convierte «sin
+conexión con el central» en aviso (carga de prueba o local sin internet).
+
+## Agregar un producto
+
+1. `productos/<producto>.json` con sus migraciones copiadas de `scripts/panel_admin.py` y sus variables de base.
+2. Su fila en la tabla de `nodo.iss` (nombre y un GUID nuevo).
+3. Que el producto haya adoptado el nodo (`app/offline.py`, ganchos, aprovisionamiento): sin eso el instalador instala
+   un producto que no sincroniza.
+
+## Archivos
+
+| Archivo | Qué es |
+|---|---|
+| `nodo.iss` | Inno Setup: copia los archivos, corre `instalar.ps1`, devuelve su código; la desinstalación |
+| `productos/*.json` | una definición por producto |
+| `armar_paquete.sh` | arma `paquete/` desde Linux |
+| `instalar.ps1` | lo único que ejecuta el `.iss`; orquesta lo de abajo con transcript |
+| `preparar_postgres.ps1` | clave, `initdb`, servicio y bases |
+| `preparar_nodo.ps1` | `nodo.env`, `config.json`, migraciones, primera bajada, servicios, firewall, respaldo, bandeja |
+| `respaldo.ps1` | el respaldo de cada hora, verificado restaurándolo |
+| `verificar_nodo.ps1` | la verificación post-instalación |
+| `comun.ps1` | ACL por SID, programas nativos sin la trampa de stderr, leer el entorno |
+| `../libraedge/instalador.py` | el ayudante (se instala como `libraedge_instalador.py`): definición, carga, entorno, `config.json`, correr un console script |
+| `carga-de-prueba.json` | una carga ficticia para la VM |
+| `nodo.env.ejemplo` | las variables del nodo, explicadas |
+| `PROBAR_EN_VM.md` | los pasos para probarlo en una VM Windows 10 limpia |
+
+## Historia: la versión de RestoLibra en una VM (2026-08)
+
+Lo que sigue es el registro de cómo se probó la primera versión, atada a RestoLibra, y los defectos que sólo aparecieron
+ejecutándola. Las lecciones siguen en el código (ACL por SID, sin BOM, `Continue` alrededor de los programas nativos,
+`--data-checksums`, `net stop` antes de `pg_ctl unregister`, borrar `nodo.env` al desinstalar).
+
+### Lo que encontró el paso estático (2026-08-30)
 
 Ninguno de estos se encontró leyendo: cada uno salió de **medir** algo, en la
 PowerShell y el Windows reales donde esto va a correr.
@@ -61,46 +217,8 @@ clúster, así que si están mal tienen que gritar en la instalación y no seis
 meses después. Y verifica la ACL del `.env` después de aplicarla, incluyendo que
 no hayan quedado cuentas de más.
 
-## Qué instala
 
-Tres cosas en la PC designada del cliente:
-
-1. **PostgreSQL 16**, desde los binarios oficiales (el ZIP, no el instalador de
-   EDB), como servicio de Windows.
-2. **El producto** (Restolibra) y **LibraEdge**, sobre un Python embebido.
-3. **Dos servicios**: el del producto (uvicorn) y el del nodo
-   (`libraedge-nodo correr`).
-
-Sin Docker Desktop: su licencia para empresas no es gratuita y agrega una capa
-de soporte que en la PC de un restaurante no se puede sostener.
-
-## El orden importa, y por qué
-
-```
-1. initdb  ──►  2. arrancar PG  ──►  3. crear la base  ──►  4. migraciones
-                                                              │
-5. registrar el nodo en el CENTRAL (a mano, una vez) ─────────┤
-                                                              ▼
-6. escribir el .env  ──►  7. registrar los servicios  ──►  8. arrancar
-```
-
-🔴 **`initdb` va antes que todo y con `--locale` y la zona horaria puestas ahí.**
-La zona se escribe en `postgresql.conf` una sola vez, en el `initdb`: sobre un
-clúster que ya existe, cambiar la variable de entorno mueve el reloj del proceso
-y **no** el del servidor. Es el mismo defecto que la familia ya se comió una vez
-(ver el barrido de huso del 2026-08-23). Se verifica con `select now()`, nunca
-con `date`.
-
-🔴 **El paso 5 es manual y no puede automatizarse.** El secreto del nodo lo emite
-el central y **se muestra una sola vez**; el instalador no tiene —ni debería
-tener— credenciales para pedirlo por su cuenta. Quien instala lo corre antes en
-el central y lo trae:
-
-```
-python -m scripts.nodo_offline registrar <node-id> --sucursal <sucursal>
-```
-
-## Se ejecutó: VM con Windows 11 LTSC en español (2026-08-30)
+### Se ejecutó: VM con Windows 11 LTSC en español (2026-08-30)
 
 > 🟢 **`preparar_postgres.ps1` corrió entero y terminó bien.** Se probó sobre una
 > VM de Hyper-V con Windows 11 Enterprise LTSC 2024 **es-ES** recién instalado,
@@ -113,7 +231,7 @@ python -m scripts.nodo_offline registrar <node-id> --sucursal <sucursal>
 distingue nada. Y el idioma es español porque el defecto de las cuentas sólo
 existe ahí.
 
-### Lo que quedó verificado
+#### Lo que quedó verificado
 
 | Punto | Resultado |
 |---|---|
@@ -124,7 +242,7 @@ existe ahí.
 | ACL del `nodo.env` | Exactamente `NT AUTHORITY\SYSTEM` y `BUILTIN\Administradores`, nada más. En español, y sin excepción. |
 | El `._pth` del Python embebido | Confirmado: trae `#import site` comentado, tal como decía el comentario del `.iss`. |
 
-### 🔴 Lo que la corrida encontró y el paso estático no podía
+#### 🔴 Lo que la corrida encontró y el paso estático no podía
 
 **1. Los binarios de PostgreSQL no arrancan en un Windows limpio.** El ZIP no
 trae el runtime de Visual C++ y Windows 11 LTSC tampoco: los cuatro ejecutables
@@ -159,7 +277,7 @@ script siguió con código 0. El chequeo agregado para que el collation no pasar
 desapercibido era mudo. Ahora se piden las dos columnas por separado y se grita
 si vuelve vacío.
 
-### Segunda vuelta: `preparar_nodo.ps1` entero, y el nodo levanta solo
+#### Segunda vuelta: `preparar_nodo.ps1` entero, y el nodo levanta solo
 
 > 🟢 **El instalador completo corre y el nodo sobrevive a un reinicio.** Con el
 > producto instalado en el Python embebido, `preparar_nodo.ps1` termina con
@@ -176,7 +294,7 @@ así que el aislamiento de construcción de pip falla con
 `--no-build-isolation`. Y hace falta **git** en la máquina que arma la carga,
 porque las dependencias de la familia son `git+https`.
 
-### 🔴 Lo que encontró esta vuelta
+#### 🔴 Lo que encontró esta vuelta
 
 **4. Faltaba la mitad de las migraciones.** Acá corría sólo
 `alembic upgrade head` —la cadena **propia** del producto— y falta la del
@@ -204,7 +322,7 @@ NSSM estaba vivo— y no había nada escuchando en el puerto.
 tapando justamente el log que hacía falta leer. Ahora hay un `AppThrottle` de
 15 s y la rotación es por tamaño, no por arranque.
 
-### Lo que quedó verificado en esta vuelta
+#### Lo que quedó verificado en esta vuelta
 
 | Punto | Resultado |
 |---|---|
@@ -219,7 +337,7 @@ tapando justamente el log que hacía falta leer. Ahora hay un `AppThrottle` de
 > en vez de crear las tablas. Esa vuelta **no se probó en la VM**: la fila de arriba es
 > de la segunda vuelta, con dos cadenas.
 
-### Observación, sin arreglar
+#### Observación, sin arreglar
 
 Al crear el usuario admin, el producto imprime en el log
 `[WARN] ADMIN_PASSWORD no configurado. Contraseña generada: …`. En el nodo eso
@@ -229,7 +347,7 @@ Habría que decidir si el nodo debe crear un admin propio —los usuarios bajan 
 el espejo— o si el instalador tiene que setear `ADMIN_PASSWORD`.
 
 
-### Tercera vuelta: el corte sucio de energia (punto #3)
+#### Tercera vuelta: el corte sucio de energia (punto #3)
 
 > 🟢 **Pasa, y con margen.** Se escribieron ventas a ~1000 por segundo, cada una
 > con su fila de outbox **en la misma transaccion**, y se apago la VM de golpe
@@ -266,13 +384,13 @@ cluster que se decide en el `initdb` y no se puede cambiar despues.
 > sin perder ICU.
 
 
-### Cuarta vuelta: el `.iss` compilado, instalado, actualizado y desinstalado
+#### Cuarta vuelta: el `.iss` compilado, instalado, actualizado y desinstalado
 
 > 🟢 **Los seis puntos de la lista pasan.** El instalador se compilo (263 MB), se
 > instalo en silencio, se actualizo sobre datos existentes y se desinstalo sin
 > tocarlos. Ya no queda nada de este directorio sin ejecutar.
 
-### 🔴 Los cuatro de esta vuelta
+#### 🔴 Los cuatro de esta vuelta
 
 **7. El instalador no se podia desatender.** Los `code:` de las secciones `Run`
 leian `PaginaNodo.Values[0]` directo. En `/VERYSILENT` el asistente no se
@@ -303,7 +421,7 @@ archivos en siete directorios, que tampoco instalo nadie-- la carpeta entera
 sobrevivia. Un secreto que autoriza a escribir en el central, en el disco de una
 PC que se esta dando de baja.
 
-### Lo verificado, punto por punto
+#### Lo verificado, punto por punto
 
 | | Que se midio |
 |---|---|
@@ -326,7 +444,7 @@ PC que se esta dando de baja.
 > que "la carpeta sigue ahi" no habria distinguido datos intactos de datos
 > vacios.
 
-### Observaciones, sin arreglar
+#### Observaciones, sin arreglar
 
 - Al reinstalar hay que tipear **la misma contrasena** de PostgreSQL que la vez
   anterior: el cluster no se re-inicializa, asi que una distinta hace fallar el
@@ -335,7 +453,8 @@ PC que se esta dando de baja.
   generada: ...` (ver la seccion anterior).
 
 
-## Lo que hay que verificar en una máquina real
+
+### Lo que hay que verificar en una máquina real
 
 Ninguna de estas está probada. En orden de "si esto falla, no sirve nada":
 
@@ -355,12 +474,3 @@ Ninguna de estas está probada. En orden de "si esto falla, no sirve nada":
 6. **Que la actualización del producto no rompa el nodo.** El nodo corre las
    mismas migraciones que el central; hay que ver qué pasa si el central va una
    versión adelante.
-
-## Archivos
-
-| Archivo | Qué es |
-|---|---|
-| `nodo.iss` | El script de Inno Setup: qué se copia, qué se ejecuta, y la desinstalación |
-| `preparar_postgres.ps1` | `initdb`, servicio y base — el paso 1 a 3 |
-| `preparar_nodo.ps1` | Migraciones, `.env` y los dos servicios — el paso 4 al 8 |
-| `nodo.env.ejemplo` | Las variables que espera `libraedge-nodo`, con qué es cada una |
