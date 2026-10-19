@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034  # las variables las usan los scripts que cargan este archivo
+# Las variables las usan los scripts que cargan este archivo:
+# shellcheck disable=SC2034
 # Lo que comparten los scripts del nodo en Linux (ADR-012). Es el comun.ps1 de
 # Windows: rutas fijas, el Python propio, el ayudante (libraedge/instalador.py
 # tal cual) y la lectura de la definicion del producto.

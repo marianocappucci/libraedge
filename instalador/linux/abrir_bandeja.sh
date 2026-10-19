@@ -19,7 +19,7 @@ while read -r sesion _; do
     activa="$(loginctl show-session "$sesion" -p Active --value 2> /dev/null)"
     usuario="$(loginctl show-session "$sesion" -p Name --value 2> /dev/null)"
     case "$tipo" in x11 | wayland) ;; *) continue ;; esac
-    [ "$activa" = yes ] && [ -n "$usuario" ] || continue
+    if [ "$activa" != yes ] || [ -z "$usuario" ]; then continue; fi
     # En el administrador de servicios del usuario, que tiene DISPLAY/WAYLAND_DISPLAY
     # y el bus de la sesion (GNOME los importa al iniciar).
     if timeout 20 systemd-run --user --machine="$usuario@.host" --collect --quiet \

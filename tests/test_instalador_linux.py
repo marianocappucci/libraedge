@@ -219,7 +219,7 @@ def test_un_nodo_por_pc_antes_de_desempaquetar():
 def test_shellcheck():
     resultado = subprocess.run(["shellcheck", "-x", "-P", "SCRIPTDIR", *map(str, SCRIPTS), *map(str, DEBIAN)],
                                capture_output=True, text=True, cwd=LINUX)
-    assert resultado.returncode == 0, resultado.stdout
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
 
 
 # ── systemd ─────────────────────────────────────────────────────────────────
