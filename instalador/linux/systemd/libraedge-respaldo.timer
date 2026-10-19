@@ -1,0 +1,11 @@
+[Unit]
+Description=Respaldo del nodo LibraEdge, cada hora
+
+[Timer]
+OnCalendar=hourly
+# Si la PC estuvo apagada a la hora, se hace al arrancar.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

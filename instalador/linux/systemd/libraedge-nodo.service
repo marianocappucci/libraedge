@@ -1,0 +1,26 @@
+# El proceso del nodo: sube el outbox y baja el espejo cada minuto (ADR-012).
+[Unit]
+Description=Sincronizacion del nodo offline con el central (LibraEdge)
+Documentation=https://github.com/marianocappucci/libraedge/tree/main/instalador
+After=network-online.target postgresql@16-libraedge.service
+Wants=network-online.target
+Requires=postgresql@16-libraedge.service
+ConditionPathExists=/etc/libraedge-nodo/nodo.env
+
+[Service]
+Type=simple
+User=libraedge
+Group=libraedge
+EnvironmentFile=/etc/libraedge-nodo/nodo.env
+WorkingDirectory=/opt/libraedge-nodo/producto
+ExecStart=/opt/libraedge-nodo/python/bin/python3 -B -m libraedge correr --intervalo 60
+Restart=always
+RestartSec=15
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

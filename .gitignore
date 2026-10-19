@@ -42,4 +42,5 @@ logs/
 # tiene su secreto: nunca va al repo (la de prueba se llama distinto).
 instalador/paquete/
 instalador/salida/
+instalador/paquete-linux/
 carga-nodo*.json
