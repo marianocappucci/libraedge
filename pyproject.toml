@@ -42,6 +42,9 @@ name = "libraedge"
 # el esquema del nodo difiere del central y clave compuesta en el espejo. Minor:
 # un tipo desconocido deja de quedar `applied` y una restriccion violada por el
 # manejador deja de salir `duplicate`; `sync_inbox` suma columnas.
+# 0.7.x -> 0.8.0 (2026-10-19, ADR-008): aprovisionamiento del central generico
+# (`libraedge-central nodo ...`), `nodo_actual()` y prefijo de numeracion por
+# nodo. Minor: `node_identity` suma `prefijo` y `registrar` lo entrega.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

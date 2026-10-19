@@ -130,3 +130,47 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
   del tipo desconocido sigue abierto **en ese producto**: se cierra al pasar al
   despachador. Actualizar el central antes que los nodos deja a los nodos sin
   sincronizar (409) hasta que se actualicen, a propósito.
+
+## ADR-008 — Aprovisionamiento del central genérico, identidad y prefijo del nodo
+
+- Estado: aceptada
+- Fecha: 2026-10-19
+- Contexto: el aprovisionamiento del central (`publicar`, `registrar`, `dar-de-baja`, `estado`,
+  `sucursales`, `vigilar`) vivía en `restolibra/scripts/nodo_offline.py` y era casi todo
+  genérico; VentaLibra y ContaLibra lo iban a necesitar igual (fase 1 de LibraEdge en toda la
+  suite). Cada producto leía además su propia variable de identidad (`RESTOLIBRA_EDGE_NODE_ID`)
+  mientras el proceso del nodo leía `LIBRAEDGE_NODE_ID`. Y la numeración de ventas del nodo
+  (libracommerce, E2) necesita un prefijo que no se repita entre nodos.
+- Decisión:
+  1. **`libraedge.aprovisionamiento`** y el CLI `libraedge-central nodo
+     publicar|sucursales|registrar|dar-de-baja|estado|vigilar`. El producto aporta sólo una
+     costura declarativa, `Aprovisionamiento(prefijo, tablas_de_referencia, listar_sucursales,
+     verificar_alta=..., conectar=None)`, que el CLI carga con `--aprovisionamiento modulo:objeto`
+     o `LIBRAEDGE_APROVISIONAMIENTO`. `estado`, `dar-de-baja` y `vigilar` no la necesitan.
+  2. **Tablas de referencia con su clave**: simple o compuesta, declarada o leída de la base. Si
+     se declara, se verifica contra la PK real; una tabla sin PK o con clave distinta se saltea y
+     `publicar` sale 1. Desde v0.7 el espejo aplica claves compuestas, así que ya no se saltean.
+     `publicar` converge (retira el trigger de lo que salió de la lista) y siembra padres antes
+     que hijos.
+  3. **La guarda del adicional `offline`** (libracore ADR-048) es la de libracore por defecto
+     (`guarda_offline_de_libracore(plans="plans")`), importada recién al registrar: libraedge no
+     depende de libracore en runtime. Sin libracore instalado el alta se rechaza; un producto que
+     no cobra el offline pasa `verificar_alta=sin_guarda` explícito. La guarda de un segundo nodo
+     activo en la sucursal es del motor.
+  4. **Identidad**: `LIBRAEDGE_NODE_ID` y `libraedge.identidad.nodo_actual(prefijo=None)`, que
+     también lee `<PREFIJO>_EDGE_NODE_ID` por compatibilidad; si las dos están y difieren,
+     `IdentidadEnConflicto`.
+  5. **Prefijo de numeración por nodo**: `registrar` asigna y guarda en
+     `node_identity.prefijo` (columna nueva, índice único) un prefijo de mayúsculas y dígitos de
+     hasta 8: `S02` para el primero de la sucursal 2, después `S02B`, `S02C`… Es único **por
+     nodo**, no por sucursal, y **nunca se reusa** el de un nodo dado de baja; re-registrar el
+     mismo `node_id` conserva el suyo. Se entrega como `LIBRAEDGE_PREFIJO`, junto con
+     `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET` y `LIBRAEDGE_TABLAS_ESPEJO`; el producto lo lee
+     con `nodo_desde_entorno("LIBRAEDGE_NODE_ID", "LIBRAEDGE_PREFIJO")` de libracommerce.
+  6. **`vigilar`** sale 1 si un nodo activo lleva más de `--umbral` minutos (15) sin hablar o
+     nunca habló; los revocados no cuentan. Una marca sin zona se lee como UTC (antes
+     `nodos_para_vigilar` levantaba `TypeError`).
+- Consecuencias: un producto nuevo se aprovisiona declarando su costura, sin copiar el script.
+  `node_identity` suma `prefijo` (nulable; `init_schema()` lo agrega con `ALTER`): los nodos de
+  antes no tienen prefijo hasta que se los vuelve a registrar. RestoLibra sigue andando con su
+  script hasta migrar (E5).
