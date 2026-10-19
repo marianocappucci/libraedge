@@ -146,7 +146,8 @@ app.include_router(create_nodos_router(aprovisionamiento, get_connection),
 `GET /api/nodos-offline` (sucursales, nodos con su última sincronización y prefijo, si el adicional `offline` está
 contratado, el link del instalador del producto y la URL del central), `POST /api/nodos-offline` con `{"sucursal_id"}`
 (alta de un nodo nuevo: publica, registra y **devuelve la carga como adjunto**), `POST /api/nodos-offline/{id}/carga`
-(la misma PC, secreto nuevo) y `DELETE /api/nodos-offline/{id}` (baja). El secreto sólo viaja en la respuesta que es la
+(la misma PC, secreto nuevo) y `DELETE /api/nodos-offline/{id}` (baja). `GET /api/nodos-offline/menu` dice si la entrada del menú se ve: con el
+adicional contratado o con nodos activos (sin el adicional, sólo se pueden dar de baja). El secreto sólo viaja en la respuesta que es la
 carga (`Content-Disposition: attachment`, `Cache-Control: no-store`); la pantalla del kit es `libra-ui/SucursalSinInternet`.
 
 ## Estado

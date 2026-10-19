@@ -275,3 +275,36 @@ def test_el_modulo_no_importa_libracore():
 
     fuente = open(modulo.__file__, encoding="utf-8").read()
     assert "import libracore" not in fuente and "from libracore" not in fuente
+
+
+# ── el menú (decisión del humano, 2026-10-19) ───────────────────────────────
+
+def test_el_menu_se_ve_con_el_adicional_o_con_nodos_activos(producto, config):
+    cliente = _cliente(producto, config)
+    # Sin adicional y sin nodos: no se ve.
+    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": False, "nodos_activos": 0, "visible": False}
+
+    # Sin adicional pero con un nodo activo: se ve, para poder darlo de baja.
+    NodeRepository(producto).register_node("nodo-activo", branch_id="1", prefijo="S01")
+    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": False, "nodos_activos": 1, "visible": True}
+    assert cliente.get("/api/nodos-offline").json()["nodos_activos"] == 1
+
+    # Dado de baja el último, vuelve a esconderse.
+    assert cliente.delete("/api/nodos-offline/nodo-activo").status_code == 200
+    assert cliente.get("/api/nodos-offline/menu").json()["visible"] is False
+
+    # Con el adicional, se ve aunque no haya nodos.
+    producto.execute("INSERT INTO modulos (modulo, habilitado) VALUES ('offline', 1)")
+    producto.commit()
+    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": True, "nodos_activos": 0, "visible": True}
+
+
+def test_sin_el_adicional_con_nodos_activos_solo_se_puede_dar_de_baja(producto, config):
+    def guarda(conn, node_id, branch_id):  # la de libracore con el módulo apagado: frena también la carga nueva
+        raise ap.AltaRechazada("El plan no incluye «Modo offline».")
+
+    NodeRepository(producto).register_node("nodo-activo", branch_id="1", prefijo="S01")
+    cliente = _cliente(producto, config, verificar_alta=guarda)
+    assert cliente.post("/api/nodos-offline", json={"sucursal_id": "2"}).status_code == 403
+    assert cliente.post("/api/nodos-offline/nodo-activo/carga").status_code == 403
+    assert cliente.delete("/api/nodos-offline/nodo-activo").status_code == 200

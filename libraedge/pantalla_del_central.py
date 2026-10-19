@@ -15,6 +15,7 @@ adicional ``offline``) y la fábrica de conexiones (la firma de ``libracore.db.c
 Rutas (con ``prefijo="/api/nodos-offline"``)::
 
     GET    /api/nodos-offline                    el estado: contratado, sucursales, nodos, instalador, central
+    GET    /api/nodos-offline/menu               {contratado, nodos_activos, visible}: para el menú, una vez al cargar
     POST   /api/nodos-offline                    {"sucursal_id": "2"} -> alta de un nodo nuevo; devuelve la CARGA
     POST   /api/nodos-offline/{node_id}/carga    la misma PC, carga nueva (invalida la anterior); devuelve la CARGA
     DELETE /api/nodos-offline/{node_id}          baja (PC robada o reemplazada): su secreto deja de verificar
@@ -38,7 +39,8 @@ libracore: cada producto tiene su propia forma de decir «admin» y LibraEdge no
 El adicional ``offline`` (libracore ADR-048) **no** se chequea acá a mano: el alta pasa por
 ``aprov.verificar_alta``, la misma guarda del CLI, y su rechazo es un 403 con el mensaje del motor. El ``GET`` dice si
 el adicional está contratado para que la pantalla lo explique en vez de ofrecer un botón que va a fallar; listar y dar
-de baja siguen andando sin él (un nodo instalado tiene ventas sin subir y hay que poder revocarlo igual).
+de baja siguen andando sin él (un nodo instalado tiene ventas sin subir y hay que poder revocarlo igual). Por eso la
+entrada del menú se ve con el adicional **o** con nodos activos (``GET .../menu``, decisión del humano 2026-10-19).
 """
 
 
@@ -255,6 +257,20 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
     def _url_del_central(request) -> str:
         return resolver_url_del_central(aprov.prefijo, request.headers, entorno)
 
+    @router.get("/menu")
+    def menu():
+        """¿Se muestra la entrada del menú? Si el adicional está contratado **o** quedan nodos activos.
+
+        Sin el adicional el alta y la carga nueva siguen bloqueadas (403), pero un nodo que sigue activo se tiene que
+        poder dar de baja: la entrada no puede desaparecer con él adentro. Liviana a propósito: el layout la pide una
+        vez al cargar (``libra-ui``, ``nodosOffline`` en la entrada del menú), no la pantalla entera.
+        """
+        with abrir_conexion() as conn:
+            esta_contratado = contratado(conn)
+            activos = ap.nodos_activos(conn)
+        return {"contratado": esta_contratado, "nodos_activos": activos,
+                "visible": esta_contratado or activos > 0}
+
     @router.get("")
     def estado(request: Request):
         with abrir_conexion() as conn:
@@ -269,6 +285,7 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
         return {
             "producto": producto,
             "contratado": esta_contratado,
+            "nodos_activos": sum(1 for n in nodos if n["activo"]),
             "instalador_url": instalador,
             "central_url": central,
             "central_url_error": error_central,
