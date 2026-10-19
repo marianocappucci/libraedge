@@ -66,7 +66,8 @@ class NodeRepository:
                 self._conn.rollback()
             raise
 
-    def register_node(self, node_id: str, branch_id: str, schema_version: int = 1) -> str:
+    def register_node(self, node_id: str, branch_id: str, schema_version: int = 1,
+                      prefijo: str | None = None) -> str:
         """Create a node identity and return its plaintext secret.
 
         The secret is shown here once -- only its hash is persisted, same
@@ -74,16 +75,20 @@ class NodeRepository:
         into ``HttpSyncTransport`` immediately, there's no way to recover
         it later (re-registering, i.e. calling this again for the same
         node_id, issues a new secret and invalidates the old one).
+
+        ``prefijo`` is the node's numbering prefix (ADR-008), assigned by
+        ``libraedge.aprovisionamiento``; ``None`` keeps whatever it had.
         """
         secret = secrets.token_urlsafe(32)
         self._escribir(
             """INSERT INTO node_identity
-                (node_id, branch_id, installed_at, schema_version, secret_hash)
-               VALUES (?, ?, ?, ?, ?)
+                (node_id, branch_id, installed_at, schema_version, secret_hash, prefijo)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(node_id) DO UPDATE SET
-                secret_hash = excluded.secret_hash, active = 1""",
+                secret_hash = excluded.secret_hash, active = 1,
+                prefijo = COALESCE(excluded.prefijo, node_identity.prefijo)""",
             (node_id, branch_id, datetime.now(UTC).isoformat(),
-             schema_version, _hash_secret(secret)),
+             schema_version, _hash_secret(secret), prefijo),
         )
         self._conn.commit()
         return secret
@@ -143,7 +148,7 @@ class NodeRepository:
         )
         self._conn.commit()
 
-    def nodos_para_vigilar(self) -> list[dict]:
+    def nodos_para_vigilar(self, ahora: datetime | None = None) -> list[dict]:
         """Cada nodo con cuándo se lo vio por última vez, para el central.
 
         Devuelve los datos crudos y **no** decide si un nodo está caído: el
@@ -155,19 +160,25 @@ class NodeRepository:
         distintos y confundirlos manda a mirar el lugar equivocado.
         """
         filas = self._conn.execute(
-            """SELECT node_id, branch_id, active, last_seen_at, last_server_cursor
+            """SELECT node_id, branch_id, active, last_seen_at, last_server_cursor, prefijo
                  FROM node_identity ORDER BY node_id"""
         ).fetchall()
-        ahora = datetime.now(UTC)
+        ahora = ahora or datetime.now(UTC)
         nodos = []
         for fila in filas:
             visto = fila["last_seen_at"] if hasattr(fila, "keys") else fila[3]
             minutos = None
             if visto:
                 try:
-                    minutos = (ahora - datetime.fromisoformat(visto)).total_seconds() / 60
+                    cuando = datetime.fromisoformat(visto)
                 except ValueError:
-                    minutos = None
+                    cuando = None
+                if cuando is not None:
+                    # Una marca sin zona es UTC: restarla tal cual de un `ahora`
+                    # con zona levantaba TypeError y tiraba abajo el `vigilar`.
+                    if cuando.tzinfo is None:
+                        cuando = cuando.replace(tzinfo=UTC)
+                    minutos = (ahora - cuando).total_seconds() / 60
             nodos.append({
                 "node_id": fila[0],
                 "branch_id": fila[1],
@@ -175,6 +186,7 @@ class NodeRepository:
                 "ultima_vez": visto,
                 "minutos_sin_verse": minutos,
                 "cursor": fila[4],
+                "prefijo": fila[5],
             })
         return nodos
 

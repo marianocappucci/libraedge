@@ -80,6 +80,16 @@ def init_schema(conn) -> None:
         # no tiene forma de saber que una sucursal dejó de sincronizar — y un
         # nodo callado se ve exactamente igual que uno al día.
         conn.execute("ALTER TABLE node_identity ADD COLUMN last_seen_at TEXT")
+    if "prefijo" not in columnas:
+        # Desde v0.8 (ADR-008): el prefijo de numeracion del nodo (`S02`), que
+        # el central asigna al registrarlo y va adelante de cada numero de venta
+        # del nodo. Es unico por NODO, no por sucursal, y no se reusa nunca: dos
+        # PC de una sucursal, o una PC reemplazada, numerarian igual. Nulable:
+        # los nodos de antes no lo tienen hasta que se los vuelve a registrar.
+        conn.execute("ALTER TABLE node_identity ADD COLUMN prefijo TEXT")
+    # Varios NULL conviven en un indice unico, en SQLite y en PostgreSQL.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_node_identity_prefijo ON node_identity(prefijo)")
 
     # Desde v0.7 el central guarda **la operacion entera** de lo que no pudo
     # aplicar, para poder revisarla, reintentarla o descartarla

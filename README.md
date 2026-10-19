@@ -64,6 +64,33 @@ Con `version_esquema=version_de_alembic` en el router, un nodo cuyo esquema no e
 
 El espejo admite clave primaria compuesta: `LIBRAEDGE_TABLAS_ESPEJO=party_roles:party_id+role`.
 
+## Aprovisionamiento del central (v0.8, ADR-008)
+
+El producto declara lo suyo en un `Aprovisionamiento` y el central corre `libraedge-central nodo ...`:
+
+```python
+from libraedge.aprovisionamiento import Aprovisionamiento
+
+aprovisionamiento = Aprovisionamiento(
+    prefijo="VENTALIBRA",                                  # VENTALIBRA_DATABASE_URL, VENTALIBRA_EDGE_NODE_ID
+    tablas_de_referencia=["catalog_items", "units", ("party_roles", "party_id+role")],
+    listar_sucursales=get_all_sucursales,                  # id, nombre, activa
+    # verificar_alta: por defecto, el adicional `offline` de libracore con el `plans` del producto
+)
+```
+
+```bash
+export LIBRAEDGE_APROVISIONAMIENTO=app.offline:aprovisionamiento
+libraedge-central nodo publicar                  # triggers y siembra; sale 1 si queda un agujero
+libraedge-central nodo sucursales
+libraedge-central nodo registrar node-1 --sucursal Centro
+libraedge-central nodo estado
+libraedge-central nodo dar-de-baja node-1
+libraedge-central nodo vigilar --umbral 15       # para el cron del VPS: sale 1 si un nodo se callo
+```
+
+`registrar` imprime una sola vez `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_PREFIJO` (el prefijo de numeración del nodo, `S02`, único por nodo y nunca reusado) y `LIBRAEDGE_TABLAS_ESPEJO`. En el producto, `libraedge.identidad.nodo_actual("VENTALIBRA")` dice si la instancia es un nodo.
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.

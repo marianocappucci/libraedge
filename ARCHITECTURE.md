@@ -26,6 +26,13 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
 
 - **`cli.py`** (`libraedge-nodo`, console script) — arma el nodo:
   `construir_nodo`, `tablas_espejo`, `main`. Es la entrada operativa.
+- **`central.py`** (`libraedge-central`) — las herramientas del central: `nodo` (aprovisionamiento)
+  y `revision`.
+- **`aprovisionamiento.py`** (`Aprovisionamiento`, `publicar`, `registrar`, `dar_de_baja`, `estado`,
+  `sucursales`, `vigilar`, `asignar_prefijo`) — el aprovisionamiento del central, genérico; el
+  producto aporta tablas de referencia, sucursales, guarda del adicional y prefijo (ADR-008).
+- **`identidad.py`** (`nodo_actual`, `prefijo_actual`) — `LIBRAEDGE_NODE_ID` y
+  `LIBRAEDGE_PREFIJO`, con compatibilidad para `<PREFIJO>_EDGE_NODE_ID`.
 - **`nodo.py`** (`Nodo`, `EstadoNodo`, `escribir_estado`/`leer_estado`) — el
   objeto nodo y su estado persistido.
 - **`db/`** — el almacenamiento del nodo:
