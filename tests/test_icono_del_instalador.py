@@ -33,13 +33,41 @@ def test_el_ico_trae_todos_los_tamanos_cuadrados():
         assert ancho == alto
 
 
-def test_cada_tamano_es_un_png_rgba_de_su_medida():
-    for ancho, alto, planos, bits, png in _entradas():
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
-        assert struct.unpack(">II", png[16:24]) == (ancho, alto)
-        # Tipo de color 6 = RGBA: las esquinas del cuadrado redondeado son transparentes.
-        assert png[25] == 6
+def test_de_16_a_48_bmp_de_32_bits_y_de_64_en_adelante_png():
+    # Los chicos en BMP: hay lectores viejos (System.Drawing.Icon) que dibujan basura con un PNG chico (VM Windows 10,
+    # 2026-10-19). Los grandes en PNG, para que el archivo no pese de mas.
+    for ancho, alto, planos, bits, datos in _entradas():
         assert (planos, bits) == (1, 32)
+        if ancho <= 48:
+            tamano, w, h, planos_dib, bits_dib, compresion = struct.unpack("<IiiHHI", datos[:20])
+            # BITMAPINFOHEADER con el alto doble (imagen + mascara AND), sin comprimir.
+            assert (tamano, w, h, planos_dib, bits_dib, compresion) == (40, ancho, 2 * alto, 1, 32, 0)
+            paso_mascara = ((ancho + 31) // 32) * 4
+            assert len(datos) == 40 + ancho * alto * 4 + paso_mascara * alto
+        else:
+            assert datos[:8] == b"\x89PNG\r\n\x1a\n"
+            assert struct.unpack(">II", datos[16:24]) == (ancho, alto)
+            # Tipo de color 6 = RGBA: las esquinas del cuadrado redondeado son transparentes.
+            assert datos[25] == 6
+
+
+def test_los_bmp_tienen_las_esquinas_transparentes_y_el_centro_opaco():
+    for ancho, _, _, _, datos in _entradas():
+        if ancho > 48:
+            continue
+
+        # Las filas van de abajo arriba, en BGRA: el primer pixel es la esquina inferior izquierda.
+        def alfa(x, y_desde_abajo, datos=datos, ancho=ancho):
+            return datos[40 + (y_desde_abajo * ancho + x) * 4 + 3]
+
+        assert alfa(0, 0) == 0 and alfa(ancho - 1, ancho - 1) == 0
+        assert alfa(ancho // 2, ancho // 2) == 255
+        # La mascara AND marca la esquina como transparente (bit en 1) y el centro como opaco.
+        paso = ((ancho + 31) // 32) * 4
+        mascara = datos[40 + ancho * ancho * 4 :]
+        assert mascara[0] & 0x80
+        fila_media = mascara[(ancho // 2) * paso : (ancho // 2 + 1) * paso]
+        assert not (int.from_bytes(fila_media, "big") >> (paso * 8 - 1 - ancho // 2)) & 1
 
 
 def test_la_marca_de_la_que_sale_es_la_de_libraedge():
