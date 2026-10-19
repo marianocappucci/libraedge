@@ -174,3 +174,42 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
   `node_identity` suma `prefijo` (nulable; `init_schema()` lo agrega con `ALTER`): los nodos de
   antes no tienen prefijo hasta que se los vuelve a registrar. RestoLibra sigue andando con su
   script hasta migrar (E5).
+
+## ADR-009 — El central le presta al nodo el ticket de ARCA
+
+- Estado: aceptada
+- Fecha: 2026-10-19
+- Contexto: decisión del humano (fase 1, E4): el nodo factura cuando tiene internet, pero la
+  clave privada de ARCA no sale del VPS. Copiarla tampoco serviría: ARCA da un solo ticket de
+  acceso (WSAA) a la vez por certificado y servicio, así que el nodo no puede autenticarse por su
+  cuenta mientras el del central vale (`alreadyAuthenticated`). libracore #418 (ADR-074 del motor)
+  aporta las dos puntas de negocio: `ta_para_el_nodo(emisor_id)` en el central y
+  `numerador_con_ta(obtener_ta)` en el nodo. Falta el transporte.
+- Decisión:
+  1. **`POST /sync/v1/ticket-arca`** en `create_sync_router(..., prestar_ticket=...)`, con cuerpo
+     `{"node_id", "emisor_id"}` (`emisor_id` entero o `null`). Pasa por el mismo `_autenticar`
+     que push y pull: secreto de un nodo **activo** (un nodo dado de baja recibe 401) y latido
+     anotado; después, el mismo control de esquema (409). Sin la costura, 501 (después de
+     autenticar, para no contarle nada a quien no es un nodo).
+  2. **La costura es del producto**: `prestar_ticket(emisor_id) -> dict` (sincrónica o `async`;
+     normalmente `libracore.nodo_offline.ta_para_el_nodo`). LibraEdge no importa libracore. Si
+     levanta: una excepción con `detalle()` (`NodoSinArca`) contesta 422 con ese detalle;
+     `ValueError`/`LookupError` (emisor desconocido), 422 genérico; cualquier otra (ARCA no
+     autentica), 502. Nunca se usa el texto de una excepción cualquiera.
+  3. **En el nodo, `libraedge.sync.ticket.ClienteDeTicket`** (`cliente_desde_entorno()` con
+     `LIBRAEDGE_CENTRAL_URL`, `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`): `pedir_ticket(emisor_id)`
+     guarda el ticket **sólo en memoria**, por emisor, hasta 10 minutos antes de su `expiracion`
+     (sin zona o ilegible, no se guarda); `olvidar(emisor_id)` lo descarta. `para_numerador(
+     sin_conexion=SinConexion)` devuelve el `obtener_ta(arca)` de `numerador_con_ta` (pide por
+     `arca["id"]`).
+  4. **Errores del nodo**: sin red o 5xx → `SinConexionConElCentral` (se arregla solo; con
+     `sin_conexion=` se levanta la del motor y la venta va a la bandeja); 401/422/501 →
+     `TicketRechazado` (lo tiene que mirar alguien); 409 → `EsquemaIncompatible`.
+  5. **El ticket es una credencial**: nunca se loguea (ni en el central ni en el nodo), no va en el
+     mensaje de ninguna excepción, la respuesta sale con `Cache-Control: no-store` y no se escribe
+     a disco en el nodo. Viaja por el mismo HTTPS que la sincronización.
+- Consecuencias: el nodo factura con internet sin la clave; sin central no hay ticket y la venta
+  va a la bandeja (coherente con «en línea es ver al central» de libracore ADR-074). Cualquier
+  nodo activo de la instancia puede pedir el ticket de cualquier emisor de esa instancia: no se
+  ata el emisor a la sucursal del nodo (un central es un solo cliente). `create_sync_app` (el
+  proceso dedicado) no tiene la ruta.
