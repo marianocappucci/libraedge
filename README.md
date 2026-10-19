@@ -114,6 +114,24 @@ numerar = numerador_con_ta(cliente.para_numerador(sin_conexion=SinConexion), emi
 
 Sólo nodos activos (401 si no), 409 si el esquema difiere, 501 si el central no pasó `prestar_ticket`. El ticket se guarda en memoria hasta 10 minutos antes de vencer y nunca se loguea. Sin red o con ARCA caída en el central: `SinConexionConElCentral` (la venta va a la bandeja); el central sin ARCA para ese emisor: `TicketRechazado` (`codigo` `nodo_sin_arca`).
 
+## El instalador del nodo, uno para todos los productos (ADR-010)
+
+`instalador/` arma un instalador de Windows (Inno Setup) por producto a partir de una definición,
+`instalador/productos/<producto>.json` (hoy RestoLibra, VentaLibra y ContaLibra): `ISCC /DProducto=ventalibra nodo.iss`.
+Lo que el central emite para un nodo llega como un archivo:
+
+```bash
+libraedge-central nodo registrar node-1 --sucursal Centro --carga carga-nodo.json --central-url https://cliente.ventalibra.com.ar
+```
+
+Con `--carga`, `registrar` no imprime el secreto: escribe `carga-nodo.json` (permisos 600) con el entorno del nodo, la URL
+del central y los datos del emisor del `config.json` de la instancia (CUIT, condición de IVA, razón social, formato del
+ticket), que la facturación del nodo necesita y el espejo no trae. El instalador la toma del asistente o de `/CARGA=` en
+modo silencioso. La lectura de la definición, la validación de la carga y el armado del `nodo.env` viven en
+`libraedge/instalador.py` (sólo biblioteca estándar: el instalador lo copia y lo corre con el Python del producto).
+Compilar, instalar y verificar: [`instalador/README.md`](instalador/README.md); probarlo en una VM:
+[`instalador/PROBAR_EN_VM.md`](instalador/PROBAR_EN_VM.md).
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.

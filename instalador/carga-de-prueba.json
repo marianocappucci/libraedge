@@ -1,0 +1,20 @@
+{
+  "formato": "libraedge-carga/1",
+  "_nota": "Carga de PRUEBA para la VM (PROBAR_EN_VM.md). Datos ficticios: el central no existe (.invalid) y el secreto no autoriza nada. Para otro producto, cambiar 'producto'. Una carga real la escribe `libraedge-central nodo registrar <node_id> --carga ... --central-url ...` y tiene el secreto: no se versiona.",
+  "producto": "ventalibra",
+  "entorno": {
+    "LIBRAEDGE_CENTRAL_URL": "https://central-de-prueba.invalid",
+    "LIBRAEDGE_NODE_ID": "nodo-vm-prueba",
+    "LIBRAEDGE_NODE_SECRET": "prueba-prueba-prueba-prueba-prueba",
+    "LIBRAEDGE_PREFIJO": "S01",
+    "LIBRAEDGE_TABLAS_ESPEJO": "branches:id,catalog_items:id,party_roles:party_id+role"
+  },
+  "sucursal": {"id": "1", "nombre": "Casa central"},
+  "emisor": {
+    "empresa_nombre": "Comercio de Prueba S.A.",
+    "empresa_cuit": "30-99999904-9",
+    "empresa_iva_condition": "Responsable Inscripto",
+    "empresa_direccion": "Calle Falsa 123, Ciudad de Prueba",
+    "ticket_ancho_mm": 80
+  }
+}

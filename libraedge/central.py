@@ -5,6 +5,7 @@ El aprovisionamiento de nodos (``libraedge.aprovisionamiento``, ADR-008)::
     libraedge-central nodo publicar
     libraedge-central nodo sucursales
     libraedge-central nodo registrar <node_id> [--sucursal ID|NOMBRE]
+        [--carga carga-nodo.json --central-url https://...] [--config-emisor RUTA]
     libraedge-central nodo dar-de-baja <node_id>
     libraedge-central nodo estado
     libraedge-central nodo vigilar [--umbral 15]
@@ -14,6 +15,13 @@ Lo del producto sale de ``--aprovisionamiento`` o de
 ``estado``, ``dar-de-baja`` y ``vigilar`` no lo necesitan. Sin ``--base`` ni
 ``LIBRAEDGE_DATABASE_URL``, se usa el ``conectar()`` del aprovisionamiento o
 ``<PREFIJO>_DATABASE_URL``.
+
+Con ``--carga``, ``registrar`` no imprime el entorno del nodo: escribe la
+**carga del nodo** (permisos 600, sin pisar un archivo que exista) con ese
+entorno, la URL del central y los datos del emisor del ``config.json`` de la
+instancia (``$DATA_DIR/config.json``). Es el archivo que se le da al
+instalador del nodo (ADR-010): el secreto no pasa por la pantalla ni por el
+portapapeles.
 
 Y la revision manual (``libraedge.sync.revision``)::
 
@@ -35,6 +43,17 @@ import os
 import sys
 from dataclasses import asdict
 from importlib import import_module
+
+from libraedge.instalador import (
+    CLAVES_DEL_EMISOR_NECESARIAS,
+    ErrorDeInstalacion,
+    armar_carga,
+    emisor_desde_config,
+    escribir_carga,
+    normalizar_url_del_central,
+    ruta_config_del_central,
+    validar_emisor,
+)
 
 
 def _base(args, prefijo: str | None = None) -> str:
@@ -134,6 +153,12 @@ def _parser_de_nodo(sub) -> None:
     registrar.add_argument("--sucursal", default=None,
                            help="id o nombre de una sucursal activa; sin ella: la unica activa, o un "
                                 "menu si hay varias y hay terminal")
+    registrar.add_argument("--carga", default=None,
+                           help="escribe la carga del nodo para el instalador en vez de imprimir el entorno")
+    registrar.add_argument("--central-url", default=None,
+                           help="con --carga: la URL publica de esta instancia (https://...)")
+    registrar.add_argument("--config-emisor", default=None,
+                           help="con --carga: el config.json de la instancia (default: $DATA_DIR/config.json)")
     baja = acciones.add_parser("dar-de-baja", help="revoca un nodo (PC robada o reemplazada)")
     baja.add_argument("node_id")
     acciones.add_parser("estado", help="que hay publicado y que nodos existen")
@@ -176,13 +201,16 @@ def _nodo(args, conectar) -> int:
         try:
             if args.accion == "publicar":
                 return ap.publicar(conexion, aprov)
+            preparada = _preparar_carga(args)
             alta = ap.registrar(conexion, aprov, args.node_id, args.sucursal,
                                 interactivo=ap.es_interactivo())
-        except ap.ErrorDeAprovisionamiento as exc:
+        except (ap.ErrorDeAprovisionamiento, ErrorDeInstalacion) as exc:
             # Quien corre esto esta instalando en un local: el mensaje le dice
             # que hacer, un traceback no.
             print(f"\nERROR: {exc}\n", file=sys.stderr)
             return 1
+        if preparada is not None:
+            return _escribir_carga(alta, aprov, *preparada)
         print(f"Nodo {alta.node_id!r} registrado en la sucursal {alta.sucursal.nombre!r} "
               f"(id {alta.sucursal.id}), prefijo {alta.prefijo}.")
         print()
@@ -195,6 +223,48 @@ def _nodo(args, conectar) -> int:
         return 0
     finally:
         conexion.close()
+
+
+def _preparar_carga(args):
+    """Lo que se puede validar ANTES de registrar: un alta emite un secreto, y si despues no se puede escribir la
+    carga hay que volver a registrar. ``None`` sin ``--carga``."""
+    if not args.carga:
+        if args.central_url or args.config_emisor:
+            raise ErrorDeInstalacion("--central-url y --config-emisor van con --carga.")
+        return None
+    if not args.central_url:
+        raise ErrorDeInstalacion("Con --carga hace falta --central-url (la URL publica de esta instancia).")
+    url = normalizar_url_del_central(args.central_url)
+    if os.path.exists(args.carga):
+        raise ErrorDeInstalacion(f"{args.carga} ya existe: no se pisa (puede ser la carga de otro nodo).")
+    ruta_config = args.config_emisor or ruta_config_del_central()
+    emisor = emisor_desde_config(ruta_config)
+    if emisor is not None:
+        validar_emisor(emisor)  # un CUIT mal cargado se ve ahora y no despues de emitir el secreto
+    return url, emisor, ruta_config, args.carga
+
+
+def _escribir_carga(alta, aprov, url, emisor, ruta_config, ruta) -> int:
+    entorno = dict(linea.split("=", 1) for linea in alta.entorno_del_nodo())
+    try:
+        carga = armar_carga(aprov.prefijo.lower(), entorno, url, emisor,
+                            {"id": str(alta.sucursal.id), "nombre": alta.sucursal.nombre or ""})
+        escribir_carga(ruta, carga)
+    except (ErrorDeInstalacion, OSError) as exc:
+        print(f"\nERROR: el nodo {alta.node_id!r} quedo registrado pero no se pudo escribir la carga: {exc}\n"
+              "Volver a registrar con el mismo node_id (emite un secreto nuevo e invalida este).", file=sys.stderr)
+        return 1
+    print(f"Nodo {alta.node_id!r} registrado en la sucursal {alta.sucursal.nombre!r} "
+          f"(id {alta.sucursal.id}), prefijo {alta.prefijo}.")
+    print(f"Carga del nodo escrita en {ruta} (permisos 600). Tiene el secreto: llevarla a la PC del local,")
+    print("instalar con ella y borrarla de aca y de donde se haya copiado.")
+    if emisor is None:
+        print(f"AVISO: no hay {ruta_config}: la carga va sin los datos del emisor y el nodo no va a poder facturar.")
+    else:
+        faltan = [c for c in CLAVES_DEL_EMISOR_NECESARIAS if not str(emisor.get(c, "")).strip()]
+        if faltan:
+            print(f"AVISO: el config.json no tiene {', '.join(faltan)}: el nodo no va a poder facturar.")
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -1,0 +1,56 @@
+{
+  "formato": "libraedge-producto/1",
+  "_nota": "Una sola base; auth en la del dominio. Migraciones = las de scripts/panel_admin.py de contalibra. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "producto": "contalibra",
+  "nombre": "ContaLibra",
+  "app_id": "4BE6AB1D-4F2C-4255-9D16-C119C22D1DFC",
+  "prefijo_variables": "CONTALIBRA",
+  "bases": [
+    {
+      "nombre": "contalibra",
+      "variables": [
+        "CONTALIBRA_DATABASE_URL",
+        "CONTALIBRA_LIBRACORE_DATABASE_URL"
+      ],
+      "nodo": true
+    }
+  ],
+  "asgi": "app.asgi:app",
+  "puerto": 8000,
+  "salud": "/health",
+  "base_auth": "dominio",
+  "migraciones": [
+    [
+      "libracore-migrar",
+      "upgrade",
+      "--prefijo",
+      "contalibra"
+    ],
+    [
+      "libraauth-migrar",
+      "upgrade",
+      "--prefijo",
+      "contalibra",
+      "--base",
+      "dominio"
+    ],
+    [
+      "libracommerce-migrar",
+      "upgrade",
+      "--prefijo",
+      "contalibra"
+    ],
+    [
+      "alembic",
+      "upgrade",
+      "head"
+    ]
+  ],
+  "extras": [
+    "tzdata",
+    "pystray>=0.19",
+    "Pillow>=10"
+  ],
+  "variables": {},
+  "version_esquema": "alembic"
+}

@@ -213,3 +213,51 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
   nodo activo de la instancia puede pedir el ticket de cualquier emisor de esa instancia: no se
   ata el emisor a la sucursal del nodo (un central es un solo cliente). `create_sync_app` (el
   proceso dedicado) no tiene la ruta.
+
+## ADR-010 — Un instalador del nodo para todos los productos
+
+- Estado: aceptada
+- Fecha: 2026-10-19
+- Contexto: E7 de la fase 1 (pieza A3). El instalador de Windows (`instalador/`) estaba atado a RestoLibra en 28
+  lugares (nombre, una sola base, `RESTOLIBRA_DATABASE_URL`, tres cadenas de migraciones cuando ya son cuatro) y
+  VentaLibra y ContaLibra ya adoptaron el nodo (ventalibra#641, contalibra#526). Además: el secreto del nodo y la clave
+  de PostgreSQL viajaban como parámetros (Inno Setup escribe su línea de comandos en `/LOG`); los pasos eran entradas de
+  `[Run]`, cuyo código de salida Inno no mira; el `config.json` del emisor (CUIT, condición de IVA, razón social), que la
+  facturación del nodo lee y el espejo no trae, no lo dejaba nadie; y la lógica sólo se podía probar en Windows.
+- Decisión:
+  1. **Una definición por producto**, `instalador/productos/<producto>.json` (formato `libraedge-producto/1`): nombre,
+     `AppId` (fijo; el de RestoLibra es el de siempre), prefijo de variables, bases (una o varias, cada una con las
+     variables que apuntan a ella y una marcada `nodo`, que es `LIBRAEDGE_DATABASE_URL`), `base_auth`, módulo ASGI,
+     puerto, ruta de salud, **las migraciones del central en orden** (`configure(migraciones=...)` de
+     `scripts/panel_admin.py`), extras de pip y variables fijas. Una clave desconocida es un error. Hay definiciones
+     para RestoLibra, VentaLibra y ContaLibra. Se compila con `ISCC /DProducto=<producto> nodo.iss`; el `.iss` sólo
+     necesita nombre y `AppId`, en una tabla que un test compara con los `.json`.
+  2. **La carga del nodo es un archivo**, `carga-nodo.json` (formato `libraedge-carga/1`), que escribe
+     `libraedge-central nodo registrar ... --carga RUTA --central-url URL` (permisos 600, sin pisar uno existente, sin
+     imprimir el secreto; URL, ruta libre y CUIT se validan **antes** de dar el alta). Trae las cuatro variables de
+     ADR-008 más `LIBRAEDGE_CENTRAL_URL`, la sucursal y el emisor. El instalador la toma del asistente (un selector de
+     archivo) o de `/CARGA=` en silencio. Sólo viajan rutas por las líneas de comandos; los mensajes nombran variables,
+     nunca valores.
+  3. **El `config.json` del emisor viaja en la carga** (y no se baja del central al instalar): se toma en el mismo paso
+     que ya emite el secreto, sin una ruta nueva en el central ni credenciales en el instalador, y la instalación no
+     necesita internet. Lista cerrada (`empresa_*`, `ticket_*`): MercadoPago, SMTP, el estado del servicio y el logo no
+     viajan. Se fusiona en `DATA_DIR\config.json`. No sigue los cambios del central (se reinstala con otra carga).
+  4. **Lo que no es Windows va en Python**, `libraedge/instalador.py`: sólo biblioteca estándar y sin importar
+     `libraedge`, porque el instalador lo copia y lo corre con el Python embebido del producto, que trae la versión de
+     LibraEdge que tenga pineada. Lee y valida definición y carga, arma el `nodo.env` (conserva `SECRET_KEY` y la clave
+     del admin local al reinstalar; genera una clave de admin para que ningún producto la invente ni la escriba en el
+     log), fusiona el `config.json` y corre los console scripts por sus entry points (el paquete se arma desde Linux y
+     no trae los `.exe`).
+  5. **El `.iss` sólo copia archivos** y corre `instalar.ps1`; su código de salida es el del instalador
+     (`GetCustomSetupExitCode`, 20 si falló la configuración). La clave de PostgreSQL ya no se pide: se genera la
+     primera vez y queda en `postgres.clave` con ACL restringida. Antes de arrancar el producto se hace una primera
+     sincronización (si bajan los usuarios, el producto no crea un admin local). Un nodo por PC.
+  6. **`verificar_nodo.ps1`** chequea servicios, ACL y variables de `nodo.env`, PostgreSQL (zona, checksums), las
+     cadenas de migraciones contra la definición, `libraedge-nodo estado`, el `estado.json`, la salud del producto
+     (objeto JSON) y el emisor. **`armar_paquete.sh`** arma el paquete desde Linux con
+     `uv pip install --python-platform x86_64-pc-windows-msvc` sobre el `uv.lock` del producto.
+- Consecuencias: un producto nuevo se instala agregando su `.json` y su fila en el `.iss`. `--carga` llega a los
+  productos cuando suban el pin de LibraEdge; mientras tanto la carga se arma a mano desde lo que imprime `registrar`.
+  El instalador parametrizado **todavía no corrió en Windows** (`instalador/PROBAR_EN_VM.md`). Quedan abiertos los
+  usuarios y altas de referencia del nodo (fase 2): la primera sincronización evita el admin local sólo si hay central
+  al instalar.

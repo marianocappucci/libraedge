@@ -1,283 +1,197 @@
-# Migraciones, archivo de entorno y los dos servicios del nodo.
+# Entorno, config.json del emisor, migraciones y los dos servicios del nodo.
 #
-# 🔴 SIN PROBAR. Ver el README de esta carpeta.
+# Lo corre `instalar.ps1` (como Administrador) despues de `preparar_postgres.ps1`.
+# Lo propio del producto sale de `producto.json` (copia de
+# `productos/<producto>.json`) por medio de `libraedge_instalador.py`, que es
+# `libraedge/instalador.py` copiado tal cual: la lectura de la definicion, la
+# validacion de la carga y el armado del entorno estan probados ahi (ADR-010).
 #
-# Corre después de `preparar_postgres.ps1`, como Administrador.
+# Historia de lo que se midio en una VM (2026-08-30/31): README de esta carpeta.
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$RaizNodo,      # donde quedó instalado el producto
-    [Parameter(Mandatory = $true)][string]$UrlBase,       # postgresql://... del PG local
-    [Parameter(Mandatory = $true)][string]$UrlCentral,    # https://cliente.restolibra.com.ar
-    [Parameter(Mandatory = $true)][string]$NodeId,
-    [Parameter(Mandatory = $true)][string]$NodeSecret,    # lo emite el central, UNA sola vez
-    [Parameter(Mandatory = $true)][string]$TablasEspejo,  # lo imprime `nodo_offline registrar`
-    [int]$PuertoProducto = 8000,
-    [int]$IntervaloSegundos = 60,
-    # El prefijo del producto, que es lo que `libracore-migrar` usa para
-    # encontrar la base del motor. Es un parámetro y no una constante porque el
-    # nodo va a existir para más de un producto de la familia.
-    [string]$Prefijo = "restolibra",
-    # En qué base viven las tablas de auth para `libraauth-migrar --base`:
-    # `dominio` en Restolibra (una sola base). Ver `libraauth.migrar`.
-    [ValidateSet("core", "dominio")][string]$BaseAuth = "dominio",
-    # La clave del superusuario de PostgreSQL. Va SUELTA y no se saca de
-    # `$UrlBase` a propósito: parsear una URL para recuperar una contraseña
-    # falla en cuanto la contraseña tiene un `@`, un `/` o un `:`, y falla
-    # devolviendo una cadena que parece válida. La necesita la tarea de
-    # respaldo, que se conecta sin pasar por la URL.
-    [string]$ClavePostgres = ""
+    [Parameter(Mandatory = $true)][string]$RaizNodo,   # donde quedo instalado el producto
+    [Parameter(Mandatory = $true)][string]$Carga,      # carga-nodo.json (la emite el central)
+    [string]$Datos = (Join-Path $env:ProgramData "LibraEdge"),
+    [int]$IntervaloSegundos = 60
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "comun.ps1")
 
-$python = Join-Path $RaizNodo "python\python.exe"
-$nssm   = Join-Path $RaizNodo "herramientas\nssm.exe"
-if (-not (Test-Path $python)) { throw "No está el Python embebido en $python" }
-if (-not (Test-Path $nssm)) { throw "No está nssm.exe en $nssm" }
-
-$archivoEnv = Join-Path $RaizNodo "nodo.env"
-$estado     = Join-Path $RaizNodo "estado.json"
-
-# --- El archivo de entorno ------------------------------------------------
-# 🔴 Contiene el secreto del nodo, que autoriza a escribir en el central. Se
-# escribe con ACL restringida ANTES de poner el contenido: crearlo con los
-# permisos heredados y arreglarlos después deja una ventana en la que cualquier
-# usuario de la máquina puede leerlo.
-#
-# 🔴 **Las cuentas van por SID y no por nombre.** `"Administrators"` no existe
-# en un Windows en español: ahí el grupo se llama `Administradores`, y
-# `FileSystemAccessRule("Administrators", ...)` tira `IdentityNotMappedException`.
-# Medido el 2026-08-30 sobre un Windows 11 Pro es-AR: `SYSTEM` resuelve,
-# `Administrators` **no**, `Administradores` sí.
-#
-# Las PCs de los clientes son justamente Windows en español, así que el nombre
-# literal habría hecho fallar el instalador en el 100% de las instalaciones
-# reales — y en el 0% de cualquier prueba corrida en un Windows en inglés.
-#
-# Los SIDs conocidos no dependen del idioma: `S-1-5-18` es SYSTEM y
-# `S-1-5-32-544` el grupo de administradores locales.
-if (Test-Path $archivoEnv) { Remove-Item $archivoEnv -Force }
-New-Item -ItemType File -Path $archivoEnv | Out-Null
-$acl = Get-Acl $archivoEnv
-$acl.SetAccessRuleProtection($true, $false)   # corta la herencia
-foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
-    $cuenta = New-Object System.Security.Principal.SecurityIdentifier($sid)
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $cuenta, "FullControl", "Allow")))
+$python     = Join-Path $RaizNodo "python\python.exe"
+$nssm       = Join-Path $RaizNodo "herramientas\nssm.exe"
+$ayudante   = Join-Path $RaizNodo "instalador\libraedge_instalador.py"
+$definicion = Join-Path $RaizNodo "instalador\producto.json"
+foreach ($archivo in @($python, $nssm, $ayudante, $definicion)) {
+    if (-not (Test-Path $archivo)) { throw "Falta $archivo. El paquete del instalador esta incompleto." }
 }
-Set-Acl -Path $archivoEnv -AclObject $acl
+if (-not (Test-Path $Carga)) { throw "No esta la carga del nodo: $Carga" }
 
-# Que la ACL haya quedado NO se asume: `Set-Acl` puede fallar parcialmente y el
-# archivo con el secreto seguiría legible por cualquier usuario de la máquina.
-$quedaron = (Get-Acl $archivoEnv).Access |
-    ForEach-Object { $_.IdentityReference.Translate(
-        [System.Security.Principal.SecurityIdentifier]).Value }
-foreach ($esperado in @("S-1-5-18", "S-1-5-32-544")) {
-    if ($quedaron -notcontains $esperado) { throw "La ACL de $archivoEnv no quedó: falta $esperado" }
-}
-$deMas = $quedaron | Where-Object { $_ -notin @("S-1-5-18", "S-1-5-32-544") }
-if ($deMas) { throw "La ACL de $archivoEnv dejó cuentas de más: $($deMas -join ', ')" }
+$plan = Leer-Plan -Python $python -Ayudante $ayudante -Definicion $definicion
+Write-Host "Producto: $($plan.nombre) (puerto $($plan.puerto), base del nodo $($plan.base_del_nodo))."
 
-# Sin BOM. `Set-Content -Encoding utf8` en Windows PowerShell 5.1 --la que trae
-# Windows 11 de fábrica-- escribe `EF BB BF` adelante. Acá abajo el archivo lo
-# vuelve a leer `Get-Content`, que **sí** saca el BOM, así que por ese camino no
-# se rompe nada: eso está medido. Se escribe sin BOM igual porque el archivo es
-# un `.env` y cualquier lector que no sea PowerShell --un `python-dotenv`, por
-# ejemplo-- se comería el BOM como parte del nombre de la primera variable, y
-# `LIBRAEDGE_NODE_ID` desaparecería sin que nada avise.
+$archivoEnv  = Join-Path $RaizNodo "nodo.env"
+$estado      = Join-Path $RaizNodo "estado.json"
+$clavePg     = Join-Path $Datos "postgres.clave"
+$dataDir     = Join-Path $Datos "app"
 
-# 🔴 **El `SECRET_KEY` del producto, que faltaba.** Sin él la app no levanta:
-# `libraauth.session_auth` aborta con *"SECRET_KEY no está seteado. No se
-# levanta la app sin un secreto propio"*. Medido en la VM el 2026-08-30: el
-# servicio quedaba en bucle de reinicio, Windows lo mostraba **Running**, y no
-# había nada escuchando en el puerto.
-#
-# Se genera acá, uno por nodo, y no se pide al que instala: es un secreto de
-# esta máquina y nadie lo tiene que ver ni transcribir. Va al mismo archivo con
-# la misma ACL que el secreto del nodo.
-#
-# 🔴 Y **no** se usa `Get-Random`: es un generador reproducible, no
-# criptográfico. Para un secreto de sesión eso es exactamente lo que no sirve.
-$bytes = New-Object byte[] 48
-[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-$claveSesion = [Convert]::ToBase64String($bytes)
-
-$contenido = @"
-LIBRAEDGE_NODE_ID=$NodeId
-LIBRAEDGE_NODE_SECRET=$NodeSecret
-LIBRAEDGE_CENTRAL_URL=$UrlCentral
-LIBRAEDGE_DATABASE_URL=$UrlBase
-LIBRAEDGE_TABLAS_ESPEJO=$TablasEspejo
-LIBRAEDGE_ESTADO=$estado
-RESTOLIBRA_DATABASE_URL=$UrlBase
-SECRET_KEY=$claveSesion
-TZ=America/Argentina/Buenos_Aires
-"@
-[System.IO.File]::WriteAllText(
-    $archivoEnv, $contenido, (New-Object System.Text.UTF8Encoding($false)))
-
-# --- Las migraciones ------------------------------------------------------
-# El nodo corre LAS MISMAS que el central: es lo que hace que el espejo pueda
-# escribir fila por fila sin traducir nada. Si divergen, el aplicador del nodo
-# falla por una columna que no existe.
-#
-# 🔴 Antes de migrar, chequear que el Python embebido pueda VER sus paquetes.
-# El "Windows embeddable package" de python.org viene con un `python3XX._pth`
-# donde `import site` está comentado: con eso apagado `site-packages` no entra
-# al path y `-m alembic` muere con "No module named alembic" aunque alembic esté
-# instalado ahí mismo. El error apunta a una dependencia faltante y el problema
-# es un archivo de configuración de dos líneas.
-#
-# 🔴 **Y el chequeo se hace con `$ErrorActionPreference` bajado a mano.**
-# Con `Stop` --que es como arranca este script-- PowerShell convierte lo que un
-# programa nativo escribe en stderr en un error terminante, y `*> $null` NO lo
-# evita: redirige la salida, no la conversión. O sea que el `python -c` que
-# falla **lanza en esa misma línea** y las cinco de abajo no se ejecutan nunca.
-#
-# Medido en la VM el 2026-08-30: el instalador escupió un traceback de Python
-# crudo y salió con 1, sin decir una palabra del `import site`. El guard estaba
-# escrito, probado a ojo, y **no podía hablar**.
-$preferenciaPrevia = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-& $python -c "import alembic" 2>&1 | Out-Null
-$puedeImportar = ($LASTEXITCODE -eq 0)
-$ErrorActionPreference = $preferenciaPrevia
-if (-not $puedeImportar) {
-    throw ("El Python embebido no puede importar alembic. Casi seguro es el " +
-           "'import site' comentado en el archivo python3XX._pth de " +
-           "$RaizNodo\python: descomentarlo y volver a correr. Si ya está " +
-           "descomentado, entonces sí falta instalar el producto en esa carga.")
+# --- El Python embebido tiene que ver sus paquetes ---------------------------
+# El "Windows embeddable package" trae `import site` comentado en su `._pth`:
+# sin eso `site-packages` no entra al path y todo lo de abajo muere con un
+# "No module named ..." que apunta a otra cosa. `armar_paquete.sh` lo
+# descomenta; esto lo verifica antes de seguir.
+if ((Invocar -Programa $python -Argumentos @("-c", "import alembic, uvicorn, libraedge")) -ne 0) {
+    throw ("El Python embebido no puede importar alembic, uvicorn o libraedge. Casi seguro es " +
+           "el 'import site' comentado en python3XX._pth de $RaizNodo\python, o un paquete " +
+           "armado sin el producto.")
 }
 
-#
-# 🔴 **SON DOS CADENAS, no una, y el orden importa.**
-#
-# Hasta el 2026-08-30 acá sólo corría `alembic upgrade head`, o sea la cadena
-# PROPIA del producto. Falta la del motor, que es la que crea `facturas`,
-# `cajas`, `usuarios` y todo el schema de LibraCore. El central corre las dos
-# --ver `scripts/panel_admin.py` y `scripts/nuevo_cliente.py` del producto, que
-# tienen exactamente esta tupla-- y el nodo tiene que correr LAS MISMAS: de eso
-# vive que el espejo pueda escribir fila por fila sin traducir nada.
-#
-# Medido en la VM: con una sola cadena, la migración muere en el `0001` con
-# *relation "facturas" does not exist* y la base del nodo queda con 21 tablas y
-# sin `cajas`, `usuarios`, `sync_outbox` ni `edge_nodes`.
-#
-# `libracore-migrar` es el console script del motor, igual que en el central, y
-# resuelve la base por `<PREFIJO>_DATABASE_URL` cuando no hay una del core
-# aparte. Se invoca el ejecutable y no `python -m`: es la misma forma que usa el
-# central, y las migraciones del motor viajan dentro del wheel.
-$migrar = Join-Path $RaizNodo "python\Scripts\libracore-migrar.exe"
-if (-not (Test-Path $migrar)) {
-    throw ("No está $migrar. La carga del producto se armó sin instalar " +
-           "libracore[migrations] en el Python embebido.")
+# --- Parar lo que corre (reinstalacion) --------------------------------------
+# Las migraciones no corren con el producto atendiendo, y en una actualizacion
+# el producto viejo no tiene que escribir sobre un esquema nuevo.
+foreach ($servicio in @("LibraEdgeNodo", "LibraEdgeProducto")) {
+    if (Get-Service -Name $servicio -ErrorAction SilentlyContinue) {
+        Write-Host "Se detiene $servicio para actualizar."
+        & $nssm stop $servicio confirm | Out-Null
+    }
 }
 
-# 🔴 **Y la de LibraAuth (2026-09-17).** Hasta acá las seis tablas de auth
-# (`usuarios`, `auth_log`, ...) las creaba el `create_all()` del arranque del
-# producto. Desde libraauth v0.45.0 el arranque EXIGE la cadena en vez de
-# crearla (`exigir_schema_al_dia`): un nodo instalado sin este paso no levanta.
-# Va después de la del motor y antes de la del producto, el mismo orden que
-# declara `scripts/panel_admin.py` del central. `--base dominio` porque en
-# Restolibra auth vive en la única base; con otro producto, `$BaseAuth`.
-$migrarAuth = Join-Path $RaizNodo "python\Scripts\libraauth-migrar.exe"
-if (-not (Test-Path $migrarAuth)) {
-    throw ("No está $migrarAuth. La carga del producto se armó sin instalar " +
-           "libraauth[migrations] en el Python embebido.")
-}
+# --- El archivo de entorno ---------------------------------------------------
+# Contiene el secreto del nodo, que autoriza a escribir en el central. La ACL
+# (SYSTEM y Administradores, por SID) se pone ANTES de escribir el contenido,
+# y el ayudante solo escribe sobre un archivo que ya existe: crearlo con los
+# permisos heredados y arreglarlos despues deja una ventana en la que cualquier
+# usuario de la PC lo puede leer.
+#
+# Si ya existia (reinstalacion) NO se borra: el ayudante conserva SECRET_KEY y
+# la clave del admin local. Un SECRET_KEY nuevo deja ilegible lo que libraauth
+# cifro con el anterior.
+#
+# Lo que el ayudante imprime son NOMBRES de variables, nunca valores, y los
+# secretos le llegan por archivo: ni la carga ni la clave de PostgreSQL pasan
+# por la linea de comandos (que Inno Setup y Start-Transcript registran).
+Proteger-Archivo -Ruta $archivoEnv
+Proteger-Carpeta -Ruta $dataDir
+$codigo = Invocar -Programa $python -Argumentos @(
+    $ayudante, "entorno", "--definicion", $definicion, "--carga", $Carga, "--clave-pg", $clavePg,
+    "--estado", $estado, "--data-dir", $dataDir, "--salida", $archivoEnv)
+if ($codigo -ne 0) { throw "No se pudo escribir $archivoEnv (codigo $codigo). El motivo esta arriba." }
+Test-ArchivoProtegido -Ruta $archivoEnv -Lanzar | Out-Null
 
+# --- El config.json del emisor ------------------------------------------------
+# CUIT, razon social, condicion de IVA y el formato del ticket: la facturacion
+# del nodo los lee del `config.json` de DATA_DIR y el espejo no los trae (no es
+# una tabla). Vienen en la carga, que los copio del `config.json` del central al
+# registrar el nodo. Se fusionan: lo demas del archivo no se toca.
+$codigo = Invocar -Programa $python -Argumentos @(
+    $ayudante, "config-emisor", "--definicion", $definicion, "--carga", $Carga,
+    "--config", (Join-Path $dataDir "config.json"))
+if ($codigo -ne 0) { throw "No se pudo escribir el config.json del emisor (codigo $codigo)." }
+
+# --- Las migraciones ----------------------------------------------------------
+# Las MISMAS que el central y en el mismo orden (`migraciones` de la definicion
+# = `configure(migraciones=...)` de `scripts/panel_admin.py` del producto): de
+# eso vive que el espejo pueda escribir fila por fila sin traducir nada. Desde
+# 2026-10 son cuatro cadenas (motor, auth, libracommerce, producto); el
+# instalador de RestoLibra corria tres y le faltaba la de libracommerce.
+#
+# Se corren por el ayudante (`ejecutar`), que busca el console script en los
+# entry points del Python embebido: el paquete se arma desde Linux y no trae
+# los `.exe` de `Scripts`.
+$cantidad = Cargar-EntornoEnProceso -Ruta $archivoEnv
+Write-Host "Entorno del nodo cargado en este proceso ($cantidad variables)."
 Push-Location $RaizNodo
 try {
-    Set-Item -Path ("Env:{0}_DATABASE_URL" -f $Prefijo.ToUpper()) -Value $UrlBase
-    $env:RESTOLIBRA_DATABASE_URL = $UrlBase
+    foreach ($comando in $plan.migraciones) {
+        $partes = @($comando)
+        Write-Host "Migraciones: $($partes -join ' ')"
+        $codigo = Invocar -Programa $python -Argumentos (@($ayudante, "ejecutar") + $partes)
+        if ($codigo -ne 0) { throw "Fallo '$($partes -join ' ')' con codigo $codigo." }
+    }
 
-    & $migrar upgrade --prefijo $Prefijo
-    if ($LASTEXITCODE -ne 0) { throw "Las migraciones del motor fallaron con código $LASTEXITCODE" }
-
-    & $migrarAuth upgrade --prefijo $Prefijo --base $BaseAuth
-    if ($LASTEXITCODE -ne 0) { throw "Las migraciones de libraauth fallaron con código $LASTEXITCODE" }
-
-    & $python -m alembic upgrade head
-    if ($LASTEXITCODE -ne 0) { throw "Las migraciones del producto fallaron con código $LASTEXITCODE" }
+    # --- La primera bajada, ANTES de arrancar el producto ---------------------
+    # El producto crea un admin local al arrancar si la tabla de usuarios esta
+    # vacia. Si el espejo ya bajo los usuarios del central, no lo crea. Sin
+    # conexion (o con una carga de prueba) no se puede: se avisa y se sigue, el
+    # servicio del nodo sincroniza solo cuando haya central.
+    Write-Host "Primera sincronizacion con el central..."
+    $codigo = Invocar -Programa $python -Argumentos @("-m", "libraedge", "sincronizar")
+    if ($codigo -ne 0) {
+        Write-Warning ("La primera sincronizacion no termino bien (codigo $codigo). El nodo queda " +
+                       "instalado y reintenta solo; hasta que baje la referencia, el producto arranca " +
+                       "con un admin local que no se usa.")
+    }
 } finally {
     Pop-Location
 }
 
-# --- Los dos servicios ----------------------------------------------------
+# --- Los dos servicios ---------------------------------------------------------
 # NSSM y no `sc.exe` a secas: un proceso de consola registrado con `sc` no
-# maneja bien el apagado y Windows lo mata a los 30 segundos. NSSM además
-# reinicia el proceso si se cae, que en la PC de un cliente es la diferencia
-# entre un corte de un minuto y uno hasta que alguien lo note.
-
+# maneja bien el apagado y Windows lo mata a los 30 segundos. NSSM ademas
+# reinicia el proceso si se cae.
 function Registrar-Servicio {
     param([string]$Nombre, [string]$Ejecutable, [string]$Argumentos, [string]$Descripcion)
 
     if (Get-Service -Name $Nombre -ErrorAction SilentlyContinue) {
-        Write-Host "El servicio $Nombre ya existe: se detiene para reconfigurarlo."
         & $nssm stop $Nombre confirm | Out-Null
         & $nssm remove $Nombre confirm | Out-Null
     }
     & $nssm install $Nombre $Ejecutable $Argumentos
-    if ($LASTEXITCODE -ne 0) { throw "nssm install $Nombre falló" }
-    & $nssm set $Nombre AppDirectory $RaizNodo
-    # El entorno se carga después, en el bucle de abajo: viene del archivo, para
-    # que el secreto del nodo viva en un solo lugar.
-    & $nssm set $Nombre Description $Descripcion
-    & $nssm set $Nombre Start SERVICE_AUTO_START
-    & $nssm set $Nombre AppStdout (Join-Path $RaizNodo "logs\$Nombre.log")
-    & $nssm set $Nombre AppStderr (Join-Path $RaizNodo "logs\$Nombre.log")
-    # 🔴 El freno del reinicio. NSSM reintenta a los 1500 ms por defecto, y un
-    # proceso que muere al arrancar --por una variable que falta, digamos-- gira
-    # a dos por segundo. Medido en la VM el 2026-08-30: **24 archivos de log en
-    # dos minutos**, y el bucle escondido detrás de un servicio que Windows
-    # muestra `Running`. Con 15 s el servicio sigue recuperándose solo de una
-    # caída real, pero un arranque roto no quema disco ni tapa el log.
-    & $nssm set $Nombre AppThrottle 15000
-    & $nssm set $Nombre AppRotateFiles 1
-    # Y que rote por TAMAÑO, no en cada arranque: con rotación por arranque, un
-    # bucle deja un archivo por intento y el log deja de servir para leerlo.
-    & $nssm set $Nombre AppRotateOnline 1
-    & $nssm set $Nombre AppRotateBytes 10485760
+    if ($LASTEXITCODE -ne 0) { throw "nssm install $Nombre fallo" }
+    & $nssm set $Nombre AppDirectory $RaizNodo | Out-Null
+    & $nssm set $Nombre Description $Descripcion | Out-Null
+    & $nssm set $Nombre Start SERVICE_AUTO_START | Out-Null
+    & $nssm set $Nombre AppStdout (Join-Path $RaizNodo "logs\$Nombre.log") | Out-Null
+    & $nssm set $Nombre AppStderr (Join-Path $RaizNodo "logs\$Nombre.log") | Out-Null
+    # El freno del reinicio: NSSM reintenta a los 1500 ms y un arranque roto
+    # giraba a dos por segundo (24 logs en dos minutos, medido 2026-08-30).
+    & $nssm set $Nombre AppThrottle 15000 | Out-Null
+    & $nssm set $Nombre AppRotateFiles 1 | Out-Null
+    & $nssm set $Nombre AppRotateOnline 1 | Out-Null
+    & $nssm set $Nombre AppRotateBytes 10485760 | Out-Null
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $RaizNodo "logs") | Out-Null
 
-# NSSM toma el entorno como pares NUL-separados; se arma desde el archivo para
-# no repetir los valores acá (y para que el secreto viva en un solo lugar).
-$pares = Get-Content $archivoEnv | Where-Object { $_ -match "=" }
-
 Registrar-Servicio -Nombre "LibraEdgeProducto" -Ejecutable $python `
-    -Argumentos "-m uvicorn app.asgi:app --host 0.0.0.0 --port $PuertoProducto" `
-    -Descripcion "Restolibra, la instancia local de esta sucursal"
+    -Argumentos "-m uvicorn $($plan.asgi) --host 0.0.0.0 --port $($plan.puerto)" `
+    -Descripcion "$($plan.nombre), la instancia local de esta sucursal (LibraEdge)"
 
 Registrar-Servicio -Nombre "LibraEdgeNodo" -Ejecutable $python `
     -Argumentos "-m libraedge correr --intervalo $IntervaloSegundos" `
-    -Descripcion "Sincronizacion del nodo offline con el central"
+    -Descripcion "Sincronizacion del nodo offline con el central (LibraEdge)"
 
+# El entorno va a NSSM desde el archivo, para que el secreto viva en un solo
+# lugar. NSSM lo guarda en el registro del servicio (HKLM, solo administradores).
+$pares = @(Get-Content $archivoEnv -Encoding UTF8 | Where-Object { $_ -match "=" })
 foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo")) {
-    & $nssm set $servicio AppEnvironmentExtra $pares
+    & $nssm set $servicio AppEnvironmentExtra $pares | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo cargar el entorno de $servicio en NSSM." }
     Start-Service -Name $servicio
 }
 
-# --- El respaldo del nodo -------------------------------------------------
-#
-# 🔴 El `sync_outbox` es **el único lugar del mundo** donde vive una venta
-# cobrada sin internet: todavía no llegó al central, y en el central no está. Si
-# el disco muere entre el cobro y la sincronización, esa plata no está en ningún
-# lado. Hasta el 2026-08-31 el instalador no contemplaba ningún respaldo.
-#
-# Cada hora, y no una vez por día, porque lo que se pierde es exactamente lo
-# cobrado desde el último: con el enlace sano el outbox se vacía en un minuto,
-# pero un local que estuvo el día entero sin internet acumula el día entero.
-#
-# Va como tarea programada de SISTEMA y no como servicio: corre un rato cada
-# hora, no permanentemente, y el planificador ya sabe recuperarse de un apagón
-# --si la PC estaba apagada a la hora en punto, corre al encender--.
+# --- El firewall ---------------------------------------------------------------
+# Las cajas del local son navegadores que entran a esta PC por la red interna:
+# sin la regla, Windows bloquea el puerto y solo anda desde esta misma PC. Solo
+# en los perfiles Privado y Dominio: en una red marcada Publica no se abre.
+$regla = "LibraEdge producto"
+Get-NetFirewallRule -DisplayName $regla -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $regla -Direction Inbound -Protocol TCP -LocalPort $plan.puerto `
+    -Action Allow -Profile Private, Domain | Out-Null
+Write-Host "Firewall: puerto $($plan.puerto) abierto en redes privadas y de dominio."
+
+# --- El respaldo del nodo --------------------------------------------------------
+# El `sync_outbox` es el unico lugar donde vive una venta cobrada sin internet.
+# Cada hora, como tarea programada de SISTEMA. La clave de PostgreSQL la lee
+# `respaldo.ps1` de su archivo: antes iba como argumento de la tarea, o sea en
+# texto plano en la definicion de la tarea.
+$bases = @($plan.bases | ForEach-Object { $_.nombre }) -join ","
 $tareaRespaldo = "LibraEdgeRespaldo"
 $accion = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$RaizNodo\instalador\respaldo.ps1`"" +
-               " -RaizPostgres `"$RaizNodo\postgres`" -Password `"$ClavePostgres`"")
+               " -RaizPostgres `"$RaizNodo\postgres`" -ArchivoClave `"$clavePg`"" +
+               " -Bases `"$bases`" -BaseNodo `"$($plan.base_del_nodo)`"")
 $disparador = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
     -RepetitionInterval (New-TimeSpan -Hours 1)
 $opciones = New-ScheduledTaskSettingsSet -StartWhenAvailable `
@@ -285,24 +199,16 @@ $opciones = New-ScheduledTaskSettingsSet -StartWhenAvailable `
 Unregister-ScheduledTask -TaskName $tareaRespaldo -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName $tareaRespaldo -Action $accion -Trigger $disparador `
     -Settings $opciones -User "SYSTEM" -RunLevel Highest | Out-Null
-Write-Host "Respaldo programado cada hora en $((Get-ScheduledTask -TaskName $tareaRespaldo).State)."
+Write-Host "Respaldo programado cada hora: $((Get-ScheduledTask -TaskName $tareaRespaldo).State)."
 
-# --- La bandeja -------------------------------------------------------------
-#
-# 🔴 **No puede ser un servicio.** Windows no le deja dibujar nada a un servicio
-# desde la sesión 0, así que el ícono al lado del reloj tiene que arrancar en la
-# sesión del operador. Va como acceso directo en el inicio COMÚN: cualquiera que
-# entre a esa PC lo ve, y se apaga sacándolo de ahí, sin tocar el instalador.
-#
-# La ruta del estado va como ARGUMENTO y no por entorno: un acceso directo del
-# inicio no hereda el entorno que NSSM le da a los servicios, y una variable de
-# máquina ensuciaría el sistema entero por un dato de una sola aplicación.
+# --- La bandeja ------------------------------------------------------------------
+# No puede ser un servicio (sesion 0): va como acceso directo en el inicio
+# COMUN. La ruta del estado va como argumento: un acceso directo no hereda el
+# entorno de NSSM.
 $inicio = [Environment]::GetFolderPath("CommonStartup")
 $acceso = Join-Path $inicio "LibraEdge - estado del nodo.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut($acceso)
-# `pythonw.exe` y no `python.exe`: con el segundo queda una consola negra
-# abierta toda la jornada al lado del ícono.
 $pythonw = Join-Path $RaizNodo "python\pythonw.exe"
 $lnk.TargetPath = $(if (Test-Path $pythonw) { $pythonw } else { $python })
 $lnk.Arguments = "-m libraedge bandeja --estado `"$estado`" --intervalo $IntervaloSegundos"
@@ -310,29 +216,10 @@ $lnk.WorkingDirectory = $RaizNodo
 $lnk.Description = "Muestra si el nodo esta sincronizando"
 $lnk.Save()
 Write-Host "Bandeja: acceso directo en el inicio -> $acceso"
-if (-not (Test-Path $pythonw)) {
-    Write-Warning ("No esta pythonw.exe: la bandeja va a abrir una consola. " +
-                   "El paquete embebido de python.org lo trae; revisar la carga.")
-}
-# Que pystray este NO se puede dar por hecho: viaja en el extra `bandeja`, que
-# no es una dependencia del producto. Sin el, el acceso directo no hace nada y
-# nadie se entera hasta que alguien pregunta por que no aparece el icono.
-$preferenciaPystray = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-& $python -c "import pystray" 2>&1 | Out-Null
-$hayPystray = ($LASTEXITCODE -eq 0)
-$ErrorActionPreference = $preferenciaPystray
-if (-not $hayPystray) {
-    Write-Warning ("Falta pystray: el acceso directo de la bandeja no va a mostrar " +
-                   "nada. Se instala con `pip install libraedge[bandeja]` al armar " +
-                   "la carga, no en la PC del cliente.")
+if ((Invocar -Programa $python -Argumentos @("-c", "import pystray")) -ne 0) {
+    Write-Warning "Falta pystray en el paquete: el icono de la bandeja no va a aparecer."
 }
 
 Write-Host ""
-Write-Host "Instalado. El producto escucha en http://<esta-pc>:$PuertoProducto"
-Write-Host "Estado del nodo:  $python -m libraedge estado"
-Write-Host ""
-Write-Host "ATENCION: Verificar A MANO, porque el instalador no lo puede probar solo:"
-Write-Host "   1. Reiniciar la PC y confirmar que los dos servicios levantan."
-Write-Host '   2. select now() en la base: el offset tiene que ser -03.'
-Write-Host "   3. Desconectar internet, cobrar, reconectar, y ver que la venta suba."
+Write-Host "Instalado. $($plan.nombre) escucha en http://<esta-pc>:$($plan.puerto)"
+Write-Host "Verificar con: powershell -ExecutionPolicy Bypass -File `"$RaizNodo\instalador\verificar_nodo.ps1`""

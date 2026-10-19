@@ -36,3 +36,10 @@ id_ed25519*
 data/
 logs/
 *.log
+
+# El instalador del nodo (ADR-010): lo que arma `armar_paquete.sh` (cientos de
+# MB de binarios bajados) y lo que compila ISCC. Y una carga REAL de un nodo
+# tiene su secreto: nunca va al repo (la de prueba se llama distinto).
+instalador/paquete/
+instalador/salida/
+carga-nodo*.json

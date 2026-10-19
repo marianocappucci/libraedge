@@ -14,29 +14,38 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RaizPostgres,
-    [Parameter(Mandatory = $true)][string]$Password,
-    [string]$Base = "restolibra",
+    # La clave del superusuario se lee de su archivo (SYSTEM y Administradores):
+    # antes iba como -Password, o sea en texto plano en la definicion de la tarea.
+    [Parameter(Mandatory = $true)][string]$ArchivoClave,
+    # Las bases del producto (texto con comas: `-File` no pasa arreglos) y la del
+    # outbox, que es la que se cuenta para verificar.
+    [Parameter(Mandatory = $true)][string]$Bases,
+    [Parameter(Mandatory = $true)][string]$BaseNodo,
     [int]$Puerto = 55432,
     [string]$Destino = (Join-Path $env:ProgramData "LibraEdge\respaldos"),
     # Segunda copia, en otro dispositivo. Vacío = no se hace, y se avisa.
     [string]$DestinoSecundario = "",
-    # Cuántos se conservan. A un respaldo por hora, 48 son dos días.
+    # Cuántos se conservan POR BASE. A un respaldo por hora, 48 son dos días.
     [int]$Conservar = 48
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "comun.ps1")
 
 $pgdump    = Join-Path $RaizPostgres "bin\pg_dump.exe"
 $pgrestore = Join-Path $RaizPostgres "bin\pg_restore.exe"
 $psql      = Join-Path $RaizPostgres "bin\psql.exe"
 foreach ($exe in @($pgdump, $pgrestore, $psql)) {
-    if (-not (Test-Path $exe)) { throw "No está $exe." }
+    if (-not (Test-Path $exe)) { throw "No esta $exe." }
 }
+if (-not (Test-Path $ArchivoClave)) { throw "No esta la clave de PostgreSQL en $ArchivoClave." }
+$listaBases = @($Bases -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($listaBases -notcontains $BaseNodo) { throw "La base del nodo ($BaseNodo) no esta entre las bases." }
 
-New-Item -ItemType Directory -Force -Path $Destino | Out-Null
-$env:PGPASSWORD = $Password
-$sello   = Get-Date -Format "yyyyMMdd-HHmmss"
-$archivo = Join-Path $Destino "nodo-$sello.dump"
+# Los volcados tienen la base entera (usuarios con sus hashes incluidos).
+Proteger-Carpeta -Ruta $Destino
+$env:PGPASSWORD = ([System.IO.File]::ReadAllText($ArchivoClave)).Trim()
+$sello = Get-Date -Format "yyyyMMdd-HHmmss"
 
 # El `$ErrorActionPreference` baja para todo lo que hable con los binarios de
 # PostgreSQL: con `Stop`, lo que un programa nativo escribe en stderr se
@@ -45,88 +54,104 @@ $archivo = Join-Path $Destino "nodo-$sello.dump"
 $preferenciaPrevia = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 
-function Consultar($sql, $base = $Base) {
+function Consultar($sql, $base) {
     (& $psql -h 127.0.0.1 -p $Puerto -U postgres -d $base -tAc $sql 2>&1 | Out-String).Trim()
 }
 
-try {
-    # --- Lo que hay ANTES, para poder comparar contra el respaldo -----------
-    # Se miden las dos tablas que importan: la que tiene lo que el central
-    # todavía no sabe, y la de las ventas.
-    $pendientesVivo = Consultar "SELECT count(1) FROM sync_outbox WHERE status <> 'acknowledged'"
-    $ventasVivo     = Consultar "SELECT count(1) FROM sales"
-    Write-Host "En la base: $pendientesVivo operaciones sin confirmar, $ventasVivo ventas."
-
-    # --- El respaldo --------------------------------------------------------
-    & $pgdump -h 127.0.0.1 -p $Puerto -U postgres -d $Base -Fc -f $archivo
-    if ($LASTEXITCODE -ne 0) { throw "pg_dump falló con código $LASTEXITCODE" }
-    $tam = (Get-Item $archivo).Length
-    Write-Host ("Escrito: {0} ({1:N1} MB)" -f (Split-Path $archivo -Leaf), ($tam / 1MB))
-    if ($tam -lt 1024) { throw "El respaldo pesa $tam bytes: no puede estar bien." }
-
-    # --- 🔴 LA VERIFICACIÓN: se ABRE el respaldo, no se confía en el [OK] ----
-    #
-    # `pg_dump` puede salir con 0 y dejar un archivo que no restaura. Y mirar
-    # que el archivo exista o que pese algo no distingue un respaldo bueno de
-    # uno truncado. Lo único que lo distingue es RESTAURARLO y contar.
-    #
-    # Se restaura en una base descartable de la misma instancia --el nodo no
-    # tiene otra a mano-- y se comparan los conteos contra los de arriba.
-    $verificacion = "libraedge_verificar_respaldo"
-    Consultar "DROP DATABASE IF EXISTS $verificacion" "postgres" | Out-Null
-    Consultar "CREATE DATABASE $verificacion" "postgres" | Out-Null
-    try {
-        & $pgrestore -h 127.0.0.1 -p $Puerto -U postgres -d $verificacion --no-owner --no-privileges $archivo 2>&1 |
-            Out-Null
-        # pg_restore avisa por cosas inofensivas (owners que no existen), así
-        # que su código de salida no alcanza: lo que decide son los conteos.
-        $pendientesCopia = Consultar "SELECT count(1) FROM sync_outbox WHERE status <> 'acknowledged'" $verificacion
-        $ventasCopia     = Consultar "SELECT count(1) FROM sales" $verificacion
-        Write-Host "En el respaldo: $pendientesCopia sin confirmar, $ventasCopia ventas."
-
-        if ($pendientesCopia -ne $pendientesVivo -or $ventasCopia -ne $ventasVivo) {
-            throw ("El respaldo NO coincide con la base: sin confirmar " +
-                   "$pendientesCopia contra $pendientesVivo, ventas " +
-                   "$ventasCopia contra $ventasVivo. Se conserva el archivo " +
-                   "para mirarlo, pero no cuenta como respaldo.")
-        }
-        Write-Host "Verificado: el respaldo restaura y los conteos coinciden."
-    } finally {
-        Consultar "DROP DATABASE IF EXISTS $verificacion" "postgres" | Out-Null
+# Lo que se compara entre la base viva y el respaldo restaurado. En la base del
+# nodo, lo que importa: lo que el central todavia no sabe (`sync_outbox` sin
+# confirmar) y las ventas, si la tabla existe. En todas, cuantas tablas hay.
+function Medir($base, $esNodo) {
+    $medida = [ordered]@{
+        tablas = Consultar "SELECT count(1) FROM information_schema.tables WHERE table_schema = 'public'" $base
     }
-
-    # --- La segunda copia ---------------------------------------------------
-    if ($DestinoSecundario) {
-        if (Test-Path $DestinoSecundario) {
-            Copy-Item $archivo -Destination $DestinoSecundario -Force
-            $copia = Join-Path $DestinoSecundario (Split-Path $archivo -Leaf)
-            # Se compara el hash: una copia a un pendrive que se desconectó a
-            # mitad deja un archivo del tamaño correcto y el contenido cortado.
-            $a = (Get-FileHash $archivo -Algorithm SHA256).Hash
-            $b = (Get-FileHash $copia   -Algorithm SHA256).Hash
-            if ($a -ne $b) { throw "La copia en $DestinoSecundario no coincide con el original." }
-            Write-Host "Segunda copia en $DestinoSecundario, con el mismo SHA256."
-        } else {
-            # ${...} y no $...: PowerShell lee `$Variable:` como una variable con
-            # ámbito --la forma de $env:RUTA-- y el parser lo rechaza.
-            Write-Warning ("No existe ${DestinoSecundario}: la segunda copia NO se hizo. " +
-                           "Si es un pendrive, está desconectado.")
+    if ($esNodo) {
+        $medida.sin_confirmar = Consultar "SELECT count(1) FROM sync_outbox WHERE status <> 'acknowledged'" $base
+        if ((Consultar "SELECT to_regclass('public.sales') IS NOT NULL" $base) -eq "t") {
+            $medida.ventas = Consultar "SELECT count(1) FROM sales" $base
         }
-    } else {
+    }
+    return $medida
+}
+
+function Texto($medida) { ($medida.Keys | ForEach-Object { "$_=$($medida[$_])" }) -join ", " }
+
+$fallos = 0
+try {
+    foreach ($base in $listaBases) {
+        $esNodo  = ($base -eq $BaseNodo)
+        $archivo = Join-Path $Destino "nodo-$base-$sello.dump"
+        try {
+            $vivo = Medir $base $esNodo
+            Write-Host "[$base] en la base: $(Texto $vivo)."
+
+            & $pgdump -h 127.0.0.1 -p $Puerto -U postgres -d $base -Fc -f $archivo
+            if ($LASTEXITCODE -ne 0) { throw "pg_dump fallo con codigo $LASTEXITCODE" }
+            $tam = (Get-Item $archivo).Length
+            Write-Host ("[{0}] escrito: {1} ({2:N1} MB)" -f $base, (Split-Path $archivo -Leaf), ($tam / 1MB))
+            if ($tam -lt 1024) { throw "El respaldo pesa $tam bytes: no puede estar bien." }
+
+            # --- LA VERIFICACION: se ABRE el respaldo, no se confia en el [OK] --
+            # `pg_dump` puede salir con 0 y dejar un archivo que no restaura. Lo
+            # unico que lo distingue de uno bueno es RESTAURARLO y contar. Se
+            # restaura en una base descartable de la misma instancia.
+            # Con el PID: la tarea de cada hora y una corrida a mano al mismo tiempo
+            # usaban la misma base y una la borraba mientras la otra la media
+            # (medido en la VM, 2026-10-19).
+            $verificacion = "libraedge_verificar_respaldo_$PID"
+            Consultar "DROP DATABASE IF EXISTS $verificacion" "postgres" | Out-Null
+            Consultar "CREATE DATABASE $verificacion" "postgres" | Out-Null
+            try {
+                & $pgrestore -h 127.0.0.1 -p $Puerto -U postgres -d $verificacion --no-owner --no-privileges $archivo 2>&1 |
+                    Out-Null
+                # pg_restore avisa por cosas inofensivas (owners que no existen), asi
+                # que su codigo de salida no alcanza: lo que decide son las medidas.
+                $copia = Medir $verificacion $esNodo
+                Write-Host "[$base] en el respaldo: $(Texto $copia)."
+                if ((Texto $copia) -ne (Texto $vivo)) {
+                    throw ("El respaldo NO coincide con la base ($(Texto $copia) contra " +
+                           "$(Texto $vivo)). Se conserva el archivo para mirarlo, pero no cuenta.")
+                }
+                Write-Host "[$base] verificado: el respaldo restaura y las medidas coinciden."
+            } finally {
+                Consultar "DROP DATABASE IF EXISTS $verificacion" "postgres" | Out-Null
+            }
+
+            # --- La segunda copia ---------------------------------------------
+            if ($DestinoSecundario) {
+                if (Test-Path $DestinoSecundario) {
+                    Copy-Item $archivo -Destination $DestinoSecundario -Force
+                    $copiaSecundaria = Join-Path $DestinoSecundario (Split-Path $archivo -Leaf)
+                    # Una copia a un pendrive que se desconecto a mitad deja un
+                    # archivo del tamano correcto y el contenido cortado.
+                    $a = (Get-FileHash $archivo -Algorithm SHA256).Hash
+                    $b = (Get-FileHash $copiaSecundaria -Algorithm SHA256).Hash
+                    if ($a -ne $b) { throw "La copia en $DestinoSecundario no coincide con el original." }
+                    Write-Host "[$base] segunda copia en $DestinoSecundario, con el mismo SHA256."
+                } else {
+                    Write-Warning ("No existe ${DestinoSecundario}: la segunda copia NO se hizo. " +
+                                   "Si es un pendrive, esta desconectado.")
+                }
+            }
+
+            # --- Rotacion: DESPUES de verificar el nuevo --------------------------
+            $viejos = Get-ChildItem $Destino -Filter "nodo-$base-*.dump" |
+                      Sort-Object LastWriteTime -Descending | Select-Object -Skip $Conservar
+            foreach ($v in $viejos) { Remove-Item $v.FullName -Force }
+            Write-Host ("[{0}] quedan {1} respaldos en {2}." -f $base,
+                @(Get-ChildItem $Destino -Filter "nodo-$base-*.dump").Count, $Destino)
+        } catch {
+            # Una base que falla no frena a las otras, pero el script sale con 1.
+            Write-Warning "[$base] $($_.Exception.Message)"
+            $fallos++
+        }
+    }
+    if (-not $DestinoSecundario) {
         Write-Warning ("Sin -DestinoSecundario: el respaldo queda en el MISMO disco " +
                        "que la base. Protege de una base corrupta, no de un disco roto.")
     }
-
-    # --- Rotación -----------------------------------------------------------
-    # Se borran DESPUÉS de verificar el nuevo: si el de hoy no sirviera, no se
-    # tiraron los que sí.
-    $viejos = Get-ChildItem $Destino -Filter "nodo-*.dump" |
-              Sort-Object LastWriteTime -Descending | Select-Object -Skip $Conservar
-    foreach ($v in $viejos) { Remove-Item $v.FullName -Force }
-    if ($viejos) { Write-Host ("Rotación: {0} respaldos viejos borrados." -f $viejos.Count) }
-    Write-Host ("Quedan {0} respaldos en $Destino." -f
-        (Get-ChildItem $Destino -Filter "nodo-*.dump").Count)
 } finally {
     $ErrorActionPreference = $preferenciaPrevia
     $env:PGPASSWORD = $null
 }
+if ($fallos) { exit 1 }
