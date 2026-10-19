@@ -126,6 +126,12 @@ def test_el_paquete_lleva_los_modulos_sueltos_de_la_raiz_del_producto():
     assert "ls-tree --name-only HEAD" in script and '"${sueltos[@]}"' in script
 
 
+def test_dos_respaldos_a_la_vez_no_comparten_la_base_de_verificacion():
+    """La tarea de cada hora y una corrida a mano se pisaban la base descartable (VM, 2026-10-19)."""
+    script = (CARPETA / "respaldo.ps1").read_text(encoding="utf-8")
+    assert '$verificacion = "libraedge_verificar_respaldo_$PID"' in script
+
+
 def test_los_textos_de_los_scripts_son_ascii():
     """Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI e ISCC un .iss tambien: un acento en un texto sale
     roto y un emoji puede cerrar la cadena (paso el 2026-08-30). En los comentarios no importa."""

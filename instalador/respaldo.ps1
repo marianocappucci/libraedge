@@ -95,7 +95,10 @@ try {
             # `pg_dump` puede salir con 0 y dejar un archivo que no restaura. Lo
             # unico que lo distingue de uno bueno es RESTAURARLO y contar. Se
             # restaura en una base descartable de la misma instancia.
-            $verificacion = "libraedge_verificar_respaldo"
+            # Con el PID: la tarea de cada hora y una corrida a mano al mismo tiempo
+            # usaban la misma base y una la borraba mientras la otra la media
+            # (medido en la VM, 2026-10-19).
+            $verificacion = "libraedge_verificar_respaldo_$PID"
             Consultar "DROP DATABASE IF EXISTS $verificacion" "postgres" | Out-Null
             Consultar "CREATE DATABASE $verificacion" "postgres" | Out-Null
             try {
