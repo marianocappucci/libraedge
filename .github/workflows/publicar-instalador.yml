@@ -1,0 +1,196 @@
+# Compila el instalador del nodo de cada producto, lo PRUEBA en Windows y lo
+# publica en el Release del tag (ADR-010).
+#
+# - Con un tag vX.Y.Z: arma, prueba y publica los tres instaladores en el
+#   Release de ese tag, con nombres fijos (libraedge-nodo-<producto>.exe), asi
+#   el link de librasuite.com.ar y el de la pantalla del central no cambian:
+#   https://github.com/marianocappucci/libraedge/releases/latest/download/libraedge-nodo-<producto>.exe
+# - A mano (workflow_dispatch): arma y prueba; publica solo si se pide y se
+#   corre sobre un tag.
+#
+# El instalador no lleva secretos: el del nodo viaja en la carga
+# (carga-nodo.json), que emite el central. Por eso puede ser publico.
+#
+# La prueba es la de PROBAR_EN_VM.md (V4 a V7) sobre el runner de Windows: sin
+# /CARGA tiene que salir con 1; con la carga de prueba (un central que no
+# existe), instalar con 0, verificar_nodo.ps1 -SinCentral con 0 y ningun
+# secreto en los logs. Si algo falla, no se publica nada.
+name: Publicar instalador
+
+on:
+  push:
+    tags: ["v*"]
+  # Un PR que toca el instalador se prueba en Windows (sin publicar): la VM de
+  # 2026-10-19 encontro seis bugs que los tests de Linux no veian.
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "instalador/**"
+      - "libraedge/instalador.py"
+      - ".github/workflows/publicar-instalador.yml"
+  workflow_dispatch:
+    inputs:
+      ref_producto:
+        description: "Rama o tag de los productos que entra en el instalador"
+        default: main
+      publicar:
+        description: "Publicar en el Release del tag (solo si se corre sobre un tag)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publicar-instalador-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Lo que esta en produccion: los clientes corren main.
+  REF_PRODUCTO: ${{ inputs.ref_producto || 'main' }}
+
+jobs:
+  paquete:
+    name: paquete ${{ matrix.producto }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        producto: [restolibra, ventalibra, contalibra]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: marianocappucci/${{ matrix.producto }}
+          ref: ${{ env.REF_PRODUCTO }}
+          path: _producto
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # PostgreSQL, Python embebido, NSSM y VC++: lo mismo para los tres.
+      - uses: actions/cache@v4
+        with:
+          path: instalador/paquete/.descargas
+          key: descargas-${{ hashFiles('instalador/armar_paquete.sh') }}
+      - name: Armar el paquete
+        run: instalador/armar_paquete.sh ${{ matrix.producto }} _producto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paquete-${{ matrix.producto }}
+          path: |
+            instalador/paquete
+            !instalador/paquete/.descargas
+          retention-days: 3
+
+  compilar:
+    name: compilar y probar ${{ matrix.producto }}
+    needs: paquete
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        producto: [restolibra, ventalibra, contalibra]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: paquete-${{ matrix.producto }}
+          path: instalador/paquete
+      - name: Version
+        id: version
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+      - name: Compilar (V3)
+        working-directory: instalador
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DProducto=${{ matrix.producto }} /DVersion=${{ steps.version.outputs.version }} nodo.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem salida
+      - name: Sin carga no instala (V4)
+        run: |
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:RUNNER_TEMP\inno-sin-carga.log" -Wait -PassThru
+          if ($p.ExitCode -ne 1) { throw "Sin /CARGA tenia que salir con 1 y salio con $($p.ExitCode)" }
+          if (Test-Path "$env:ProgramFiles\LibraEdge\nodo.env") { throw "Sin /CARGA no tenia que instalar nada" }
+      - name: Instalar en silencio (V5)
+        run: |
+          $c = Get-Content instalador\carga-de-prueba.json -Raw | ConvertFrom-Json
+          $c.producto = "${{ matrix.producto }}"
+          $carga = "$env:RUNNER_TEMP\carga.json"
+          $c | ConvertTo-Json -Depth 5 | Set-Content $carga -Encoding ASCII
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CARGA=$carga","/LOG=$env:RUNNER_TEMP\inno.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 80 -ErrorAction SilentlyContinue
+            Get-Content "$env:RUNNER_TEMP\inno.log" -Tail 40
+            throw "La instalacion salio con $($p.ExitCode)"
+          }
+      - name: Verificar (V6)
+        run: |
+          Start-Sleep 90
+          & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content "$env:ProgramFiles\LibraEdge\logs\LibraEdgeProducto.log" -Tail 60 -ErrorAction SilentlyContinue
+            exit $LASTEXITCODE
+          }
+      - name: Ningun secreto en los logs (V7)
+        run: |
+          $logs = @(Get-ChildItem "$env:RUNNER_TEMP\*.log").FullName + (Get-ChildItem "$env:ProgramFiles\LibraEdge\logs\*.log").FullName
+          $n = (Select-String -Path $logs -SimpleMatch "prueba-prueba-prueba-prueba-prueba").Count
+          if ($n -ne 0) { throw "El secreto de la carga aparece $n veces en los logs" }
+      - name: Logs
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force logs | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\*.log", "$env:ProgramFiles\LibraEdge\logs\*.log" logs -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.producto }}
+          path: logs
+          retention-days: 7
+      - name: Nombre fijo
+        run: |
+          New-Item -ItemType Directory -Force publicar | Out-Null
+          Copy-Item (Get-ChildItem instalador\salida\*.exe).FullName "publicar\libraedge-nodo-${{ matrix.producto }}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instalador-${{ matrix.producto }}
+          path: publicar
+          retention-days: 7
+
+  publicar:
+    name: publicar en el Release
+    needs: compilar
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.publicar)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: instalador-*
+          merge-multiple: true
+          path: publicar
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd publicar
+          sha256sum libraedge-nodo-*.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits), uno por producto. Cada uno se instala con la carga del nodo (carga-nodo.json) que emite el central del producto. Antes de publicarse se probaron en un runner Windows: instalan en silencio y pasan verificar_nodo.ps1. Los productos entran desde ${REF_PRODUCTO}."
+          fi
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe SHA256SUMS.txt
