@@ -3,10 +3,16 @@
     python instalador/armar_icono.py <ruta a chrome o chromium>
 
 De 16 a 32 px va la PC sola (`marca/libraedge-favicon.svg`): a ese tamano la marca completa se
-empasta. De 40 en adelante, la marca completa (`marca/libraedge.svg`). Cada tamano es un PNG con
-transparencia dentro del ICO, que Windows lee desde Vista. Chrome rasteriza el SVG para no sumar
-una dependencia de imagenes solo para esto; el `.ico` se commitea, asi que el instalador no
-necesita nada. Si cambia la marca en libra-ui, se copian los dos SVG a `marca/` y se vuelve a correr.
+empasta. De 40 en adelante, la marca completa (`marca/libraedge.svg`).
+
+De 16 a 48 cada entrada es un BMP de 32 bits (BGRA, con la mascara AND), y de 64 en adelante un PNG.
+Explorer lee los dos, pero hay lectores viejos (System.Drawing.Icon, medido en la VM Windows 10 el
+2026-10-19) que dibujan basura con un PNG chico: los tamanos que se ven en listas y barras van en
+el formato que lee cualquiera, y los grandes en PNG para que el archivo no pese de mas.
+
+Chrome rasteriza el SVG para no sumar una dependencia de imagenes solo para esto, y el PNG se
+decodifica con la biblioteca estandar; el `.ico` se commitea, asi que el instalador no necesita
+nada. Si cambia la marca en libra-ui, se copian los dos SVG a `marca/` y se vuelve a correr.
 """
 
 import pathlib
@@ -14,11 +20,14 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 AQUI = pathlib.Path(__file__).resolve().parent
 CHICOS = (16, 20, 24, 32)
 GRANDES = (40, 48, 64, 128, 256)
 TAMANOS = CHICOS + GRANDES
+#: Hasta este lado la entrada va en BMP; arriba, en PNG.
+MAX_BMP = 48
 
 
 def rasterizar(chrome: str, svg: pathlib.Path, lado: int, destino: pathlib.Path) -> bytes:
@@ -47,14 +56,68 @@ def rasterizar(chrome: str, svg: pathlib.Path, lado: int, destino: pathlib.Path)
     return destino.read_bytes()
 
 
+def rgba_de_png(png: bytes) -> tuple[int, int, bytes]:
+    """(ancho, alto, pixeles RGBA de arriba abajo) de un PNG RGBA de 8 bits sin entrelazar, como los de Chrome."""
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, ancho, alto = 8, b"", 0, 0
+    while pos < len(png):
+        largo, tipo = struct.unpack(">I4s", png[pos : pos + 8])
+        cuerpo = png[pos + 8 : pos + 8 + largo]
+        if tipo == b"IHDR":
+            ancho, alto, bits, color, _, _, entrelazado = struct.unpack(">IIBBBBB", cuerpo)
+            assert (bits, color, entrelazado) == (8, 6, 0), "se espera RGBA de 8 bits sin entrelazar"
+        elif tipo == b"IDAT":
+            idat += cuerpo
+        pos += 12 + largo
+    crudo, paso, filas, previa = zlib.decompress(idat), ancho * 4, [], bytearray(ancho * 4)
+    for y in range(alto):
+        filtro, fila = crudo[y * (paso + 1)], bytearray(crudo[y * (paso + 1) + 1 : (y + 1) * (paso + 1)])
+        for i in range(paso):
+            a = fila[i - 4] if i >= 4 else 0
+            b = previa[i]
+            c = previa[i - 4] if i >= 4 else 0
+            if filtro == 1:
+                fila[i] = (fila[i] + a) & 0xFF
+            elif filtro == 2:
+                fila[i] = (fila[i] + b) & 0xFF
+            elif filtro == 3:
+                fila[i] = (fila[i] + (a + b) // 2) & 0xFF
+            elif filtro == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                fila[i] = (fila[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
+        filas.append(bytes(fila))
+        previa = fila
+    return ancho, alto, b"".join(filas)
+
+
+def bmp_de_icono(png: bytes) -> bytes:
+    """La entrada BMP de un ICO: BITMAPINFOHEADER con el alto doble, BGRA de abajo arriba y la mascara AND."""
+    ancho, alto, rgba = rgba_de_png(png)
+    cabecera = struct.pack("<IiiHHIIiiII", 40, ancho, alto * 2, 1, 32, 0, ancho * alto * 4, 0, 0, 0, 0)
+    pixeles, mascara = b"", b""
+    paso_mascara = ((ancho + 31) // 32) * 4
+    for y in reversed(range(alto)):
+        fila = rgba[y * ancho * 4 : (y + 1) * ancho * 4]
+        pixeles += b"".join(bytes((fila[i + 2], fila[i + 1], fila[i], fila[i + 3])) for i in range(0, len(fila), 4))
+        bits = 0
+        for x in range(ancho):
+            bits = (bits << 1) | (1 if fila[x * 4 + 3] == 0 else 0)
+        mascara += (bits << (paso_mascara * 8 - ancho)).to_bytes(paso_mascara, "big")
+    return cabecera + pixeles + mascara
+
+
 def ico(pngs: dict[int, bytes]) -> bytes:
     cabecera = struct.pack("<HHH", 0, 1, len(pngs))
     entradas, datos = b"", b""
     desplazamiento = 6 + 16 * len(pngs)
     for lado, png in sorted(pngs.items()):
+        entrada = bmp_de_icono(png) if lado <= MAX_BMP else png
         # En el directorio del ICO, 256 se escribe 0.
-        entradas += struct.pack("<BBBBHHII", lado % 256, lado % 256, 0, 0, 1, 32, len(png), desplazamiento + len(datos))
-        datos += png
+        entradas += struct.pack(
+            "<BBBBHHII", lado % 256, lado % 256, 0, 0, 1, 32, len(entrada), desplazamiento + len(datos)
+        )
+        datos += entrada
     return cabecera + entradas + datos
 
 
