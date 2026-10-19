@@ -48,6 +48,8 @@ name = "libraedge"
 # 0.9.x -> 0.10.0 (2026-10-19, ADR-010): el instalador del nodo para todos los
 # productos (`libraedge.instalador`) y `registrar --carga`. Minor: suma API y una
 # opcion al CLI, sin cambiar lo que ya habia.
+# 0.10.x -> 0.11.0 (2026-10-19, ADR-011): `create_nodos_router`, la pantalla «Sucursal sin internet» del central
+# (alta del nodo con la carga como adjunto, carga nueva y baja). Minor: suma API, no cambia nada de lo que habia.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
