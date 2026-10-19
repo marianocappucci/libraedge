@@ -397,6 +397,34 @@ class NodeRepository:
         self._conn.commit()
         return self.get_operation(operation_id)
 
+    def listar_en_revision(self) -> tuple[OutboxOperation, ...]:
+        """Lo que el central rechazo y espera a alguien, con su `last_error`."""
+        filas = self._conn.execute(
+            "SELECT operation_id FROM sync_outbox WHERE status = ? ORDER BY node_id, sequence",
+            (str(SyncOperationStatus.MANUAL_REVIEW),),
+        ).fetchall()
+        return tuple(self.get_operation(fila[0]) for fila in filas)
+
+    def reenviar_operacion(self, operation_id: str) -> OutboxOperation | None:
+        """Vuelve a poner en cola una operacion en revision manual.
+
+        Es el paso del nodo despues de resolverla en el central
+        (`libraedge.sync.revision.reintentar`): al reenviarla, el central
+        contesta `duplicate` y el nodo la confirma. Solo toca operaciones en
+        `manual_review`; levanta `LookupError` si no hay ninguna con ese id en
+        ese estado.
+        """
+        cursor = self._escribir(
+            "UPDATE sync_outbox SET status = ?, next_attempt_at = NULL"
+            " WHERE operation_id = ? AND status = ?",
+            (str(SyncOperationStatus.PENDING), operation_id,
+             str(SyncOperationStatus.MANUAL_REVIEW)),
+        )
+        self._conn.commit()
+        if cursor is None or cursor.rowcount == 0:
+            raise LookupError(f"no hay ninguna operacion {operation_id!r} en revision en este nodo")
+        return self.get_operation(operation_id)
+
     def acknowledge_operation(self, operation_id: str, acknowledged_at: str) -> OutboxOperation | None:
         self._escribir(
             "UPDATE sync_outbox SET status = ?, acknowledged_at = ? WHERE operation_id = ?",

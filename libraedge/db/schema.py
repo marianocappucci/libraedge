@@ -80,3 +80,25 @@ def init_schema(conn) -> None:
         # no tiene forma de saber que una sucursal dejó de sincronizar — y un
         # nodo callado se ve exactamente igual que uno al día.
         conn.execute("ALTER TABLE node_identity ADD COLUMN last_seen_at TEXT")
+
+    # Desde v0.7 el central guarda **la operacion entera** de lo que no pudo
+    # aplicar, para poder revisarla, reintentarla o descartarla
+    # (`libraedge.sync.revision`). Antes un rechazo no dejaba nada de este lado:
+    # la unica copia estaba en el outbox del nodo, en la PC del local.
+    columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(sync_inbox)").fetchall()}
+    for columna, tipo in _COLUMNAS_DE_REVISION:
+        if columna not in columnas:
+            conn.execute(f"ALTER TABLE sync_inbox ADD COLUMN {columna} {tipo}")
+
+
+#: Las columnas de revision manual de `sync_inbox`. Todas nulables: las filas
+#: `applied` de antes de v0.7 no las tienen y no les hacen falta.
+_COLUMNAS_DE_REVISION = (
+    ("node_id", "TEXT"),
+    ("operation_type", "TEXT"),
+    ("schema_version", "INTEGER"),
+    ("operation_json", "TEXT"),
+    ("resuelto_por", "TEXT"),
+    ("resuelto_at", "TEXT"),
+    ("resolucion", "TEXT"),
+)

@@ -79,3 +79,54 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
   sync; `bandeja_windows` lo muestra como icono de bandeja en Windows.
 - Consecuencias: el estado de sync es visible para un no técnico; el diagnóstico
   no depende de leer logs.
+
+## ADR-007 — Despacho por tipo y versión, revisión manual en el central y control de esquema
+
+- Estado: aceptada
+- Fecha: 2026-10-19
+- Contexto: LibraEdge pasa de un piloto (RestoLibra) a toda la suite (fase 1:
+  RestoLibra, VentaLibra y ContaLibra). Con un solo manejador y una sola versión
+  por router, cada manejador filtraba con `if operation_type != ...: return`, y
+  ese `return` sin error hacía que **una operación de un tipo desconocido quedara
+  `applied` y el nodo la confirmara**: se perdía en silencio. Además, una
+  restricción violada por el manejador salía `duplicate` (otra pérdida
+  silenciosa), lo rechazado no dejaba rastro en el central, no había control de
+  versión entre la base del nodo y la del central (si el central migraba,
+  `MirrorApplier` fallaba por una columna nueva) y el espejo sólo admitía clave
+  primaria simple (VentaLibra tiene `party_roles (party_id, role)`).
+- Decisión:
+  1. **`Despachador`** (`sync/despacho.py`): el central registra un manejador por
+     `(operation_type, schema_version)`, con firma `(conexion, operacion)`; varias
+     versiones de un tipo conviven. Lo que no tiene manejador **no se aplica**.
+     `create_sync_router(..., despachador=)` y `SyncReceiver(despachador=)`; el
+     `operation_handler` único se conserva tal cual (excluyente con el despachador).
+  2. **Revisión manual en el central:** lo que no se pudo aplicar (sin manejador,
+     versión distinta, `KeyError`/`TypeError`/`ValueError` o `IntegrityError` del
+     manejador) se guarda **entero** en `sync_inbox` con estado `manual_review` y el
+     motivo; el nodo recibe `rejected` y lo pasa a revisión de su lado. Un reenvío
+     de algo en revisión o descartado contesta `rejected` con el motivo, sin
+     reprocesar. `sync/revision.py` (`listar_en_revision`, `reintentar`,
+     `descartar`, con quién y motivo) y el CLI `libraedge-central revision`; del
+     lado del nodo, `libraedge-nodo revision listar|reenviar`. Nada se borra: lo
+     descartado queda como constancia.
+  3. **Versión del esquema:** texto opaco comparado por igualdad. El producto la
+     declara en el router con `version_esquema=` (texto o `(conexion) -> str`);
+     lo normal es `version_de_alembic`, que lee todas las tablas `alembic_version*`
+     y da lo mismo en el nodo y en el central si están migrados igual. El nodo la
+     manda en `X-LibraEdge-Esquema` (`LIBRAEDGE_VERSION_ESQUEMA`: `alembic` por
+     defecto, `modulo:funcion` o `ninguna`). Si difiere o falta, push y pull
+     contestan **409** con la esperada; el nodo lo lee como `EsquemaIncompatible`
+     y la subida lo trata como reintento (las operaciones esperan en el outbox).
+     Un central sin versión declarada no controla nada.
+  4. **Clave compuesta en el espejo:** `MirrorApplier`, `instalar_trigger` y
+     `sembrar` aceptan varias columnas (`("party_id", "role")`, o
+     `tabla:party_id+role` en `LIBRAEDGE_TABLAS_ESPEJO`); el `row_id` de una clave
+     compuesta es un arreglo JSON de textos, igual en el trigger y en `sembrar`.
+- Consecuencias: ningún tipo ni versión desconocidos se pierden en silencio; el
+  central tiene con qué revisar. `sync_inbox` suma columnas nulables
+  (`node_id`, `operation_type`, `schema_version`, `operation_json`,
+  `resuelto_por`, `resuelto_at`, `resolucion`) que agrega `init_schema()` con
+  `ALTER`. Mientras un producto siga con el `operation_handler` único, el agujero
+  del tipo desconocido sigue abierto **en ese producto**: se cierra al pasar al
+  despachador. Actualizar el central antes que los nodos deja a los nodos sin
+  sincronizar (409) hasta que se actualicen, a propósito.

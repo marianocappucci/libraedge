@@ -56,6 +56,14 @@ Toda la configuración viene del entorno, que es lo que el instalador escribe un
 
 **El estado se escribe de forma atómica** (temporal + `os.replace`): lo lee una UI que refresca sola, y un write directo trunca el archivo antes de escribir — si algo falla en el medio, el estado anterior ya no está.
 
+## Despacho, revisión manual y versión del esquema (v0.7, ADR-007)
+
+El central registra un manejador por `(operation_type, schema_version)` con un `Despachador` y lo pasa a `create_sync_router(get_connection, despachador=...)`. Lo que no tiene manejador, o lo que el manejador rechaza, **no se aplica**: queda entero en `sync_inbox` como `manual_review` y el nodo recibe `rejected`. Se revisa con `libraedge-central revision listar|reintentar|descartar` (con `--por` y, al descartar, `--motivo`); después de reintentarla, `libraedge-nodo revision reenviar <id>` la confirma en el nodo.
+
+Con `version_esquema=version_de_alembic` en el router, un nodo cuyo esquema no es el del central recibe **409** en push y pull con la versión que se espera, en vez de romper el espejo con una columna que no tiene. Las operaciones esperan en el outbox hasta que el nodo se actualice.
+
+El espejo admite clave primaria compuesta: `LIBRAEDGE_TABLAS_ESPEJO=party_roles:party_id+role`.
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.

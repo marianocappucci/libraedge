@@ -37,6 +37,11 @@ name = "libraedge"
 # 0.5.0 -> 0.6.0 (2026-08-30): la ventana de bandeja. La decision de que
 # mostrar esta en bandeja.py y probada; el caparazon de Windows no se puede
 # ejecutar en este entorno y esta marcado como tal.
+# 0.6.x -> 0.7.0 (2026-10-19, ADR-007): despacho por (operation_type,
+# schema_version), revision manual en el central (`libraedge-central`), 409 si
+# el esquema del nodo difiere del central y clave compuesta en el espejo. Minor:
+# un tipo desconocido deja de quedar `applied` y una restriccion violada por el
+# manejador deja de salir `duplicate`; `sync_inbox` suma columnas.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
@@ -102,6 +107,8 @@ bandeja = ["pystray>=0.19", "Pillow>=10"]
 # una biblioteca que alguien tenia que invocar, y nadie lo hacia.
 [project.scripts]
 libraedge-nodo = "libraedge.cli:main"
+# Las herramientas del central (revision manual de operaciones, desde v0.7).
+libraedge-central = "libraedge.central:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
