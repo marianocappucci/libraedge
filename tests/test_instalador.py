@@ -101,6 +101,31 @@ def test_el_iss_copia_todos_los_scripts():
     assert 'Source: "..\\libraedge\\instalador.py"' in iss
 
 
+def test_ninguna_linea_del_codigo_del_iss_empieza_con_corchete():
+    """Inno toma una linea que empieza con «[» como seccion nueva, aunque este dentro de un comentario de [Code]:
+    ISCC cortaba con «Invalid section tag» (medido en la VM, 2026-10-19)."""
+    lineas = (CARPETA / "nodo.iss").read_text(encoding="utf-8").splitlines()
+    inicio = lineas.index("[Code]")
+    malas = [f"{i + 1}: {linea}" for i, linea in enumerate(lineas[inicio + 1:], start=inicio + 1)
+             if linea.lstrip().startswith("[")]
+    assert malas == []
+
+
+def test_la_actualizacion_para_postgres_antes_de_copiar():
+    """Sus binarios se reemplazan y el RestartManager no cierra un servicio: en silencio era Abort (VM, 2026-10-19)."""
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    prepara = iss[iss.index("function PrepareToInstall"):]
+    prepara = prepara[:prepara.index("\nend;")]
+    assert "stop LibraEdgePostgres" in prepara
+    assert "CloseApplications=force" in iss
+
+
+def test_el_paquete_lleva_los_modulos_sueltos_de_la_raiz_del_producto():
+    """plans.py vive en la raiz de los tres productos y app/db.py lo importa (VM, 2026-10-19)."""
+    script = (CARPETA / "armar_paquete.sh").read_text(encoding="utf-8")
+    assert "ls-tree --name-only HEAD" in script and '"${sueltos[@]}"' in script
+
+
 def test_los_textos_de_los_scripts_son_ascii():
     """Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI e ISCC un .iss tambien: un acento en un texto sale
     roto y un emoji puede cerrar la cadena (paso el 2026-08-30). En los comentarios no importa."""

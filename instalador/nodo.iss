@@ -69,6 +69,9 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+; Lo que siga usando archivos del nodo despues de parar los servicios (la
+; bandeja, un python suelto) se cierra: en silencio, no poder cerrarlo es Abort.
+CloseApplications=force
 
 [Languages]
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -226,12 +229,18 @@ begin
   Result := '';
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeNodo /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeProducto /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  { PostgreSQL tambien: sus binarios se reemplazan y el RestartManager no puede
+    cerrar un servicio. En silencio eso es un Abort y la actualizacion se
+    deshace (medido en la VM, 2026-10-19). preparar_postgres.ps1 lo vuelve a
+    arrancar, e instalar.ps1 si falla antes de tocar nada. }
+  Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgePostgres /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
 end;
 
 { Todo lo que no es copiar archivos lo hace instalar.ps1, y su codigo de salida
   pasa a ser el del instalador (GetCustomSetupExitCode). Antes eran entradas de
-  [Run], cuyo codigo de salida Inno no mira: un paso fallido terminaba igual
-  con 0. }
+  la seccion Run, cuyo codigo de salida Inno no mira: un paso fallido terminaba
+  igual con 0. (Ninguna linea de [Code] puede empezar con corchete: Inno la toma
+  como una seccion nueva.) }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Parametros, Registro: String;

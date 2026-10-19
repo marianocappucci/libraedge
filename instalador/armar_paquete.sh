@@ -90,6 +90,7 @@ pth="$(ls "$destino/python"/python3*._pth)"
 # `import site` viene comentado: sin el, site-packages no entra al path (medido
 # 2026-08-30). Y `..` es la carpeta de la instalacion, donde esta `app/`: con un
 # ._pth presente, Python no agrega el directorio actual por su cuenta.
+sed -i 's/\r$//' "$pth"  # viene con CRLF: sin esto `grep -x` no ve las lineas
 sed -i 's/^#\s*import site/import site/' "$pth"
 grep -qx '\.\.' "$pth" || sed -i '1i ..' "$pth"
 grep -qx 'import site' "$pth" || { echo "No se pudo activar 'import site' en $pth" >&2; exit 1; }
@@ -103,8 +104,11 @@ uv pip install --quiet \
     --python-platform x86_64-pc-windows-msvc --python-version 3.12 \
     -r "$requisitos" "${extras[@]}"
 
-# app/, migrations/ y alembic.ini, tal como estan en HEAD (sin .venv ni basura local).
-git -C "$repo" archive --format=tar HEAD app migrations alembic.ini | tar -x -C "$destino/producto"
+# app/, migrations/, alembic.ini y los modulos sueltos de la raiz (plans.py: lo importa
+# app/db.py; sin el, la migracion del producto cae en Windows, medido 2026-10-19), tal
+# como estan en HEAD (sin .venv ni basura local).
+mapfile -t sueltos < <(git -C "$repo" ls-tree --name-only HEAD | grep '\.py$' || true)
+git -C "$repo" archive --format=tar HEAD app migrations alembic.ini "${sueltos[@]}" | tar -x -C "$destino/producto"
 git -C "$repo" rev-parse --short HEAD > "$destino/producto/REVISION"
 
 if [ "$sin_frontend" = 1 ]; then

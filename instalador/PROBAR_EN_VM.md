@@ -37,8 +37,8 @@ cd ~/proyectos/_wt/libraedge-e7
 instalador/armar_paquete.sh ventalibra ~/proyectos/_wt/ventalibra-nodo
 #   -> "Listo: .../instalador/paquete/ventalibra (... MB), revision <commit>."
 
-# Inno Setup 6.4.3 (si la URL no existe, la ultima 6.x de https://jrsoftware.org/isdl.php; hace falta 6.3 o mas).
-curl -fL -o instalador/paquete/.descargas/innosetup.exe https://files.jrsoftware.org/is/6/innosetup-6.4.3.exe
+# Inno Setup 6.7.3 (si la URL no existe, la ultima 6.x de https://jrsoftware.org/isdl.php; hace falta 6.3 o mas).
+curl -fL -o instalador/paquete/.descargas/innosetup.exe https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
 
 # Todo en un tar: guestcontrol copia un archivo grande mucho mas rapido que miles chicos.
 rm -rf ~/proyectos/_wt/vm-e7 && mkdir -p ~/proyectos/_wt/vm-e7/e7/libraedge
