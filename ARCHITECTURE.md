@@ -44,8 +44,15 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
   - `worker` (`OutboxWorker`, `SyncTransport`, `PushResult`, `ResultadoOutbox`) —
     drena el outbox hacia el servidor (push).
   - `pull` (`PullWorker`, `MirrorApplier`, `HttpPullTransport`) — trae y aplica
-    los cambios de referencia del servidor (pull).
+    los cambios de referencia del servidor (pull), con clave simple o compuesta.
   - `receiver` (`SyncReceiver`) — el lado servidor que recibe el push del nodo.
+  - `despacho` (`Despachador`, `SinManejador`) — un manejador por
+    `(operation_type, schema_version)`; lo que no tiene manejador va a revisión
+    manual, nunca a `applied` (ADR-007).
+  - `revision` (`listar_en_revision`, `reintentar`, `descartar`) — la revisión
+    manual del central; CLI `libraedge-central revision` (`central.py`).
+  - `esquema` (`version_de_alembic`, `EsquemaIncompatible`) — la versión del
+    esquema que nodo y central comparan; 409 si difiere.
   - `api` (`create_sync_app`, `create_sync_router`) — la app/router FastAPI de
     sincronización.
   - `http` (`HttpSyncTransport`) — la implementación HTTP del transporte.

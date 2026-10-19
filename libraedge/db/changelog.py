@@ -67,6 +67,33 @@ def validar_identificador(nombre: str) -> str:
     return nombre
 
 
+def columnas_de_clave(pk) -> tuple[str, ...]:
+    """La clave de una tabla como tupla de columnas validadas.
+
+    Acepta una columna (`"id"`) o varias (`("party_id", "role")`, una lista, o
+    `"party_id+role"`, la forma de `LIBRAEDGE_TABLAS_ESPEJO`).
+    """
+    if isinstance(pk, str):
+        partes = [parte.strip() for parte in pk.split("+")]
+    else:
+        partes = [str(parte).strip() for parte in pk]
+    if not partes or any(not parte for parte in partes):
+        raise ValueError(f"clave no valida: {pk!r}")
+    if len(set(partes)) != len(partes):
+        raise ValueError(f"clave con columnas repetidas: {pk!r}")
+    return tuple(validar_identificador(parte) for parte in partes)
+
+
+def row_id_de_clave(valores) -> str:
+    """El `row_id` de una fila: el valor si la clave es simple; si es compuesta,
+    un arreglo JSON de textos (`'["7", "cliente"]'`), igual al que arma el
+    trigger con `jsonb`."""
+    valores = list(valores)
+    if len(valores) == 1:
+        return str(valores[0])
+    return json.dumps([None if v is None else str(v) for v in valores])
+
+
 def cargar_payload(texto: str | None) -> dict | None:
     """Lee el payload de un cambio **sin perder precision decimal**.
 
@@ -119,15 +146,28 @@ CREATE OR REPLACE FUNCTION libraedge_registrar_cambio() RETURNS trigger AS $libr
 DECLARE
     fila jsonb;
     op text;
+    rid text;
+    partes jsonb;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         fila := to_jsonb(OLD); op := 'delete';
     ELSE
         fila := to_jsonb(NEW); op := 'upsert';
     END IF;
+    -- Clave simple: el valor. Compuesta (un argumento por columna): un arreglo
+    -- JSON de textos, el mismo que arma `row_id_de_clave()` en Python.
+    IF TG_NARGS = 1 THEN
+        rid := fila ->> TG_ARGV[0];
+    ELSE
+        partes := '[]'::jsonb;
+        FOR i IN 0 .. TG_NARGS - 1 LOOP
+            partes := partes || jsonb_build_array(fila ->> TG_ARGV[i]);
+        END LOOP;
+        rid := partes::text;
+    END IF;
     INSERT INTO sync_changelog (table_name, row_id, operation, payload_json, recorded_at)
     VALUES (
-        TG_TABLE_NAME, fila ->> TG_ARGV[0], op, fila::text,
+        TG_TABLE_NAME, rid, op, fila::text,
         to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '+00:00'
     );
     RETURN NULL;
@@ -136,20 +176,23 @@ $libraedge$ LANGUAGE plpgsql;
 """
 
 
-def instalar_trigger(conn, tabla: str, pk: str = "id") -> None:
+def instalar_trigger(conn, tabla: str, pk="id") -> None:
     """Publica `tabla` al changelog. Solo PostgreSQL, y solo en el central.
+
+    `pk` es una columna o varias (ver `columnas_de_clave`); con clave compuesta
+    el `row_id` es un arreglo JSON de los valores.
 
     Idempotente: se puede correr en cada aprovisionamiento sin duplicar el
     trigger ni los cambios que emite.
     """
     tabla = validar_identificador(tabla)
-    pk = validar_identificador(pk)
+    argumentos = ", ".join(f"'{columna}'" for columna in columnas_de_clave(pk))
     conn.execute(_FUNCION_TRIGGER)
     conn.execute(f"DROP TRIGGER IF EXISTS {tabla}{_SUFIJO_TRIGGER} ON {tabla}")
     conn.execute(
         f"CREATE TRIGGER {tabla}{_SUFIJO_TRIGGER}"
         f" AFTER INSERT OR UPDATE OR DELETE ON {tabla}"
-        f" FOR EACH ROW EXECUTE FUNCTION libraedge_registrar_cambio('{pk}')"
+        f" FOR EACH ROW EXECUTE FUNCTION libraedge_registrar_cambio({argumentos})"
     )
 
 
@@ -188,7 +231,7 @@ def desinstalar_trigger(conn, tabla: str) -> None:
     )
 
 
-def sembrar(conn, tabla: str, pk: str = "id", ahora: str | None = None) -> int:
+def sembrar(conn, tabla: str, pk="id", ahora: str | None = None) -> int:
     """Vuelca el estado actual de `tabla` al changelog, como `upsert`.
 
     **Este es el snapshot inicial, y a proposito no es un mecanismo aparte.** Un
@@ -203,17 +246,17 @@ def sembrar(conn, tabla: str, pk: str = "id", ahora: str | None = None) -> int:
     from datetime import datetime, timezone
 
     tabla = validar_identificador(tabla)
-    pk = validar_identificador(pk)
+    clave = columnas_de_clave(pk)
     ahora = ahora or datetime.now(UTC).isoformat()
 
     if _es_sqlite(conn):
         cursor = conn.execute(f"SELECT * FROM {tabla}")
         columnas = [descripcion[0] for descripcion in cursor.description]
-        filas = [
-            (str(dict(zip(columnas, fila))[pk]),
-             json.dumps(dict(zip(columnas, fila)), default=str, sort_keys=True))
-            for fila in cursor.fetchall()
-        ]
+        filas = []
+        for fila in cursor.fetchall():
+            datos = dict(zip(columnas, fila))
+            filas.append((row_id_de_clave(datos[c] for c in clave),
+                          json.dumps(datos, default=str, sort_keys=True)))
     else:
         # 🔴 **La misma via que el trigger, y no `SELECT *`, a proposito.**
         # La capa de conexion de LibraCore degrada los `NUMERIC` a `float` al
@@ -227,10 +270,16 @@ def sembrar(conn, tabla: str, pk: str = "id", ahora: str | None = None) -> int:
         # exactos: **el mismo precio escrito de dos formas segun por que camino
         # llego**, y el redondeado seria el que queda en un nodo recien
         # instalado.
+        if len(clave) == 1:
+            expresion_id = f"(to_jsonb(t) ->> '{clave[0]}')"
+        else:
+            # El mismo texto que arma el trigger: `jsonb` de un arreglo de textos.
+            expresion_id = "jsonb_build_array({})::text".format(
+                ", ".join(f"to_jsonb(t) ->> '{columna}'" for columna in clave))
         filas = [
             (fila[0], fila[1])
             for fila in conn.execute(
-                f"SELECT (to_jsonb(t) ->> '{pk}'), to_jsonb(t)::text FROM {tabla} t"
+                f"SELECT {expresion_id}, to_jsonb(t)::text FROM {tabla} t"
             ).fetchall()
         ]
 

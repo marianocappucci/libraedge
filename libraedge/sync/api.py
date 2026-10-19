@@ -11,6 +11,7 @@ Los dos se autentican igual: el secreto por nodo como ``Authorization: Bearer``.
 
 from libraedge.db.changelog import listar_cambios
 from libraedge.domain.sync import OutboxOperation
+from libraedge.sync import esquema
 from libraedge.sync.pull import serializar_cambio
 
 #: Lo que un push tiene que traer. Vive afuera de las dos fabricas para que no
@@ -38,7 +39,24 @@ def operacion_desde_payload(payload: dict) -> OutboxOperation:
         raise ValueError("invalid operation") from exc
 
 
-def create_sync_app(receiver, node_repository, changelog_conn=None):
+def _verificar_esquema(request, version_esquema, conexion, HTTPException) -> None:
+    """409 si el central declara version de esquema y la del nodo no es esa.
+
+    Va **despues** de autenticar: a quien no es un nodo no se le cuenta en que
+    version esta el central. Ver ``libraedge.sync.esquema``.
+    """
+    if version_esquema is None:
+        return
+    esperada = esquema.resolver(version_esquema, conexion)
+    if esperada is None:
+        return
+    recibida = request.headers.get(esquema.CABECERA)
+    if recibida != esperada:
+        raise HTTPException(409, detail=esquema.detalle_409(esperada, recibida))
+
+
+def create_sync_app(receiver, node_repository, changelog_conn=None,
+                    version_esquema=None):
     """Build the HTTP app around an already-configured SyncReceiver.
 
     ``node_repository`` (a ``NodeRepository`` or anything exposing
@@ -55,6 +73,10 @@ def create_sync_app(receiver, node_repository, changelog_conn=None):
     existir. Un 404 diria "este central no tiene ese endpoint" y un nodo mal
     configurado lo leeria como una version vieja; el 501 dice que el endpoint
     existe y que a este central le falta el changelog.
+
+    ``version_esquema`` (texto o ``(conexion) -> str``) prende el control de
+    version entre nodo y central; ver ``libraedge.sync.esquema``. El invocable
+    recibe la conexion del receptor.
 
     FastAPI is optional at library level; only the central deployment needs it.
     """
@@ -86,6 +108,7 @@ def create_sync_app(receiver, node_repository, changelog_conn=None):
         "ya se lo mande" cuando lo que importa es "ya lo escribio".
         """
         _autenticar(request, node_id)
+        _verificar_esquema(request, version_esquema, receiver.conn, HTTPException)
         if changelog_conn is None:
             raise HTTPException(
                 501, detail="este central no tiene changelog configurado"
@@ -104,6 +127,7 @@ def create_sync_app(receiver, node_repository, changelog_conn=None):
             raise HTTPException(422, detail={"missing": missing})
 
         _autenticar(request, payload["node_id"])
+        _verificar_esquema(request, version_esquema, receiver.conn, HTTPException)
 
         try:
             operation = operacion_desde_payload(payload)
@@ -116,7 +140,8 @@ def create_sync_app(receiver, node_repository, changelog_conn=None):
 
 
 def create_sync_router(abrir_conexion, operation_handler=None,
-                       supported_schema_version: int = 1):
+                       supported_schema_version: int = 1, *, despachador=None,
+                       version_esquema=None):
     """Las mismas dos rutas, para montar **dentro del producto** con
     ``include_router()``.
 
@@ -150,7 +175,19 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     revision manual, con el nodo reportandose en linea y sin errores. Se
     encontro al cablearlo de verdad contra el producto -- los tests que llamaban
     al handler directo no podian verlo.
+
+    ## Desde v0.7: ``despachador`` y ``version_esquema``
+
+    - ``despachador`` (un ``libraedge.sync.despacho.Despachador``) registra un
+      manejador por ``(operation_type, schema_version)``. Lo que no tiene
+      manejador va a revision manual en vez de quedar ``applied``. Es excluyente
+      con ``operation_handler``, que se conserva tal cual para quien ya lo usa.
+    - ``version_esquema`` (texto o ``(conexion) -> str``, normalmente
+      ``libraedge.sync.esquema.version_de_alembic``) hace que las dos rutas
+      contesten 409 si el esquema del nodo no es el del central.
     """
+    if despachador is not None and operation_handler is not None:
+        raise ValueError("pasar despachador u operation_handler, no los dos")
     try:
         from fastapi import APIRouter, HTTPException, Request
     except ImportError as exc:
@@ -197,6 +234,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
 
         with abrir_conexion() as conexion:
             _autenticar(conexion, payload["node_id"], secreto)
+            _verificar_esquema(request, version_esquema, conexion, HTTPException)
             # El handler de la familia toma (conexion, operacion); el receptor
             # llama con una sola. El cierre le pasa la conexion de ESTE request.
             handler = None
@@ -207,6 +245,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             receptor = SyncReceiver(
                 conexion, operation_handler=handler,
                 supported_schema_version=supported_schema_version,
+                despachador=despachador,
             )
             resultado = receptor.accept(operacion)
         return {"operation_id": operacion.operation_id,
@@ -217,6 +256,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
         secreto = _secreto(request)
         with abrir_conexion() as conexion:
             _autenticar(conexion, node_id, secreto)
+            _verificar_esquema(request, version_esquema, conexion, HTTPException)
             limit = max(1, min(limit, 1000))
             cambios = listar_cambios(conexion, desde=cursor, limit=limit)
         return {"changes": [serializar_cambio(cambio) for cambio in cambios],

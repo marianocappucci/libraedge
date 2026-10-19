@@ -19,6 +19,11 @@ archivo de entorno.
 | `LIBRAEDGE_DATABASE_URL` | La base del producto, donde vive el outbox |
 | `LIBRAEDGE_TABLAS_ESPEJO` | `tabla:pk` separadas por coma. **Es el reparto de autoridad** |
 | `LIBRAEDGE_ESTADO` | Donde escribir el estado para que lo lea una UI |
+| `LIBRAEDGE_VERSION_ESQUEMA` | Opcional: `alembic` (default), `modulo:funcion` o `ninguna` |
+
+Una clave compuesta en `LIBRAEDGE_TABLAS_ESPEJO` va con `+`
+(`party_roles:party_id+role`). `LIBRAEDGE_VERSION_ESQUEMA` dice como se calcula
+la version del esquema que el nodo le declara al central (`sync/esquema.py`).
 
 `LIBRAEDGE_TABLAS_ESPEJO` no tiene default a proposito: sin lista, el aplicador
 aceptaria cualquier tabla que el central mande, y esa lista **es** la frontera
@@ -44,25 +49,56 @@ def _requerido(nombre: str) -> str:
     return valor
 
 
-def tablas_espejo(crudo: str) -> dict[str, str]:
+def tablas_espejo(crudo: str) -> dict[str, str | tuple[str, ...]]:
     """`"productos:id,clientes:id"` -> `{"productos": "id", "clientes": "id"}`.
 
     La `pk` se puede omitir y queda en `id`, que es la de casi todas las tablas
-    de la familia.
+    de la familia. Una clave compuesta va con `+`:
+    `"party_roles:party_id+role"` -> `{"party_roles": ("party_id", "role")}`.
     """
-    tablas: dict[str, str] = {}
+    tablas: dict[str, str | tuple[str, ...]] = {}
     for parte in crudo.split(","):
         parte = parte.strip()
         if not parte:
             continue
         nombre, _, pk = parte.partition(":")
-        tablas[nombre.strip()] = (pk.strip() or "id")
+        pk = pk.strip() or "id"
+        tablas[nombre.strip()] = (
+            tuple(columna.strip() for columna in pk.split("+")) if "+" in pk else pk)
     if not tablas:
         raise SystemExit(
             "LIBRAEDGE_TABLAS_ESPEJO quedo vacia. Es el reparto de autoridad: "
             "sin ella el nodo aceptaria cambios sobre cualquier tabla suya."
         )
     return tablas
+
+
+def version_esquema_del_nodo(conexion, especificacion: str | None) -> str | None:
+    """La version del esquema que el nodo declara, segun `LIBRAEDGE_VERSION_ESQUEMA`.
+
+    - `alembic` (o vacia): `libraedge.sync.esquema.version_de_alembic`, que da
+      lo mismo en el nodo y en el central cuando los dos estan migrados igual.
+    - `modulo:funcion`: una funcion del producto `(conexion) -> str`; tiene que
+      ser la misma que el central le pasa al router como `version_esquema`.
+    - `ninguna`: no se declara (un central que exige version contesta 409).
+
+    Se calcula una vez al arrancar: actualizar el nodo reinicia el servicio.
+    """
+    from importlib import import_module
+
+    from libraedge.sync.esquema import version_de_alembic
+
+    especificacion = (especificacion or "alembic").strip()
+    if especificacion == "ninguna":
+        return None
+    if especificacion == "alembic":
+        return version_de_alembic(conexion)
+    modulo, _, funcion = especificacion.partition(":")
+    if not modulo or not funcion:
+        raise SystemExit(
+            f"LIBRAEDGE_VERSION_ESQUEMA={especificacion!r} no se entiende: usar "
+            f"'alembic', 'ninguna' o 'modulo:funcion'.")
+    return getattr(import_module(modulo), funcion)(conexion)
 
 
 def construir_nodo():
@@ -84,13 +120,18 @@ def construir_nodo():
     core.configure(base)
     conexion = core.get_connection()
     repositorio = NodeRepository(conexion)
+    version = version_esquema_del_nodo(conexion, os.environ.get("LIBRAEDGE_VERSION_ESQUEMA"))
+    # La lectura del catalogo abre una transaccion en PostgreSQL: se cierra
+    # aca para no dejar la conexion del nodo "idle in transaction".
+    conexion.commit()
 
     return Nodo(
         repositorio, node_id,
-        outbox_worker=OutboxWorker(repositorio, HttpSyncTransport(central, secreto)),
+        outbox_worker=OutboxWorker(
+            repositorio, HttpSyncTransport(central, secreto, version_esquema=version)),
         pull_worker=PullWorker(
             repositorio,
-            HttpPullTransport(central, node_id, secreto),
+            HttpPullTransport(central, node_id, secreto, version_esquema=version),
             MirrorApplier(conexion, tablas),
         ),
         ruta_estado=os.environ.get("LIBRAEDGE_ESTADO"),
@@ -128,6 +169,14 @@ def main(argv: list[str] | None = None) -> int:
         "--estado", default=None,
         help="ruta del estado.json; si falta, se usa LIBRAEDGE_ESTADO",
     )
+
+    revision = sub.add_parser(
+        "revision", help="las operaciones que el central rechazo (revision manual)")
+    revision_sub = revision.add_subparsers(dest="accion", required=True)
+    revision_sub.add_parser("listar", help="lista las operaciones en revision")
+    reenviar = revision_sub.add_parser(
+        "reenviar", help="la vuelve a poner en cola (despues de resolverla en el central)")
+    reenviar.add_argument("operation_id")
 
     args = parser.parse_args(argv)
 
@@ -174,6 +223,9 @@ def main(argv: list[str] | None = None) -> int:
         print(estado.como_json())
         return 0
 
+    if args.comando == "revision":
+        return _revision_del_nodo(args)
+
     nodo, conexion = construir_nodo()
     try:
         if args.comando == "sincronizar":
@@ -194,6 +246,39 @@ def main(argv: list[str] | None = None) -> int:
                 flush=True,
             )
             time.sleep(args.intervalo)
+    finally:
+        conexion.close()
+
+
+def _revision_del_nodo(args) -> int:
+    """`libraedge-nodo revision listar|reenviar`. Solo necesita la base local."""
+    import json
+
+    from libracore.db import core  # noqa: PLC0415 - solo en el proceso del nodo
+
+    from libraedge.db.repository import NodeRepository
+
+    core.configure(_requerido("LIBRAEDGE_DATABASE_URL"))
+    conexion = core.get_connection()
+    try:
+        repositorio = NodeRepository(conexion)
+        if args.accion == "listar":
+            for operacion in repositorio.listar_en_revision():
+                print(json.dumps({
+                    "operation_id": operacion.operation_id,
+                    "operation_type": operacion.operation_type,
+                    "schema_version": operacion.schema_version,
+                    "occurred_at": operacion.occurred_at,
+                    "motivo": operacion.last_error,
+                }, ensure_ascii=False))
+            return 0
+        try:
+            repositorio.reenviar_operacion(args.operation_id)
+        except LookupError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"{args.operation_id}: en cola otra vez")
+        return 0
     finally:
         conexion.close()
 

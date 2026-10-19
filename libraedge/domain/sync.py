@@ -55,6 +55,19 @@ class SyncOperationStatus(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
+class InboxStatus(StrEnum):
+    """El estado de una operacion **en el central** (`sync_inbox.status`).
+
+    `manual_review` y `discarded` existen desde v0.7: antes una operacion que el
+    central no podia aplicar no dejaba rastro de su lado --solo el nodo sabia que
+    se la habian rechazado-- y no habia con que revisarla ni reintentarla.
+    """
+
+    APPLIED = "applied"
+    MANUAL_REVIEW = "manual_review"
+    DISCARDED = "discarded"
+
+
 @dataclass(frozen=True)
 class OutboxOperation:
     operation_id: str
@@ -76,3 +89,13 @@ class OutboxOperation:
 
     def payload_json(self) -> str:
         return json.dumps(self.payload, sort_keys=True, separators=(",", ":"))
+
+    def como_dict(self) -> dict[str, Any]:
+        """Los campos que viajan en un push (los mismos que `CAMPOS_DEL_PUSH`)."""
+        return {
+            "operation_id": self.operation_id, "node_id": self.node_id,
+            "sequence": self.sequence, "operation_type": self.operation_type,
+            "aggregate_type": self.aggregate_type, "aggregate_id": self.aggregate_id,
+            "occurred_at": self.occurred_at, "schema_version": self.schema_version,
+            "payload": self.payload,
+        }

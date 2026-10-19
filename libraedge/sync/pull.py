@@ -19,31 +19,41 @@ adelante.
 """
 
 import json
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from libraedge.db.changelog import cargar_payload, validar_identificador
+from libraedge.db.changelog import cargar_payload, columnas_de_clave, validar_identificador
 from libraedge.domain.sync import ReferenceChange, ReferenceOperation
+from libraedge.sync import esquema
 
 
 class HttpPullTransport:
     """Trae cambios del central. Misma autenticacion por nodo que la subida."""
 
-    def __init__(self, base_url: str, node_id: str, node_secret: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, node_id: str, node_secret: str, timeout: float = 10.0,
+                 version_esquema: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.node_id = node_id
         self.node_secret = node_secret
         self.timeout = timeout
+        #: Ver `sync/esquema.py`: con esto el central puede contestar 409 antes
+        #: de mandar filas con columnas que la base del nodo todavia no tiene.
+        self.version_esquema = version_esquema
 
     def pull(self, cursor: int = 0, limit: int = 500) -> tuple[ReferenceChange, ...]:
         consulta = urlencode({"node_id": self.node_id, "cursor": cursor, "limit": limit})
         request = Request(
             f"{self.base_url}/sync/v1/pull?{consulta}",
-            headers={"Authorization": f"Bearer {self.node_secret}"},
+            headers=esquema.cabeceras_del_nodo(self.node_secret, self.version_esquema),
             method="GET",
         )
-        with urlopen(request, timeout=self.timeout) as respuesta:
-            crudo = respuesta.read()
+        try:
+            with urlopen(request, timeout=self.timeout) as respuesta:
+                crudo = respuesta.read()
+        except HTTPError as exc:
+            esquema.relanzar_si_es_de_esquema(exc)
+            raise
         # Sin `parse_float=Decimal` los precios que vienen como NUMERIC del
         # central se degradarian a float justo antes de escribirse en el nodo,
         # que es el dato con el que se cobra durante el corte.
@@ -71,12 +81,18 @@ class MirrorApplier:
     central comprometido --o simplemente con un trigger de mas-- podria hacer que
     el nodo escriba en cualquier tabla suya, incluidas las que son de su
     autoridad, como `ventas`. La lista es el reparto de autoridad, hecho codigo.
+
+    La clave de cada tabla es una columna (`"id"`) o, desde v0.7, varias
+    (`("party_id", "role")`): una tabla de relacion como `party_roles` de
+    VentaLibra no tiene `id`. Con clave compuesta el upsert y el borrado salen
+    de las columnas de la clave en el payload --que trae la fila entera, tambien
+    en un `delete`--, no del `row_id`.
     """
 
-    def __init__(self, conn, tablas_permitidas: dict[str, str]):
+    def __init__(self, conn, tablas_permitidas: dict[str, str | tuple[str, ...]]):
         self._conn = conn
         self._tablas = {
-            validar_identificador(tabla): validar_identificador(pk)
+            validar_identificador(tabla): columnas_de_clave(pk)
             for tabla, pk in tablas_permitidas.items()
         }
 
@@ -87,31 +103,62 @@ class MirrorApplier:
                 f"el central mando un cambio sobre {tabla!r}, que no esta en las "
                 f"tablas que este nodo espeja"
             )
-        pk = self._tablas[tabla]
+        clave = self._tablas[tabla]
 
         if cambio.operation == ReferenceOperation.DELETE:
-            self._conn.execute(f"DELETE FROM {tabla} WHERE {pk} = ?", (cambio.row_id,))
+            if len(clave) == 1:
+                self._conn.execute(
+                    f"DELETE FROM {tabla} WHERE {clave[0]} = ?", (cambio.row_id,))
+                return
+            valores = self._valores_de_clave(tabla, clave, cambio)
+            condicion = " AND ".join(f"{columna} = ?" for columna in clave)
+            self._conn.execute(f"DELETE FROM {tabla} WHERE {condicion}", valores)
             return
 
         payload = cambio.payload or {}
         columnas = [validar_identificador(columna) for columna in payload]
         if not columnas:
             raise ValueError(f"upsert sin payload para {tabla}:{cambio.row_id}")
+        faltan = [columna for columna in clave if columna not in payload]
+        if faltan:
+            raise ValueError(
+                f"upsert de {tabla}:{cambio.row_id} sin las columnas de su clave: {faltan}")
 
         marcadores = ", ".join("?" for _ in columnas)
         asignaciones = ", ".join(
-            f"{columna} = excluded.{columna}" for columna in columnas if columna != pk
+            f"{columna} = excluded.{columna}" for columna in columnas if columna not in clave
         )
+        conflicto = ", ".join(clave)
         # `ON CONFLICT ... DO UPDATE` es el mismo dialecto en SQLite y en
         # PostgreSQL, incluido el pseudo-registro `excluded`.
         sql = (
             f"INSERT INTO {tabla} ({', '.join(columnas)}) VALUES ({marcadores}) "
-            f"ON CONFLICT ({pk}) DO UPDATE SET {asignaciones}"
+            f"ON CONFLICT ({conflicto}) DO UPDATE SET {asignaciones}"
             if asignaciones
             else f"INSERT INTO {tabla} ({', '.join(columnas)}) VALUES ({marcadores}) "
-                 f"ON CONFLICT ({pk}) DO NOTHING"
+                 f"ON CONFLICT ({conflicto}) DO NOTHING"
         )
         self._conn.execute(sql, tuple(payload[columna] for columna in columnas))
+
+    @staticmethod
+    def _valores_de_clave(tabla, clave, cambio: ReferenceChange) -> tuple:
+        """Los valores de una clave compuesta: del payload, o del `row_id`.
+
+        El trigger y `sembrar()` arman el `row_id` de una clave compuesta como
+        un arreglo JSON de textos (`'["7", "cliente"]'`); se usa solo si el
+        payload no trae la fila.
+        """
+        payload = cambio.payload or {}
+        if all(columna in payload for columna in clave):
+            return tuple(payload[columna] for columna in clave)
+        try:
+            valores = json.loads(cambio.row_id)
+        except ValueError:
+            valores = None
+        if not isinstance(valores, list) or len(valores) != len(clave):
+            raise ValueError(
+                f"delete de {tabla}:{cambio.row_id} sin los valores de su clave {list(clave)}")
+        return tuple(valores)
 
 
 class PullWorker:

@@ -1,17 +1,22 @@
 """HTTP transport for the offline synchronization worker."""
 
 import json
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from libraedge.domain.sync import OutboxOperation
+from libraedge.sync import esquema
 from libraedge.sync.worker import PushResult
 
 
 class HttpSyncTransport:
-    def __init__(self, base_url: str, node_secret: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, node_secret: str, timeout: float = 10.0,
+                 version_esquema: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.node_secret = node_secret
         self.timeout = timeout
+        #: La version del esquema de la base del nodo (ver `sync/esquema.py`).
+        self.version_esquema = version_esquema
 
     def push(self, operation: OutboxOperation) -> PushResult:
         body = json.dumps({
@@ -29,10 +34,16 @@ class HttpSyncTransport:
             f"{self.base_url}/sync/v1/push", data=body,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.node_secret}",
+                **esquema.cabeceras_del_nodo(self.node_secret, self.version_esquema),
             },
             method="POST",
         )
-        with urlopen(request, timeout=self.timeout) as response:
-            data = json.loads(response.read())
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read())
+        except HTTPError as exc:
+            # El 409 de esquema sale con un texto que dice que hacer; el worker
+            # lo trata igual como reintento: la operacion espera en el outbox.
+            esquema.relanzar_si_es_de_esquema(exc)
+            raise
         return PushResult(data["result"], data.get("error"))
