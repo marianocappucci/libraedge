@@ -72,6 +72,10 @@ WizardStyle=modern
 ; Lo que siga usando archivos del nodo despues de parar los servicios (la
 ; bandeja, un python suelto) se cierra: en silencio, no poder cerrarlo es Abort.
 CloseApplications=force
+; La marca de LibraEdge (libra-ui, ADR-078): el icono del .exe del instalador
+; y el de "Agregar o quitar programas", que Windows lee del archivo instalado.
+SetupIconFile=libraedge.ico
+UninstallDisplayIcon={app}\libraedge.ico
 
 [Languages]
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -85,6 +89,7 @@ Source: "paquete\herramientas\nssm.exe";  DestDir: "{app}\herramientas"; Flags: 
 ; tampoco (0xC0000135, medido 2026-08-30). Lo instala instalar.ps1 si falta;
 ; queda en {app} para poder reparar sin el instalador.
 Source: "paquete\herramientas\vc_redist.x64.exe"; DestDir: "{app}\herramientas"; Flags: ignoreversion
+Source: "libraedge.ico";                 DestDir: "{app}";              Flags: ignoreversion
 Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
