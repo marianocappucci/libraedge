@@ -9,10 +9,16 @@ Dos endpoints, uno por direccion:
 Los dos se autentican igual: el secreto por nodo como ``Authorization: Bearer``.
 """
 
+import inspect
+import logging
+
 from libraedge.db.changelog import listar_cambios
 from libraedge.domain.sync import OutboxOperation
 from libraedge.sync import esquema
+from libraedge.sync import ticket as _ticket
 from libraedge.sync.pull import serializar_cambio
+
+logger = logging.getLogger(__name__)
 
 #: Lo que un push tiene que traer. Vive afuera de las dos fabricas para que no
 #: se les vaya desincronizando una de la otra.
@@ -139,9 +145,62 @@ def create_sync_app(receiver, node_repository, changelog_conn=None,
     return app
 
 
+def emisor_desde_payload(payload: dict):
+    """El ``emisor_id`` de un pedido de ticket: ``None`` (el emisor por defecto) o un entero.
+
+    Levanta ``ValueError`` si no es ninguna de las dos cosas."""
+    valor = payload.get("emisor_id")
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        raise ValueError("emisor_id invalido")
+    if isinstance(valor, int):
+        return valor
+    if isinstance(valor, str) and valor.strip().isdigit():
+        return int(valor.strip())
+    raise ValueError("emisor_id invalido")
+
+
+def detalle_de_error_de_prestamo(exc: Exception) -> tuple[int, dict]:
+    """El status y el ``detail`` con que el central contesta si ``prestar_ticket`` levanta.
+
+    - Una excepción con ``detalle() -> dict`` (``NodoSinArca`` de libracore): 422 con ese detalle.
+    - ``ValueError`` o ``LookupError`` (emisor que no existe): 422, sin el texto de la excepción.
+    - Cualquier otra (ARCA no autentica, red): 502. El nodo la lee como «sin conexión» y reintenta.
+
+    Nunca se usa ``str(exc)`` de una excepción cualquiera: podría traer el ticket.
+    """
+    detalle = getattr(exc, "detalle", None)
+    if callable(detalle):
+        try:
+            datos = detalle()
+        except Exception:
+            datos = None
+        if isinstance(datos, dict) and datos.get("codigo"):
+            return 422, datos
+    if isinstance(exc, (ValueError, LookupError)):
+        return 422, {"codigo": _ticket.CODIGO_NO_DISPONIBLE,
+                     "mensaje": "El central no tiene con qué prestar un ticket de ARCA para ese emisor."}
+    return 502, {"codigo": _ticket.CODIGO_ARCA_NO_RESPONDE,
+                 "mensaje": "El central no pudo obtener el ticket de ARCA."}
+
+
+async def _llamar(funcion, *args):
+    """``funcion(*args)``, sea ``async`` o no. La sincrónica corre en un hilo para no frenar el loop."""
+    from starlette.concurrency import run_in_threadpool
+
+    llamada = type(funcion).__call__ if not inspect.isfunction(funcion) else None
+    if inspect.iscoroutinefunction(funcion) or inspect.iscoroutinefunction(llamada):
+        return await funcion(*args)
+    resultado = await run_in_threadpool(funcion, *args)
+    if inspect.isawaitable(resultado):
+        resultado = await resultado
+    return resultado
+
+
 def create_sync_router(abrir_conexion, operation_handler=None,
                        supported_schema_version: int = 1, *, despachador=None,
-                       version_esquema=None):
+                       version_esquema=None, prestar_ticket=None):
     """Las mismas dos rutas, para montar **dentro del producto** con
     ``include_router()``.
 
@@ -185,6 +244,15 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     - ``version_esquema`` (texto o ``(conexion) -> str``, normalmente
       ``libraedge.sync.esquema.version_de_alembic``) hace que las dos rutas
       contesten 409 si el esquema del nodo no es el del central.
+
+    ## Desde v0.9: ``prestar_ticket`` (ADR-009)
+
+    ``prestar_ticket(emisor_id) -> dict`` (puede ser ``async``; normalmente
+    ``libracore.nodo_offline.ta_para_el_nodo``) prende ``POST
+    /sync/v1/ticket-arca``: un nodo activo, autenticado con su secreto y con el
+    esquema al dia, recibe el ticket de ARCA vigente del central para facturar
+    sin tener la clave. Sin la costura la ruta contesta 501 (despues de
+    autenticar). El ticket nunca se loguea. Ver ``libraedge.sync.ticket``.
     """
     if despachador is not None and operation_handler is not None:
         raise ValueError("pasar despachador u operation_handler, no los dos")
@@ -261,5 +329,50 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             cambios = listar_cambios(conexion, desde=cursor, limit=limit)
         return {"changes": [serializar_cambio(cambio) for cambio in cambios],
                 "cursor": cambios[-1].cursor if cambios else cursor}
+
+    @router.post(_ticket.RUTA)
+    async def ticket_arca(payload: dict, request: Request):
+        """El ticket de ARCA del central, prestado a un nodo activo. Ver ``libraedge.sync.ticket``."""
+        from fastapi.responses import JSONResponse
+        from starlette.concurrency import run_in_threadpool
+
+        node_id = payload.get("node_id")
+        if not isinstance(node_id, str) or not node_id.strip():
+            raise HTTPException(422, detail={"missing": ["node_id"]})
+        try:
+            emisor_id = emisor_desde_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(422, detail="invalid emisor_id") from exc
+        secreto = _secreto(request)
+
+        def _autorizar():
+            # Mismo gate que push y pull: secreto de un nodo ACTIVO, latido y esquema.
+            with abrir_conexion() as conexion:
+                _autenticar(conexion, node_id, secreto)
+                _verificar_esquema(request, version_esquema, conexion, HTTPException)
+
+        await run_in_threadpool(_autorizar)
+        if prestar_ticket is None:
+            raise HTTPException(501, detail={
+                "codigo": _ticket.CODIGO_SIN_COSTURA,
+                "mensaje": "Este central no presta el ticket de ARCA a los nodos."})
+        try:
+            ticket = await _llamar(prestar_ticket, emisor_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            status, detalle = detalle_de_error_de_prestamo(exc)
+            # Sólo el tipo: el texto de una excepción cualquiera podría traer el ticket.
+            logger.warning("Ticket de ARCA: no se pudo prestar al nodo %s (emisor %s): %s",
+                           node_id, emisor_id, type(exc).__name__)
+            raise HTTPException(status, detail=detalle) from None
+        if not (isinstance(ticket, dict) and ticket.get("token") and ticket.get("sign")):
+            logger.error("Ticket de ARCA: prestar_ticket devolvio algo sin token o sign (nodo %s)", node_id)
+            raise HTTPException(502, detail={
+                "codigo": _ticket.CODIGO_ARCA_NO_RESPONDE,
+                "mensaje": "El central no pudo obtener el ticket de ARCA."})
+        logger.info("Ticket de ARCA prestado al nodo %s (emisor %s, vence %s)",
+                    node_id, emisor_id, ticket.get("expiracion"))
+        return JSONResponse(ticket, headers={"Cache-Control": "no-store"})
 
     return router

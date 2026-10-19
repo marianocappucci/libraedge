@@ -91,6 +91,29 @@ libraedge-central nodo vigilar --umbral 15       # para el cron del VPS: sale 1 
 
 `registrar` imprime una sola vez `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_PREFIJO` (el prefijo de numeración del nodo, `S02`, único por nodo y nunca reusado) y `LIBRAEDGE_TABLAS_ESPEJO`. En el producto, `libraedge.identidad.nodo_actual("VENTALIBRA")` dice si la instancia es un nodo.
 
+## El ticket de ARCA prestado (v0.9, ADR-009)
+
+El nodo factura con internet usando el ticket de ARCA del central; la clave no sale del VPS. En el central:
+
+```python
+from libracore.nodo_offline import ta_para_el_nodo
+
+router = create_sync_router(get_connection, despachador=..., version_esquema=version_de_alembic,
+                            prestar_ticket=ta_para_el_nodo)   # POST /sync/v1/ticket-arca
+```
+
+En el nodo, con `LIBRAEDGE_CENTRAL_URL`, `LIBRAEDGE_NODE_ID` y `LIBRAEDGE_NODE_SECRET` en el entorno:
+
+```python
+from libraedge.sync.ticket import cliente_desde_entorno
+from libracore.nodo_offline import SinConexion, numerador_con_ta
+
+cliente = cliente_desde_entorno(version_esquema=...)   # la misma que manda libraedge-nodo
+numerar = numerador_con_ta(cliente.para_numerador(sin_conexion=SinConexion), emisor_id)
+```
+
+Sólo nodos activos (401 si no), 409 si el esquema difiere, 501 si el central no pasó `prestar_ticket`. El ticket se guarda en memoria hasta 10 minutos antes de vencer y nunca se loguea. Sin red o con ARCA caída en el central: `SinConexionConElCentral` (la venta va a la bandeja); el central sin ARCA para ese emisor: `TicketRechazado` (`codigo` `nodo_sin_arca`).
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.
