@@ -300,7 +300,17 @@ begin
       CodigoDeSalida := 20;
     end
     else
+    begin
       Log('instalar.ps1 termino bien.');
+      { La bandeja se abre sola al iniciar sesion (acceso directo de Inicio),
+        pero despues de instalar o actualizar no estaba hasta el proximo inicio:
+        PrepareToInstall la cierra y nadie la volvia a abrir (VM, 2026-10-19).
+        Se abre en la sesion de quien ejecuto el instalador, sin esperar. }
+      if FileExists(ExpandConstant('{commonstartup}\LibraEdge - estado del nodo.lnk')) then
+        if not ShellExecAsOriginalUser('', ExpandConstant('{commonstartup}\LibraEdge - estado del nodo.lnk'),
+                                       '', '', SW_SHOWNORMAL, ewNoWait, Codigo) then
+          Log('No se pudo abrir la bandeja: ' + SysErrorMessage(Codigo));
+    end;
     if CodigoDeSalida <> 0 then
       SuppressibleMsgBox('La configuracion del nodo fallo. El detalle esta en ' + Registro +
         '. Se puede reintentar corriendo instalar.ps1 a mano (ver el README).', mbError, MB_OK, IDOK);

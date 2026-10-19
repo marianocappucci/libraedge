@@ -71,7 +71,21 @@ if [ ! -x "$paquete/postgres/bin/initdb.exe" ] && [ ! -f "$paquete/postgres/bin/
     rm -rf "$tmp"
 fi
 if [ ! -f "$paquete/herramientas/nssm.exe" ]; then
-    zip_nssm="$(bajar "https://nssm.cc/release/nssm-$NSSM_VERSION.zip" "nssm-$NSSM_VERSION.zip")"
+    # nssm.cc se cae seguido (503 en el CI, 2026-10-19): si no contesta, la copia del
+    # Wayback Machine, que es el mismo archivo. Se verifica el SHA256 del 2.24 oficial.
+    zip_nssm="$descargas/nssm-$NSSM_VERSION.zip"
+    if [ ! -s "$zip_nssm" ]; then
+        for url in "https://nssm.cc/release/nssm-$NSSM_VERSION.zip" \
+                   "https://web.archive.org/web/2024id_/https://nssm.cc/release/nssm-$NSSM_VERSION.zip"; do
+            echo "Bajando $url" >&2
+            curl -fL --retry 2 -o "$zip_nssm.parcial" "$url" && mv "$zip_nssm.parcial" "$zip_nssm" && break
+        done
+        [ -s "$zip_nssm" ] || { echo "No se pudo bajar NSSM $NSSM_VERSION de ninguna fuente." >&2; exit 1; }
+    fi
+    if [ "$NSSM_VERSION" = "2.24" ]; then
+        echo "727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743  $zip_nssm" | sha256sum -c --quiet - \
+            || { echo "El ZIP de NSSM no es el 2.24 oficial (SHA256 distinto)." >&2; rm -f "$zip_nssm"; exit 1; }
+    fi
     unzip -q -j -o "$zip_nssm" "nssm-$NSSM_VERSION/win64/nssm.exe" -d "$paquete/herramientas"
 fi
 if [ ! -f "$paquete/herramientas/vc_redist.x64.exe" ]; then
