@@ -396,6 +396,11 @@ def sucursales_con_nodo(conn) -> int:
     return int(fila[0])
 
 
+def nodos_activos(conn) -> int:
+    """Cuántos nodos activos (no dados de baja) hay. Mientras haya alguno, hay algo que poder dar de baja."""
+    return int(conn.execute("SELECT COUNT(*) FROM node_identity WHERE active = 1").fetchone()[0])
+
+
 def sucursal_tiene_nodo(conn, branch_id: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM node_identity WHERE branch_id = ? AND active = 1 LIMIT 1", (branch_id,)

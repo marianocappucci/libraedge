@@ -132,6 +132,24 @@ modo silencioso. La lectura de la definición, la validación de la carga y el a
 Compilar, instalar y verificar: [`instalador/README.md`](instalador/README.md); probarlo en una VM:
 [`instalador/PROBAR_EN_VM.md`](instalador/PROBAR_EN_VM.md).
 
+## «Sucursal sin internet»: el alta desde la pantalla del central (v0.11, ADR-011)
+
+Lo mismo que `registrar --carga`, como router para montar en el producto con su guarda de administrador:
+
+```python
+from libraedge.pantalla_del_central import create_nodos_router
+
+app.include_router(create_nodos_router(aprovisionamiento, get_connection),
+                   dependencies=[Depends(<guarda de admin del producto>)])
+```
+
+`GET /api/nodos-offline` (sucursales, nodos con su última sincronización y prefijo, si el adicional `offline` está
+contratado, el link del instalador del producto y la URL del central), `POST /api/nodos-offline` con `{"sucursal_id"}`
+(alta de un nodo nuevo: publica, registra y **devuelve la carga como adjunto**), `POST /api/nodos-offline/{id}/carga`
+(la misma PC, secreto nuevo) y `DELETE /api/nodos-offline/{id}` (baja). `GET /api/nodos-offline/menu` dice si la entrada del menú se ve: con el
+adicional contratado o con nodos activos (sin el adicional, sólo se pueden dar de baja). El secreto sólo viaja en la respuesta que es la
+carga (`Content-Disposition: attachment`, `Cache-Control: no-store`); la pantalla del kit es `libra-ui/SucursalSinInternet`.
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.
