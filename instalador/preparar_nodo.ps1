@@ -225,7 +225,7 @@ if ($codigo -ne 0) {
                 ForEach-Object { Write-Host "    nssm: $($_.Message)" }
             Get-WinEvent -FilterHashtable @{ LogName = "System"; ProviderName = "Service Control Manager" } -MaxEvents 3 -ErrorAction SilentlyContinue |
                 ForEach-Object { Write-Host "    scm: $($_.Message)" }
-            Write-Host "    acl de $descubrimiento: $((Get-Acl $descubrimiento).AccessToString -replace "`r?`n", '; ')"
+            Write-Host "    acl de ${descubrimiento}: $((Get-Acl $descubrimiento).AccessToString -replace "`r?`n", '; ')"
         }
     }
 }
