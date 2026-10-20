@@ -215,8 +215,18 @@ if ($codigo -ne 0) {
         & $nssm remove $servicioDesc confirm | Out-Null
         Write-Warning "No se pudo poner $servicioDesc como LocalService (quedo '$cuenta'): no se instala; las otras cajas no van a encontrar esta PC solas."
     } else {
-        Start-Service -Name $servicioDesc
-        Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
+        # Que no arranque no frena la instalacion del nodo: las cajas pueden escribir la IP. Se deja el motivo.
+        try {
+            Start-Service -Name $servicioDesc -ErrorAction Stop
+            Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
+        } catch {
+            Write-Warning "No arranco $servicioDesc ($($_.Exception.Message)): las otras cajas no van a encontrar esta PC solas."
+            Get-WinEvent -FilterHashtable @{ LogName = "Application"; ProviderName = "nssm" } -MaxEvents 5 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "    nssm: $($_.Message)" }
+            Get-WinEvent -FilterHashtable @{ LogName = "System"; ProviderName = "Service Control Manager" } -MaxEvents 3 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "    scm: $($_.Message)" }
+            Write-Host "    acl de $descubrimiento: $((Get-Acl $descubrimiento).AccessToString -replace "`r?`n", '; ')"
+        }
     }
 }
 
