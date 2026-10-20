@@ -376,6 +376,7 @@ fn ventana_principal(
     let app_nueva = app.clone();
     let c_carga = compartido.clone();
     let c_nav = compartido.clone();
+    let c_titulo = compartido.clone();
     let descargas = app.path().download_dir().ok();
     let contador = AtomicUsize::new(0);
     WebviewWindowBuilder::new(app, PRINCIPAL, WebviewUrl::App("index.html?p=inicio".into()))
@@ -389,6 +390,13 @@ fn ventana_principal(
         .on_navigation(move |url| navegar(&c_nav, url, puerto))
         .on_new_window(move |url, _features| ventana_nueva(&app_nueva, url, puerto, &contador))
         .on_download(move |_webview, evento| descargar(evento, descargas.as_deref()))
+        .on_document_title_changed(move |ventana, titulo| {
+            // El titulo de la pagina del producto (no tiene secretos): el CI lo usa para ver que cargo el producto y
+            // no una pagina de error del navegador.
+            if ventana.url().is_ok_and(|u| clasificar(&u, puerto) == Destino::Producto) {
+                c_titulo.anotar(&format!("titulo {titulo}"));
+            }
+        })
         .on_page_load(move |_ventana, carga| {
             if carga.event() == PageLoadEvent::Finished && clasificar(carga.url(), puerto) == Destino::Producto {
                 c_carga.anotar(&format!("producto {}", carga.url()));

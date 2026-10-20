@@ -385,6 +385,7 @@ jobs:
           LIBRAEDGE_ESCRITORIO_INFORME="$informe" nohup xvfb-run -a dbus-run-session -- "$app" > "$RUNNER_TEMP/app.log" 2>&1 &
           esperar "^producto http://localhost:$puerto/" 90
           sleep 5
+          cat "$informe"
           pgrep -f "^$app" > /dev/null || { echo "La app no sigue viva"; cat "$RUNNER_TEMP/app.log"; exit 1; }
           # El producto vio el pedido de la ventana (no solo el de salud).
           sudo journalctl -u libraedge-producto --since "$desde" --no-pager > "$RUNNER_TEMP/producto-app.log"
