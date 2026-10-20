@@ -30,7 +30,8 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
   y `revision`.
 - **`aprovisionamiento.py`** (`Aprovisionamiento`, `publicar`, `registrar`, `dar_de_baja`, `estado`,
   `sucursales`, `vigilar`, `asignar_prefijo`) — el aprovisionamiento del central, genérico; el
-  producto aporta tablas de referencia, sucursales, guarda del adicional y prefijo (ADR-008).
+  producto aporta tablas de referencia, sucursales, una guarda opcional del alta y prefijo (ADR-008; desde ADR-014 sin
+  adicional: LibraEdge está incluido en todos los planes).
 - **`identidad.py`** (`nodo_actual`, `prefijo_actual`) — `LIBRAEDGE_NODE_ID` y
   `LIBRAEDGE_PREFIJO`, con compatibilidad para `<PREFIJO>_EDGE_NODE_ID`.
 - **`nodo.py`** (`Nodo`, `EstadoNodo`, `escribir_estado`/`leer_estado`) — el

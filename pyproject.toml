@@ -50,6 +50,9 @@ name = "libraedge"
 # opcion al CLI, sin cambiar lo que ya habia.
 # 0.10.x -> 0.11.0 (2026-10-19, ADR-011): `create_nodos_router`, la pantalla «Sucursal sin internet» del central
 # (alta del nodo con la carga como adjunto, carga nueva y baja). Minor: suma API, no cambia nada de lo que habia.
+# 0.13.x -> 0.14.0 (2026-10-20, ADR-014): LibraEdge incluido en todos los planes (sin guarda por defecto, `contratado`
+# siempre true) y el codigo de vinculacion (`create_canje_router`, `libraedge.vinculacion`, `instalador canjear`).
+# Minor: suma API y dos tablas (las crea `init_schema`); la guarda por defecto cambia.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

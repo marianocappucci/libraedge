@@ -16,6 +16,14 @@
 # existe), instalar con 0, verificar_nodo.ps1 -SinCentral con 0 y ningun
 # secreto en los logs. Si algo falla, no se publica nada.
 #
+# Con el codigo de vinculacion (ADR-014): en el runner se levanta un central de
+# prueba con https de verdad (tests/central_de_prueba.py: el router del motor,
+# create_nodos_router + create_canje_router, sobre SQLite, con su autoridad
+# instalada en el almacen del sistema) y Windows y Ubuntu se instalan con
+# direccion + codigo; se verifica que el secreto que quedo en el nodo.env es el
+# que verifica el central, que el codigo no sirve dos veces y que ni el codigo
+# ni el secreto quedan en los logs.
+#
 # Linux (ADR-012): un .deb por producto (libraedge-nodo-<producto>_<version>_amd64.deb,
 # y el alias libraedge-nodo-<producto>_amd64.deb para releases/latest/download/),
 # armado en ubuntu-22.04 e instalado y verificado en ubuntu-22.04, ubuntu-24.04 y ubuntu-26.04
@@ -35,6 +43,10 @@ on:
     paths:
       - "instalador/**"
       - "libraedge/instalador.py"
+      - "libraedge/pantalla_del_central.py"
+      - "libraedge/vinculacion.py"
+      - "tests/central_de_prueba.py"
+      - ".github/central-de-prueba.sh"
       - ".github/workflows/publicar-instalador.yml"
   workflow_dispatch:
     inputs:
@@ -359,6 +371,49 @@ jobs:
           sudo test -s /var/lib/libraedge-nodo/app/config.json
           pg_lsclusters --no-header | grep " libraedge "
           test ! -e /opt/libraedge-nodo/python
+      - uses: astral-sh/setup-uv@v6
+      - name: Un central de prueba con https (ADR-014)
+        run: bash .github/central-de-prueba.sh levantar "${{ matrix.producto }}"
+      - name: Instalar con el codigo (apt con LIBRAEDGE_CODIGO) y reinstalar con libraedge-nodo-instalar --codigo
+        run: |
+          . .github/central-de-prueba.sh
+          alta="$(emitir /vinculacion '{"sucursal_id": "1"}')"
+          node_id="$(jq -r .node_id <<< "$alta")"; codigo="$(jq -r .codigo <<< "$alta")"
+          echo "::add-mask::$codigo"
+          [ "$(jq -r .direccion <<< "$alta")" = "$DIRECCION" ]
+          echo "$codigo" >> "$RUNNER_TEMP/codigos.txt"
+          sudo LIBRAEDGE_CODIGO="$codigo" LIBRAEDGE_DIRECCION="$DIRECCION" apt-get install -y -q --no-install-recommends \
+            "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-con-codigo.log"
+          [ "${PIPESTATUS[0]}" = 0 ]
+          secreto_ok "$node_id"
+          sudo test ! -e /var/lib/libraedge-nodo/carga-nodo.json  # la carga canjeada no queda
+          [ "$(canje_http "$codigo")" = 404 ] || { echo "El codigo sirvio dos veces"; exit 1; }
+          huella_vieja="$(huella_del_secreto)"
+
+          # Otro codigo para el mismo nodo (reinstalar la misma PC), por la linea de comandos.
+          otro="$(emitir "/$node_id/vinculacion")"
+          codigo2="$(jq -r .codigo <<< "$otro")"; echo "::add-mask::$codigo2"; echo "$codigo2" >> "$RUNNER_TEMP/codigos.txt"
+          sudo libraedge-nodo-instalar --codigo "$codigo2" --direccion "$DIRECCION" 2>&1 | tee "$RUNNER_TEMP/instalar-con-codigo.log"
+          [ "${PIPESTATUS[0]}" = 0 ]
+          secreto_ok "$node_id"
+          [ "$(huella_del_secreto)" != "$huella_vieja" ] || { echo "El canje no cambio el secreto"; exit 1; }
+
+          # Un codigo usado no toca nada (sale con 2 antes de tocar la base).
+          antes="$(huella_del_secreto)"
+          set +e
+          sudo libraedge-nodo-instalar --codigo "$codigo2" --direccion "$DIRECCION" > "$RUNNER_TEMP/instalar-codigo-usado.log" 2>&1
+          r=$?
+          set -e
+          cat "$RUNNER_TEMP/instalar-codigo-usado.log"
+          [ "$r" = 2 ] || { echo "Con un codigo usado tenia que salir con 2 y salio con $r"; exit 1; }
+          grep -q "no es válido o ya venció" "$RUNNER_TEMP/instalar-codigo-usado.log"
+          [ "$(huella_del_secreto)" = "$antes" ]
+          sleep 30
+          sudo libraedge-nodo-verificar --sin-central
+      - name: Ni el codigo ni el secreto en los logs (ADR-014)
+        run: |
+          . .github/central-de-prueba.sh
+          sin_secretos_en_los_logs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -484,6 +539,89 @@ jobs:
           Start-Sleep 60
           & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: astral-sh/setup-uv@v6
+      # En Windows el runner termina los procesos de un paso cuando el paso termina: el central de prueba se levanta en
+      # el MISMO paso que lo usa. Con su venv y su Python, no `uv run` (que dejaria tomada la cache de uv).
+      - name: Instalar con el codigo contra un central de prueba con https (V15, ADR-014)
+        run: |
+          $c = "$env:RUNNER_TEMP\central"
+          New-Item -ItemType Directory -Force $c | Out-Null
+          uv venv -q "$env:RUNNER_TEMP\central-venv"
+          uv pip install -q --python "$env:RUNNER_TEMP\central-venv\Scripts\python.exe" ".[server]" trustme
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo armar el venv del central de prueba" }
+          Start-Process "$env:RUNNER_TEMP\central-venv\Scripts\python.exe" -ArgumentList "tests/central_de_prueba.py",
+            "--producto", "${{ matrix.producto }}", "--dir", $c -WindowStyle Hidden `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\central.log" -RedirectStandardError "$env:RUNNER_TEMP\central-err.log"
+          for ($i = 0; $i -lt 300 -and -not (Test-Path "$c\listo"); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path "$c\listo")) { Get-Content "$env:RUNNER_TEMP\central*.log"; throw "El central de prueba no arranco" }
+          # Su autoridad, en el almacen de la maquina: el Python embebido del nodo verifica contra ese almacen.
+          certutil -addstore -f Root "$c\ca.pem"
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo instalar la autoridad de prueba" }
+
+          $base = "https://localhost:8443"
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          $env_ = "$env:ProgramFiles\LibraEdge\nodo.env"
+          function SecretoDelNodo { ((Select-String -Path $env_ -Pattern "^LIBRAEDGE_NODE_SECRET=").Line -split "=", 2)[1] }
+          function SecretoOk($nodo) {
+            $id = ((Select-String -Path $env_ -Pattern "^LIBRAEDGE_NODE_ID=").Line -split "=", 2)[1]
+            if ($id -ne $nodo) { throw "nodo.env tiene el nodo $id y se emitio $nodo" }
+            $cuerpo = @{ node_id = $nodo; secreto = (SecretoDelNodo) } | ConvertTo-Json
+            if (-not (Invoke-RestMethod -Method Post "$base/prueba/secreto" -ContentType "application/json" -Body $cuerpo).ok) {
+              throw "El secreto del nodo.env no es el que verifica el central"
+            }
+          }
+          function CanjeHttp($codigo) {
+            $cuerpo = @{ codigo = $codigo; producto = "${{ matrix.producto }}" } | ConvertTo-Json
+            (Invoke-WebRequest -Method Post "$base/sync/v1/vinculacion" -ContentType "application/json" -Body $cuerpo -SkipHttpErrorCheck).StatusCode
+          }
+          $alta = Invoke-RestMethod -Method Post "$base/api/nodos-offline/vinculacion" -ContentType "application/json" -Body '{"sucursal_id": "1"}'
+          Write-Host "::add-mask::$($alta.codigo)"
+          if ($alta.direccion -ne "localhost:8443") { throw "La direccion es $($alta.direccion)" }
+          $alta.codigo | Out-File -Append -Encoding ascii "$env:RUNNER_TEMP\codigos.txt"
+
+          # En silencio, con el codigo en LIBRAEDGE_CODIGO (no queda en el /LOG) y /DIRECCION=.
+          $env:LIBRAEDGE_CODIGO = $alta.codigo
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIRECCION=localhost:8443",
+            "/LOG=$env:RUNNER_TEMP\inno-codigo.log" -Wait -PassThru
+          Remove-Item Env:LIBRAEDGE_CODIGO
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 60
+            throw "Instalar con el codigo salio con $($p.ExitCode)"
+          }
+          SecretoOk $alta.node_id
+          if (Test-Path "$env:ProgramData\LibraEdge\carga-nodo.json") { throw "Quedo la carga canjeada" }
+          if ((CanjeHttp $alta.codigo) -ne 404) { throw "El codigo sirvio dos veces" }
+          if ((Select-String -Path "$env:RUNNER_TEMP\inno-codigo.log" -SimpleMatch $alta.codigo).Count -ne 0) { throw "El codigo quedo en el /LOG" }
+
+          # Otro codigo para el mismo nodo, ahora con /CODIGO= (queda en el /LOG de Inno: documentado en nodo.iss).
+          $viejo = SecretoDelNodo
+          $otro = Invoke-RestMethod -Method Post "$base/api/nodos-offline/$($alta.node_id)/vinculacion"
+          Write-Host "::add-mask::$($otro.codigo)"
+          $otro.codigo | Out-File -Append -Encoding ascii "$env:RUNNER_TEMP\codigos.txt"
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIRECCION=localhost:8443",
+            "/CODIGO=$($otro.codigo)", "/LOG=$env:RUNNER_TEMP\inno-codigo-2.log.inno" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 60; throw "Con /CODIGO= salio con $($p.ExitCode)" }
+          SecretoOk $alta.node_id
+          if ((SecretoDelNodo) -eq $viejo) { throw "El canje no cambio el secreto" }
+
+          # Un codigo usado: los archivos se copian pero la configuracion falla (20) y el nodo.env queda como estaba.
+          $antes = SecretoDelNodo
+          $env:LIBRAEDGE_CODIGO = $otro.codigo
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIRECCION=localhost:8443",
+            "/LOG=$env:RUNNER_TEMP\inno-codigo-usado.log" -Wait -PassThru
+          Remove-Item Env:LIBRAEDGE_CODIGO
+          if ($p.ExitCode -ne 20) { throw "Con un codigo usado tenia que salir con 20 y salio con $($p.ExitCode)" }
+          if ((SecretoDelNodo) -ne $antes) { throw "Un codigo usado cambio el nodo.env" }
+          if ((Select-String -Path "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -SimpleMatch "no es v").Count -eq 0) { throw "instalacion.log no dice por que" }
+          Start-Sleep 60
+          & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Ni el secreto ni los codigos en los logs (salvo el /LOG del /CODIGO=, que es el riesgo documentado).
+          $logs = @(Get-ChildItem "$env:RUNNER_TEMP\*.log").FullName + (Get-ChildItem "$env:ProgramFiles\LibraEdge\logs\*.log").FullName
+          foreach ($buscado in @((SecretoDelNodo), $alta.codigo, $otro.codigo)) {
+            $n = (Select-String -Path $logs -SimpleMatch $buscado).Count
+            if ($n -ne 0) { throw "Un secreto o un codigo aparece $n veces en los logs" }
+          }
       - name: Logs
         if: always()
         run: |
@@ -533,6 +671,8 @@ jobs:
         run: |
           set +e
           bash instalador/linux/instalar-nodo.sh; [ $? -eq 2 ] || exit 1
+          bash instalador/linux/instalar-nodo.sh "$PRODUCTO" --codigo K7Q4-M2XP; [ $? -eq 2 ] || exit 1
+          sudo bash instalador/linux/instalar-nodo.sh "$PRODUCTO" --codigo K7Q4-M2X0 --direccion localhost:8443; [ $? -ne 0 ] || exit 1
           bash instalador/linux/instalar-nodo.sh "$PRODUCTO" "$RUNNER_TEMP/carga.json"; [ $? -ne 0 ] || exit 1
           sudo bash instalador/linux/instalar-nodo.sh otroproducto "$RUNNER_TEMP/carga.json"; [ $? -ne 0 ] || exit 1
           sudo bash instalador/linux/instalar-nodo.sh "$PRODUCTO" /no/esta.json; [ $? -ne 0 ] || exit 1
@@ -549,11 +689,20 @@ jobs:
           tail -n 5 "$RUNNER_TEMP/instalar-nodo-malo.log"
           [ "$codigo" -ne 0 ] || { echo "Con la suma mala tenia que fallar"; exit 1; }
           if dpkg -s "libraedge-nodo-$PRODUCTO" > /dev/null 2>&1; then echo "no tenia que instalar"; exit 1; fi
-      - name: curl | sudo bash -s (con las recomendadas)
+      - uses: astral-sh/setup-uv@v6
+      - name: Un central de prueba con https (ADR-014)
+        run: bash .github/central-de-prueba.sh levantar "$PRODUCTO"
+      - name: curl | sudo bash -s con el codigo (con las recomendadas)
         run: |
+          . .github/central-de-prueba.sh
+          alta="$(emitir /vinculacion '{"sucursal_id": "1"}')"
+          codigo="$(jq -r .codigo <<< "$alta")"; echo "::add-mask::$codigo"; echo "$codigo" >> "$RUNNER_TEMP/codigos.txt"
+          jq -r .node_id <<< "$alta" > "$RUNNER_TEMP/node_id.txt"
           cat instalador/linux/instalar-nodo.sh \
-            | sudo LIBRAEDGE_DEB_DIR="$PWD/_release" bash -s "$PRODUCTO" "$RUNNER_TEMP/carga.json" 2>&1 \
+            | sudo LIBRAEDGE_DEB_DIR="$PWD/_release" bash -s "$PRODUCTO" --codigo "$codigo" --direccion "$DIRECCION" 2>&1 \
             | tee "$RUNNER_TEMP/instalar-nodo.log"
+          [ "${PIPESTATUS[1]}" = 0 ]
+          secreto_ok "$(cat "$RUNNER_TEMP/node_id.txt")"
           for p in python3-gi gir1.2-ayatanaappindicator3-0.1; do
             dpkg -s "$p" > /dev/null || { echo "no se instalo la recomendada $p"; exit 1; }
           done
@@ -563,16 +712,13 @@ jobs:
           tail -n 12 "$RUNNER_TEMP/instalar-nodo.log" | grep -q "se entra siempre por la copia local"
           tail -n 12 "$RUNNER_TEMP/instalar-nodo.log" | grep -Eq "desde las otras cajas, con http://(10|172|192)\.[0-9.]+:8000$"
           apt-cache policy postgresql-16 | grep -m1 apt.postgresql.org
-      - name: Verificar (--sin-central) y ningun secreto en la salida
+      - name: Verificar (--sin-central) y ni el codigo ni ningun secreto en la salida
         run: |
           sleep 60
           sudo libraedge-nodo-verificar --sin-central
-          clave_pg="$(sudo cat /var/lib/libraedge-nodo/postgres.clave)"
-          sudo cp -r /var/log/libraedge-nodo "$RUNNER_TEMP/" && sudo chown -R "$(id -u)" "$RUNNER_TEMP/libraedge-nodo"
-          for secreto in "$SECRETO_DE_PRUEBA" "$clave_pg"; do
-            if grep -rqF -- "$secreto" "$RUNNER_TEMP"/*.log "$RUNNER_TEMP/libraedge-nodo"; then echo "Un secreto aparece en los logs"; exit 1; fi
-          done
-          echo "Ningun secreto en la salida de instalar-nodo.sh."
+          . .github/central-de-prueba.sh
+          sin_secretos_en_los_logs
+          echo "Ni el codigo ni ningun secreto en la salida de instalar-nodo.sh."
 
   publicar:
     name: publicar en el Release
@@ -608,6 +754,6 @@ jobs:
           sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits, .exe) y Ubuntu 22.04/24.04 (amd64, .deb), uno por producto. Cada uno se instala con la carga del nodo (carga-nodo.json) que emite el central del producto; en Ubuntu, en un paso: curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh | sudo bash -s <producto> /ruta/carga-nodo.json. Antes de publicarse se probaron en runners Windows y Ubuntu: instalan en silencio y pasan verificar_nodo. Los productos entran desde ${REF_PRODUCTO}."
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits, .exe) y Ubuntu 22.04/24.04/26.04 (amd64, .deb), uno por producto. Cada uno se vincula con la direccion del sistema y el codigo que muestra la pantalla Sucursal sin internet del producto (o con el archivo de carga, para soporte); en Ubuntu, en un paso: curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh | sudo bash -s <producto> --codigo <codigo> --direccion <direccion>. Antes de publicarse se probaron en runners Windows y Ubuntu contra un central de prueba con https: instalan en silencio con el codigo y pasan verificar_nodo. Los productos entran desde ${REF_PRODUCTO}."
           fi
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt

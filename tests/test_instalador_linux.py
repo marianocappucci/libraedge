@@ -601,3 +601,35 @@ def test_postinst_fija_el_dock_y_postrm_lo_quita():
     assert "glib-compile-schemas /usr/share/glib-2.0/schemas" in borrado
     armar = _texto(LINUX / "armar_deb.sh")
     assert 'echo "interest-noawait /usr/share/glib-2.0/schemas" > "$raiz/DEBIAN/triggers"' in armar
+
+
+# ── el código de vinculación (ADR-014) ──────────────────────────────────────
+
+def test_con_el_codigo_se_canjea_antes_de_tocar_nada_y_sin_loguearlo():
+    instalar = _texto(LINUX / "instalar.sh")
+    # La carga canjeada nace 600 de root ANTES de que el ayudante escriba el secreto adentro.
+    crear = instalar.index('install -m 600 -o root -g root /dev/null "$canjeada"')
+    assert crear < instalar.index("ayudante canjear") < instalar.index("ayudante validar") < instalar.index("tocado=1")
+    # El ayudante lo lee del entorno (nunca por argumento) y se borra del entorno apenas se usa.
+    assert 'export LIBRAEDGE_CODIGO="$codigo_vinc"' in instalar
+    assert "--codigo" not in instalar.split("ayudante canjear")[1].splitlines()[0]
+    assert instalar.count("unset LIBRAEDGE_CODIGO") >= 2
+    # Ninguna línea que escribe al log nombra el código.
+    assert not re.search(r'\b(registrar|echo|aviso|morir)\s+"[^"]*\$\{?codigo_vinc', instalar)
+    # Al terminar bien se borra la carga canjeada; si falla, dice cómo reintentar con ella.
+    assert 'rm -f "$canjeada"' in instalar and "sudo libraedge-nodo-instalar $canjeada" in instalar
+
+
+def test_postinst_con_el_codigo_lo_deja_en_el_entorno():
+    postinst = _texto(LINUX / "debian" / "postinst")
+    assert 'if [ -n "${LIBRAEDGE_CODIGO:-}" ]' in postinst
+    rama = postinst.split('if [ -n "${LIBRAEDGE_CODIGO:-}" ]')[1].split("elif")[0]
+    assert "instalar.sh" in rama and "LIBRAEDGE_CODIGO" not in rama.split("instalar.sh")[1]
+    assert "sudo libraedge-nodo-instalar --codigo <codigo> --direccion <direccion>" in postinst
+
+
+def test_instalar_nodo_pasa_el_codigo_a_apt_por_el_entorno():
+    script = _texto(LINUX / "instalar-nodo.sh")
+    assert 'LIBRAEDGE_CODIGO="$codigo" LIBRAEDGE_DIRECCION="$direccion" apt-get install' in script
+    assert 'LIBRAEDGE_CARGA="$carga" apt-get install' in script
+    assert not re.search(r'\b(echo|morir|paso)\s+"[^"]*\$\{?codigo', script)

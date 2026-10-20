@@ -207,6 +207,13 @@ directos «VentaLibra» del escritorio y del menú Inicio, y los datos
 ps_vm 'Start-Process "C:\Program Files\LibraEdge\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait; Start-Sleep 10; Get-Service LibraEdge* -ErrorAction SilentlyContinue; Test-Path "C:\Program Files\LibraEdge\nodo.env"; Get-NetFirewallRule -DisplayName "LibraEdge producto" -ErrorAction SilentlyContinue; Get-ChildItem C:\ProgramData\LibraEdge'
 ```
 
+**V15. El asistente con el código (ADR-014; sólo en la VM: el CI instala en silencio).** Con un central de verdad
+(un `dev.` del producto, «Sucursal sin internet» → «Dar de alta el nodo»), ejecutar el instalador **sin argumentos** y
+escribir la dirección y el código en «Vincular con el sistema». Esperado: la página del archivo se saltea, la
+instalación termina con 0, el nodo aparece «al día» en la pantalla del central y `C:\ProgramData\LibraEdge\carga-nodo.json`
+no quedó. Con un código mal tipeado, el asistente avisa y no avanza; con uno vencido, termina con 20 y dice que se pida
+otro.
+
 ## 4. Traer los logs
 
 ```bash

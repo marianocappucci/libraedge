@@ -75,7 +75,7 @@ aprovisionamiento = Aprovisionamiento(
     prefijo="VENTALIBRA",                                  # VENTALIBRA_DATABASE_URL, VENTALIBRA_EDGE_NODE_ID
     tablas_de_referencia=["catalog_items", "units", ("party_roles", "party_id+role")],
     listar_sucursales=get_all_sucursales,                  # id, nombre, activa
-    # verificar_alta: por defecto, el adicional `offline` de libracore con el `plans` del producto
+    # verificar_alta: por defecto `sin_guarda` (LibraEdge está incluido en todos los planes, ADR-014)
 )
 ```
 
@@ -143,12 +143,27 @@ app.include_router(create_nodos_router(aprovisionamiento, get_connection),
                    dependencies=[Depends(<guarda de admin del producto>)])
 ```
 
-`GET /api/nodos-offline` (sucursales, nodos con su última sincronización y prefijo, si el adicional `offline` está
-contratado, el link del instalador del producto y la URL del central), `POST /api/nodos-offline` con `{"sucursal_id"}`
-(alta de un nodo nuevo: publica, registra y **devuelve la carga como adjunto**), `POST /api/nodos-offline/{id}/carga`
-(la misma PC, secreto nuevo) y `DELETE /api/nodos-offline/{id}` (baja). `GET /api/nodos-offline/menu` dice si la entrada del menú se ve: con el
-adicional contratado o con nodos activos (sin el adicional, sólo se pueden dar de baja). El secreto sólo viaja en la respuesta que es la
-carga (`Content-Disposition: attachment`, `Cache-Control: no-store`); la pantalla del kit es `libra-ui/SucursalSinInternet`.
+`GET /api/nodos-offline` (sucursales, nodos con su última sincronización, prefijo y código pendiente, el link del
+instalador del producto, la URL del central y la **dirección** que se escribe en el instalador),
+`POST /api/nodos-offline/vinculacion` con `{"sucursal_id"}` (alta de un nodo nuevo: publica, registra y **devuelve
+dirección + código de vinculación**, ADR-014), `POST /api/nodos-offline/{id}/vinculacion` (otro código para la misma
+PC; anula el pendiente), `DELETE /api/nodos-offline/{id}/vinculacion` (anula el código) y `DELETE /api/nodos-offline/{id}`
+(baja). La alternativa para soporte es el archivo: `POST /api/nodos-offline` (alta) y `POST /api/nodos-offline/{id}/carga`
+devuelven la carga como adjunto. `contratado` y `GET /api/nodos-offline/menu` quedan por compatibilidad, siempre `true`:
+LibraEdge está incluido en todos los planes. La pantalla del kit es `libra-ui/SucursalSinInternet`.
+
+El canje es **público** y se monta aparte, sin guarda (lo llama el instalador, que no tiene sesión):
+
+```python
+from libraauth.auth_events import ip_del_request
+from libraedge.pantalla_del_central import create_canje_router
+
+app.include_router(create_canje_router(aprovisionamiento, get_connection, ip_del_request=ip_del_request))
+```
+
+`POST /sync/v1/vinculacion` con `{"codigo", "producto"}`: sólo https, código de un solo uso que vence a los 15 minutos
+(8 símbolos sin caracteres confusos, se guarda el hash), límite de canjes fallidos por IP (10) y global (60) en 15
+minutos, y devuelve la carga con `Cache-Control: no-store`. El secreto sólo viaja en esa respuesta o en el adjunto.
 
 ## Estado
 

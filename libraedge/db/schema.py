@@ -100,6 +100,13 @@ def init_schema(conn) -> None:
         if columna not in columnas:
             conn.execute(f"ALTER TABLE sync_inbox ADD COLUMN {columna} {tipo}")
 
+    # Desde v0.14 (ADR-014): los códigos de vinculación del central y sus canjes fallidos. Van acá y no en una función
+    # aparte que cada producto tenga que acordarse de llamar: el arranque y la revisión `*_libraedge` de los tres
+    # productos ya llaman a esta, así que las tablas aparecen en las instancias vivas sin una migración nueva.
+    from libraedge.vinculacion import init_vinculacion_schema
+
+    init_vinculacion_schema(conn)
+
 
 #: Las columnas de revision manual de `sync_inbox`. Todas nulables: las filas
 #: `applied` de antes de v0.7 no las tienen y no les hacen falta.

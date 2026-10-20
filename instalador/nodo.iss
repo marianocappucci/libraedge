@@ -16,12 +16,21 @@
 ;   paquete\postgres\              PostgreSQL 16 (el ZIP binario, NO el instalador de EDB)
 ;   paquete\herramientas\          nssm.exe y vc_redist.x64.exe
 ;
-; Instalacion desatendida (la carga la emite el central, ver README):
-;     libraedge-nodo-ventalibra-0.10.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+; Instalacion desatendida con el codigo de vinculacion (ADR-014; la direccion y
+; el codigo los muestra el sistema en "Sucursal sin internet"):
+;     set LIBRAEDGE_CODIGO=K7Q4-M2XP
+;     libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /DIRECCION=sistema.ventalibra.com.ar /LOG=C:\ruta\inno.log
+; Tambien /CODIGO=K7Q4-M2XP, pero Inno Setup escribe su linea de comandos en el
+; /LOG: el codigo quedaria en ese archivo. Sirve una sola vez y vence a los 15
+; minutos (y el instalador lo canjea apenas arranca), asi que el riesgo es
+; chico; con la variable LIBRAEDGE_CODIGO no queda en ningun lado.
+; Con el archivo de carga (soporte):
+;     libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
 ;
-; Codigos de salida: 0 bien; 1 no arranco (falta /CARGA, u otro producto ya
-; instalado); 20 los archivos se copiaron pero la configuracion del nodo fallo
-; (el detalle esta en {app}\logs\instalacion.log). Los demas son los de Inno.
+; Codigos de salida: 0 bien; 1 no arranco (falta el codigo o la carga, u otro
+; producto ya instalado); 20 los archivos se copiaron pero la configuracion del
+; nodo fallo, por ejemplo un codigo vencido (el detalle esta en
+; {app}\logs\instalacion.log). Los demas son los de Inno.
 ;
 ; Los textos van SIN acentos: sin BOM, ISCC lee este archivo con la pagina de
 ; codigos del sistema.
@@ -151,21 +160,72 @@ Type: filesandordirs; Name: "{app}\python"
 ; reinstalar). El secreto del nodo no se conserva.
 
 [Code]
-{ La carga del nodo es un ARCHIVO (carga-nodo.json) que emite el central con
-  libraedge-central nodo registrar ... --carga. Se elige en el asistente o se
-  pasa con /CARGA= en una instalacion desatendida.
+{ El nodo se vincula con la DIRECCION del sistema y un CODIGO de vinculacion
+  (ADR-014), que muestra el central en "Sucursal sin internet" al dar de alta el
+  nodo: se escriben en el asistente, o van en /DIRECCION= y LIBRAEDGE_CODIGO
+  (o /CODIGO=) en una instalacion desatendida. instalar.ps1 canjea el codigo por
+  la carga antes de tocar nada. La alternativa para soporte es el ARCHIVO de
+  carga (carga-nodo.json): se elige en el asistente o va en /CARGA=.
 
   Nunca se pasan secretos por la linea de comandos: Inno Setup escribe su linea
   de comandos en el log (/LOG), y los scripts de PowerShell la suya en el
-  transcript. Viaja la RUTA de la carga; el secreto lo lee el ayudante.
+  transcript. Viaja la RUTA de la carga; el secreto lo lee el ayudante. El
+  codigo viaja en la variable LIBRAEDGE_CODIGO de este proceso, que heredan
+  PowerShell y el ayudante.
 
   (Ojo con las llaves en estos comentarios: en Pascal Script la llave ES el
   comentario y una de mas lo cierra antes de tiempo.) }
 var
+  PaginaVinculo: TInputQueryWizardPage;
   PaginaCarga: TInputFileWizardPage;
-  vCarga: String;
+  vCarga, vDireccion, vCodigo: String;
   CodigoDeSalida: Integer;
   ServiciosParados: Boolean;
+
+function SetEnvironmentVariable(lpName, lpValue: String): BOOL;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+{ El codigo sin espacios ni guiones y en mayusculas: 8 de
+  23456789ABCDEFGHJKMNPQRSTUVWXYZ (ADR-014). Vacio si no tiene esa forma. }
+function CodigoNormalizado(const Texto: String): String;
+var
+  I: Integer;
+  C: String;
+begin
+  Result := '';
+  for I := 1 to Length(Texto) do
+  begin
+    C := Uppercase(Copy(Texto, I, 1));
+    if (C = ' ') or (C = '-') or (C = #9) then
+      Continue;
+    if Pos(C, '23456789ABCDEFGHJKMNPQRSTUVWXYZ') = 0 then
+    begin
+      Result := '';
+      Exit;
+    end;
+    Result := Result + C;
+  end;
+  if Length(Result) <> 8 then
+    Result := '';
+end;
+
+{ La direccion va como argumento de PowerShell: solo letras, numeros y . : / - _ }
+function DireccionValida(const Texto: String): Boolean;
+var
+  I: Integer;
+  C: String;
+begin
+  Result := Texto <> '';
+  for I := 1 to Length(Texto) do
+  begin
+    C := Copy(Texto, I, 1);
+    if Pos(Lowercase(C), 'abcdefghijklmnopqrstuvwxyz0123456789.:/-_') = 0 then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
 
 function ArchivoDeProducto: String;
 begin
@@ -182,6 +242,12 @@ begin
   vCarga := Trim(ExpandConstant('{param:CARGA|}'));
   if vCarga <> '' then
     vCarga := ExpandFileName(vCarga);
+  vDireccion := Trim(ExpandConstant('{param:DIRECCION|}'));
+  if vDireccion = '' then
+    vDireccion := Trim(GetEnv('LIBRAEDGE_DIRECCION'));
+  vCodigo := Trim(ExpandConstant('{param:CODIGO|}'));
+  if vCodigo = '' then
+    vCodigo := Trim(GetEnv('LIBRAEDGE_CODIGO'));
 
   { Un nodo por PC: los servicios, el puerto de PostgreSQL y la carpeta de
     datos son unos solos. }
@@ -199,33 +265,83 @@ begin
     end;
   end;
 
-  { En silencio no hay a quien preguntarle: sin carga se aborta antes de tocar
-    el disco. }
-  if WizardSilent and ((vCarga = '') or (not FileExists(vCarga))) then
+  { En silencio no hay a quien preguntarle: sin codigo ni carga se aborta antes
+    de tocar el disco. El codigo no se loguea. }
+  if WizardSilent then
   begin
-    Log('Instalacion desatendida sin /CARGA o con un archivo que no existe.');
-    SuppressibleMsgBox('Instalacion desatendida: falta /CARGA=<ruta de carga-nodo.json> o el archivo no existe.',
-      mbError, MB_OK, IDOK);
-    Result := False;
+    if (vCodigo <> '') or (vDireccion <> '') then
+    begin
+      if (CodigoNormalizado(vCodigo) = '') or (not DireccionValida(vDireccion)) or (vCarga <> '') then
+      begin
+        Log('Instalacion desatendida con un codigo o una direccion que no sirven (o con codigo y carga a la vez).');
+        SuppressibleMsgBox('Instalacion desatendida: el codigo de vinculacion va con /DIRECCION= (la direccion ' +
+          'del sistema), tiene 8 letras y numeros (como K7Q4-M2XP) y no va junto con /CARGA=.',
+          mbError, MB_OK, IDOK);
+        Result := False;
+      end;
+    end
+    else if (vCarga = '') or (not FileExists(vCarga)) then
+    begin
+      Log('Instalacion desatendida sin codigo ni carga, o con un archivo de carga que no existe.');
+      SuppressibleMsgBox('Instalacion desatendida: falta /DIRECCION= con LIBRAEDGE_CODIGO (o /CODIGO=), ' +
+        'o /CARGA=<ruta de carga-nodo.json>.', mbError, MB_OK, IDOK);
+      Result := False;
+    end;
   end;
 end;
 
 procedure InitializeWizard;
 begin
-  PaginaCarga := CreateInputFilePage(wpSelectDir,
-    'Carga del nodo',
-    'El archivo que emitio el central al registrar este nodo',
-    'En el central: libraedge-central nodo registrar <node_id> --sucursal <sucursal> ' +
-    '--carga carga-nodo.json --central-url https://... ' + #13#10 +
-    'Elegir ese archivo. Tiene el secreto del nodo: borrarlo despues de instalar.');
+  PaginaVinculo := CreateInputQueryPage(wpSelectDir,
+    'Vincular con el sistema',
+    'La direccion y el codigo que muestra el sistema',
+    'En el sistema, entre a Configuracion > Sucursal sin internet y de de alta el nodo de esta sucursal ' +
+    '(o pida otro codigo): ahi aparecen la direccion del sistema y un codigo de vinculacion. ' +
+    'El codigo vale 15 minutos y una sola vez.' + #13#10#13#10 +
+    'Si soporte le dio un archivo de carga, deje los dos campos vacios y eligalo en la pagina siguiente.');
+  PaginaVinculo.Add('Direccion del sistema (por ejemplo sistema.contalibra.com.ar):', False);
+  PaginaVinculo.Add('Codigo de vinculacion (por ejemplo K7Q4-M2XP):', False);
+  PaginaVinculo.Values[0] := vDireccion;
+  PaginaVinculo.Values[1] := vCodigo;
+
+  PaginaCarga := CreateInputFilePage(PaginaVinculo.ID,
+    'Archivo de carga (soporte)',
+    'Solo si soporte le dio el archivo de carga del nodo',
+    'El archivo carga-nodo.json que se descarga en Sucursal sin internet (Archivo de carga). ' +
+    'Tiene el secreto del nodo: borrarlo despues de instalar.');
   PaginaCarga.Add('Archivo de carga:', 'Carga del nodo (*.json)|*.json|Todos los archivos|*.*', '.json');
   PaginaCarga.Values[0] := vCarga;
+end;
+
+{ Con el codigo no hace falta el archivo. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = PaginaCarga.ID) and (vCodigo <> '');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if CurPageID = PaginaCarga.ID then
+  if CurPageID = PaginaVinculo.ID then
+  begin
+    vDireccion := Trim(PaginaVinculo.Values[0]);
+    vCodigo := Trim(PaginaVinculo.Values[1]);
+    if (vDireccion = '') and (vCodigo = '') then
+      Exit;
+    if not DireccionValida(vDireccion) then
+    begin
+      SuppressibleMsgBox('Escribir la direccion del sistema tal como la muestra Sucursal sin internet ' +
+        '(por ejemplo sistema.contalibra.com.ar).', mbError, MB_OK, IDOK);
+      Result := False;
+    end
+    else if CodigoNormalizado(vCodigo) = '' then
+    begin
+      SuppressibleMsgBox('El codigo de vinculacion tiene 8 letras y numeros, como K7Q4-M2XP. ' +
+        'Si vencio, pedir otro en Sucursal sin internet.', mbError, MB_OK, IDOK);
+      Result := False;
+    end;
+  end
+  else if CurPageID = PaginaCarga.ID then
   begin
     vCarga := Trim(PaginaCarga.Values[0]);
     if (vCarga = '') or (not FileExists(vCarga)) then
@@ -310,8 +426,17 @@ begin
     Registro := ExpandConstant('{app}\logs\instalacion.log');
     WizardForm.StatusLabel.Caption := 'Preparando la base local y el nodo (puede tardar unos minutos)...';
     Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\instalador\instalar.ps1') +
-      '" -RaizNodo "' + ExpandConstant('{app}') + '" -Carga "' + vCarga +
-      '" -Datos "' + ExpandConstant('{commonappdata}\LibraEdge') + '"';
+      '" -RaizNodo "' + ExpandConstant('{app}') + '" -Datos "' + ExpandConstant('{commonappdata}\LibraEdge') + '"';
+    if vCodigo <> '' then
+    begin
+      { El codigo, por el entorno que hereda PowerShell (nunca en Parametros:
+        el transcript anota la linea de comandos). }
+      SetEnvironmentVariable('LIBRAEDGE_CODIGO', CodigoNormalizado(vCodigo));
+      Parametros := Parametros + ' -Direccion "' + vDireccion + '"';
+      Log('Configurando el nodo con el codigo de vinculacion de ' + vDireccion + '.');
+    end
+    else
+      Parametros := Parametros + ' -Carga "' + vCarga + '"';
     Log('Configurando el nodo con instalar.ps1; el detalle queda en ' + Registro);
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Parametros,
                 ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Codigo) then
@@ -337,9 +462,11 @@ begin
                                        '', '', SW_SHOWNORMAL, ewNoWait, Codigo) then
           Log('No se pudo abrir la bandeja: ' + SysErrorMessage(Codigo));
     end;
+    SetEnvironmentVariable('LIBRAEDGE_CODIGO', '');
     if CodigoDeSalida <> 0 then
       SuppressibleMsgBox('La configuracion del nodo fallo. El detalle esta en ' + Registro +
-        '. Se puede reintentar corriendo instalar.ps1 a mano (ver el README).', mbError, MB_OK, IDOK);
+        '. Si el codigo vencio o ya se uso, pedir otro en Sucursal sin internet y volver a ejecutar el ' +
+        'instalador.', mbError, MB_OK, IDOK);
   end;
 end;
 

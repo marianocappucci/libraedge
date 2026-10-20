@@ -2,28 +2,60 @@
 # Configura el nodo LibraEdge en Linux (ADR-012). Es el instalar.ps1 de Windows:
 # lo corre el postinst del .deb y se puede correr a mano (todo es idempotente).
 #
-#     sudo libraedge-nodo-instalar /ruta/carga-nodo.json    primera vez, o con una carga nueva
+#     sudo libraedge-nodo-instalar --codigo K7Q4-M2XP --direccion sistema.contalibra.com.ar
+#                                                           primera vez o reinstalar, con el codigo (ADR-014)
+#     sudo libraedge-nodo-instalar /ruta/carga-nodo.json    lo mismo con el archivo de carga (soporte)
 #     sudo libraedge-nodo-instalar                          actualizar/reparar con el nodo.env que ya esta
 #
-# La carga la emite el central (pantalla «Sucursal sin internet» o
-# `libraedge-central nodo registrar --carga`). Tambien se puede pasar con la
-# variable LIBRAEDGE_CARGA al instalar el paquete:
+# La direccion y el codigo los muestra el central (pantalla «Sucursal sin
+# internet», al dar de alta el nodo): el codigo vale 15 minutos y una sola vez, y
+# el ayudante lo canjea por la carga del nodo por https. Tambien se pueden pasar
+# al instalar el paquete, con LIBRAEDGE_CODIGO y LIBRAEDGE_DIRECCION (o la carga
+# con LIBRAEDGE_CARGA):
 #
-#     sudo LIBRAEDGE_CARGA=/ruta/carga-nodo.json apt install ./libraedge-nodo-<producto>_<version>_amd64.deb
+#     sudo LIBRAEDGE_CODIGO=K7Q4-M2XP LIBRAEDGE_DIRECCION=sistema.contalibra.com.ar \
+#         apt install ./libraedge-nodo-<producto>_<version>_amd64.deb
+#
+# El codigo NO se registra en el log. Pasado por argumento queda un momento en la
+# linea de comandos de este proceso (/proc/<pid>/cmdline): sirve una sola vez y
+# vence, y para no dejarlo ni ahi esta LIBRAEDGE_CODIGO.
 #
 # Sale con 0 si el nodo quedo configurado y con otro codigo si no (2: falta la
-# carga o no sirve). El detalle queda en /var/log/libraedge-nodo/instalacion.log,
-# sin secretos: solo pasan rutas de archivos.
+# carga o el codigo, o no sirven). El detalle queda en
+# /var/log/libraedge-nodo/instalacion.log, sin secretos: solo pasan rutas de archivos.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/comun.sh"
 
 [ "$(id -u)" = 0 ] || { echo "ERROR: correr como root (sudo libraedge-nodo-instalar ...)." >&2; exit 2; }
-carga="${1:-${LIBRAEDGE_CARGA:-}}"
+uso="uso: libraedge-nodo-instalar [--codigo CODIGO --direccion DIRECCION | /ruta/carga-nodo.json]"
+carga="${LIBRAEDGE_CARGA:-}"
+codigo_vinc="${LIBRAEDGE_CODIGO:-}"
+direccion="${LIBRAEDGE_DIRECCION:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --codigo) [ $# -ge 2 ] || { echo "$uso" >&2; exit 2; }; codigo_vinc="$2"; shift 2 ;;
+        --codigo=*) codigo_vinc="${1#--codigo=}"; shift ;;
+        --direccion) [ $# -ge 2 ] || { echo "$uso" >&2; exit 2; }; direccion="$2"; shift 2 ;;
+        --direccion=*) direccion="${1#--direccion=}"; shift ;;
+        -h | --help) echo "$uso"; exit 0 ;;
+        -*) echo "$uso" >&2; exit 2 ;;
+        *) carga="$1"; shift ;;
+    esac
+done
+unset LIBRAEDGE_CODIGO
+if [ -n "$codigo_vinc" ] || [ -n "$direccion" ]; then
+    if [ -z "$codigo_vinc" ] || [ -z "$direccion" ]; then
+        echo "ERROR: el codigo va con la direccion del sistema. $uso" >&2
+        exit 2
+    fi
+    [ -z "$carga" ] || { echo "ERROR: o el codigo o el archivo de carga, no los dos. $uso" >&2; exit 2; }
+fi
 
 install -d -m 750 "$LOGS"
 exec > >(tee -a "$LOGS/instalacion.log") 2>&1
 echo
-registrar "== libraedge-nodo-instalar ${carga:+con la carga $carga}"
+# Ni el codigo ni el secreto en el log: la direccion y la ruta de la carga, si.
+registrar "== libraedge-nodo-instalar ${carga:+con la carga $carga}${direccion:+con el codigo de vinculacion de $direccion}"
 
 # Hasta tocar la base, un error deja la PC como estaba: los servicios que estaban
 # habilitados se vuelven a arrancar (una carga equivocada no deja el local sin
@@ -41,6 +73,10 @@ al_salir() {
     fi
     if [ "$codigo" -ne 0 ]; then
         echo "La configuracion del nodo fallo (codigo $codigo). El detalle esta arriba y en $LOGS/instalacion.log."
+        if [ -n "${canjeada:-}" ] && [ -s "$canjeada" ]; then
+            echo "El codigo ya se uso: la carga quedo en $canjeada (root, 600). Reintentar con:"
+            echo "    sudo libraedge-nodo-instalar $canjeada"
+        fi
     fi
 }
 trap al_salir EXIT
@@ -50,6 +86,28 @@ producto="$(plan_campo 'p["producto"]')"
 registrar "Nodo LibraEdge de $nombre"
 
 # --- 1. La carga, antes de tocar nada ----------------------------------------------
+# Con el codigo (ADR-014), primero se canjea: el ayudante lo lee de LIBRAEDGE_CODIGO (nunca de un argumento) y
+# escribe la carga en un archivo de root con permisos 600, que se borra al terminar bien. Si algo falla despues, el
+# archivo queda (el codigo ya se uso) y se reintenta con: sudo libraedge-nodo-instalar <esa ruta>.
+canjeada=""
+if [ -n "$codigo_vinc" ]; then
+    canjeada="$DATOS/carga-nodo.json"
+    install -d -m 755 "$DATOS"
+    rm -f "$canjeada"
+    install -m 600 -o root -g root /dev/null "$canjeada"
+    registrar "Canjeando el codigo de vinculacion en $direccion..."
+    export LIBRAEDGE_CODIGO="$codigo_vinc"
+    if ! ayudante canjear --definicion "$DEFINICION" --direccion "$direccion" --salida "$canjeada" > /dev/null; then
+        unset LIBRAEDGE_CODIGO
+        rm -f "$canjeada"
+        echo "ERROR: no se pudo canjear el codigo (el motivo esta arriba). Pedir otro en «Sucursal sin internet»." >&2
+        exit 2
+    fi
+    unset LIBRAEDGE_CODIGO
+    codigo_vinc=""
+    carga="$canjeada"
+    registrar "Codigo canjeado: la carga del nodo quedo en $canjeada (root, 600) hasta terminar."
+fi
 if [ -n "$carga" ]; then
     [ -f "$carga" ] || { echo "ERROR: no esta la carga: $carga" >&2; exit 2; }
     carga="$(readlink -f "$carga")"
@@ -63,7 +121,8 @@ print("Carga: nodo {node_id}, prefijo {prefijo}, central {central}, {tablas_espe
 for a in r["avisos"]:
     print("AVISO: " + a)'
 elif [ ! -s "$ARCHIVO_ENV" ]; then
-    echo "ERROR: falta la carga del nodo. Correr: sudo libraedge-nodo-instalar /ruta/carga-nodo.json" >&2
+    echo "ERROR: falta configurar el nodo. Correr: sudo libraedge-nodo-instalar --codigo <codigo> --direccion <direccion>" \
+        "(los muestra «Sucursal sin internet» en el sistema) o con /ruta/carga-nodo.json." >&2
     exit 2
 else
     registrar "Sin carga: se actualiza con el $ARCHIVO_ENV que ya esta."
@@ -103,7 +162,10 @@ printf '%s\n' "$producto" > "$MARCA"
 # --- 7. Como se entra: el acceso directo «<Producto>» y la direccion para las otras cajas (ADR-013) ---
 mostrar_acceso
 
-if [ -n "$carga" ]; then
+if [ -n "$canjeada" ]; then
+    # El secreto ya esta en el nodo.env: la carga canjeada no tiene por que quedar.
+    rm -f "$canjeada"
+elif [ -n "$carga" ]; then
     echo "La carga ($carga) tiene el secreto del nodo: borrarla de esta PC y de donde se haya copiado."
 fi
 registrar "== Listo."
