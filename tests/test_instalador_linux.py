@@ -385,13 +385,14 @@ def test_el_autostart_abre_la_bandeja_con_el_python_del_sistema():
     assert "Exec=/usr/bin/python3 /opt/libraedge-nodo/bandeja/bandeja_linux.py" in desktop
     assert "Type=Application" in desktop
     armar = _texto(LINUX / "armar_deb.sh")
-    assert "gnome-shell-extension-appindicator" in armar and "gir1.2-ayatanaappindicator3-0.1" in armar
+    assert "gnome-shell-extension-appindicator | gnome-shell-ubuntu-extensions" in armar
+    assert "gir1.2-ayatanaappindicator3-0.1" in armar
     assert "python3-gi" in armar.split("Recommends:")[1].split("\n")[0]  # Recommends: un servidor no la necesita
 
 
 def test_el_workflow_prueba_el_deb_en_las_dos_versiones_de_ubuntu():
     workflow = _texto(RAIZ / ".github" / "workflows" / "publicar-instalador.yml")
-    assert "ubuntu-22.04" in workflow and "ubuntu-24.04" in workflow
+    assert "ubuntu-22.04" in workflow and "ubuntu-24.04" in workflow and "ubuntu-26.04" in workflow
     assert "verificar_nodo.sh --sin-central" in workflow or "libraedge-nodo-verificar --sin-central" in workflow
     assert "prueba-prueba-prueba-prueba-prueba" in workflow
     assert "libraedge-nodo-${{ matrix.producto }}_amd64.deb" in workflow
@@ -404,7 +405,7 @@ def test_el_workflow_prueba_el_deb_en_las_dos_versiones_de_ubuntu():
 
 def test_instalar_nodo_controla_el_sistema_y_no_usa_apt_key():
     script = _texto(LINUX / "instalar-nodo.sh")
-    assert '[ "${ID:-}" = ubuntu ]' in script and "22.04 | 24.04)" in script
+    assert '[ "${ID:-}" = ubuntu ]' in script and "22.04 | 24.04 | 26.04)" in script
     assert "dpkg --print-architecture)\" = amd64" in script and '[ "$(id -u)" = 0 ]' in script
     assert "apt-key" not in script.replace("sin apt-key", "")
     # La forma oficial de PGDG: el script de postgresql-common (llave en un archivo y signed-by).
