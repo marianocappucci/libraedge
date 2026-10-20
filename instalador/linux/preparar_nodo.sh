@@ -39,9 +39,16 @@ if [ -n "$carga" ]; then
     [ -e "$ARCHIVO_ENV" ] || install -m 600 -o root -g root /dev/null "$ARCHIVO_ENV"
     chown root:root "$ARCHIVO_ENV"
     chmod 600 "$ARCHIVO_ENV"
+    # Despues de un apt remove el nodo.env ya no esta (tenia el secreto del nodo), pero si lo conservado.
+    previo=()
+    [ ! -s "$CONSERVADO" ] || previo=(--previo "$CONSERVADO")
     ayudante entorno --definicion "$DEFINICION" --carga "$carga" --clave-pg "$CLAVE_PG" \
-        --estado "$ESTADO" --data-dir "$DATA_DIR" --salida "$ARCHIVO_ENV" \
+        --estado "$ESTADO" --data-dir "$DATA_DIR" --salida "$ARCHIVO_ENV" "${previo[@]}" \
         || morir "No se pudo escribir $ARCHIVO_ENV. El motivo esta arriba."
+    if [ "${#previo[@]}" -gt 0 ]; then
+        registrar "Se recuperaron SECRET_KEY y la clave del admin local de la instalacion anterior."
+        rm -f "$CONSERVADO"
+    fi
 
     # CUIT, razon social, condicion de IVA, formato del ticket: los lee la
     # facturacion del nodo del config.json de DATA_DIR. Se fusionan.

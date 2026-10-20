@@ -190,6 +190,23 @@ la primera sincronización y la verificación son **las mismas**, por el mismo `
 
 ### Instalar
 
+**En un paso**, con el script que se publica en el Release al lado de los `.deb` (y en `SHA256SUMS.txt`):
+
+```bash
+curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh \
+    | sudo bash -s ventalibra /ruta/carga-nodo.json
+sudo libraedge-nodo-verificar
+```
+
+`instalar-nodo.sh <producto> <carga>` controla que sea Ubuntu 22.04 o 24.04 amd64 y que corra como root, agrega el
+repositorio de PGDG de la forma oficial (el script de `postgresql-common`: llave en un archivo y `signed-by`, sin
+`apt-key`), baja `libraedge-nodo-<producto>_amd64.deb` del mismo Release, lo verifica contra su `SHA256SUMS.txt` y lo
+instala **con las recomendadas** (la bandeja) y `LIBRAEDGE_CARGA`. Ante cualquier falla sale con un código distinto de 0.
+La carga es una ruta: el secreto no pasa por los argumentos. Una versión fija: `sudo LIBRAEDGE_VERSION=0.12.0 bash -s
+...`. En el CI se prueba con `LIBRAEDGE_DEB_DIR` (un directorio con el `.deb` y `SHA256SUMS.txt`) en vez de bajar.
+
+**A mano**, en tres pasos:
+
 ```bash
 # 1. PostgreSQL 16 de PGDG (en 22.04 es obligatorio: Ubuntu trae la 14).
 sudo apt install -y postgresql-common
@@ -215,10 +232,13 @@ sudo libraedge-nodo-verificar            # --sin-central con la carga de prueba 
 - **Un nodo por PC:** el `preinst` corta antes de desempaquetar si la PC tiene el nodo de otro producto
   (`/var/lib/libraedge-nodo/producto.txt` o el paquete de otro producto instalado). No se usa `Conflicts:` a propósito:
   apt sacaría el otro nodo sin preguntar.
-- **`apt remove`** para y deshabilita los servicios y el clúster; quedan `nodo.env` y los datos (reinstalar levanta el
-  mismo nodo). **`apt purge`** borra además `/etc/libraedge-nodo` (el secreto), el estado, los logs y la regla de ufw.
-  **Los datos quedan siempre**, como en Windows: el clúster `16/libraedge`, `postgres.clave`, `app/config.json`, los
-  respaldos y `producto.txt`. Se borran a mano, después de confirmar que el outbox no tiene nada sin subir:
+- **`apt remove`** para y deshabilita los servicios y el clúster y **borra `nodo.env`**, que tiene el secreto del nodo
+  (como en Windows: no queda en el disco de una PC que se da de baja). Antes guarda `SECRET_KEY` y la clave del admin
+  local en `/var/lib/libraedge-nodo/conservado.env` (root 600; no el secreto del nodo): sin `SECRET_KEY` no se lee lo
+  que libraauth cifró en la base. **Reinstalar después pide la carga** y, con ella, configura sobre los datos que
+  estaban (mismo clúster, mismo `SECRET_KEY`; `conservado.env` se borra). **`apt purge`** borra además el resto de
+  `/etc/libraedge-nodo`, el estado, los logs y la regla de ufw. **Los datos quedan siempre**: el clúster
+  `16/libraedge`, `postgres.clave`, `conservado.env`, `app/config.json`, los respaldos y `producto.txt`. Se borran a mano, después de confirmar que el outbox no tiene nada sin subir:
   `sudo pg_dropcluster --stop 16 libraedge && sudo rm -rf /var/lib/libraedge-nodo`.
 
 ### Qué instala

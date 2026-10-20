@@ -5,7 +5,7 @@
 #   producto atendiendo); el postinst los vuelve a arrancar.
 # - remove: para y deshabilita todo, incluido el cluster del nodo (queda en
 #   disco y no arranca solo). Los DATOS NO se tocan: el outbox puede tener ventas
-#   que todavia no subieron al central.
+#   que todavia no subieron al central. El nodo.env (el secreto) lo borra el postrm.
 set -e
 case "$1" in
     upgrade)

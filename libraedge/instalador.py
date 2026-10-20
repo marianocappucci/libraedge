@@ -25,6 +25,7 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py validar --definicion producto.json --carga carga-nodo.json
     python libraedge_instalador.py entorno --definicion ... --carga ... --clave-pg ARCHIVO \\
         --estado RUTA --data-dir RUTA --salida nodo.env
+    python libraedge_instalador.py entorno ... --previo /var/lib/libraedge-nodo/conservado.env   (Linux)
     python libraedge_instalador.py config-emisor --carga ... --config RUTA\\config.json
     python libraedge_instalador.py revisar-entorno --definicion ... --entorno nodo.env
     python libraedge_instalador.py ejecutar libracore-migrar upgrade --prefijo ventalibra
@@ -714,6 +715,8 @@ def _parser() -> argparse.ArgumentParser:
     entorno.add_argument("--estado", required=True, help="ruta del estado.json del proceso del nodo")
     entorno.add_argument("--data-dir", required=True, help="DATA_DIR del producto (config.json, logos...)")
     entorno.add_argument("--salida", required=True, help="el nodo.env")
+    entorno.add_argument("--previo", help="lo conservado de un nodo.env borrado al desinstalar (Linux): SECRET_KEY y"
+                         " la clave del admin local, si el nodo.env no los tiene")
     config = sub.add_parser("config-emisor", help="copia los datos del emisor de la carga al config.json")
     config.add_argument("--definicion", required=True)
     config.add_argument("--carga", required=True)
@@ -773,7 +776,9 @@ def main(argv: list[str] | None = None) -> int:
         clave_pg = _leer_texto(args.clave_pg).strip()
         if not clave_pg:
             raise ErrorDeInstalacion(f"El archivo de la clave de PostgreSQL esta vacio o no existe: {args.clave_pg}")
-        previo = leer_entorno(_leer_texto(args.salida))
+        # Lo del nodo.env actual manda; lo conservado al desinstalar (Linux, ADR-012) solo completa lo que falta.
+        previo = {**(leer_entorno(_leer_texto(args.previo)) if args.previo else {}),
+                  **{k: v for k, v in leer_entorno(_leer_texto(args.salida)).items() if v.strip()}}
         entorno = armar_entorno(definicion, carga, clave_pg=clave_pg, estado=args.estado, data_dir=args.data_dir,
                                 previo=previo)
         escribir_en_archivo_protegido(args.salida, formatear_entorno(entorno))

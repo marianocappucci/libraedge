@@ -63,6 +63,38 @@ def test_ejecutar_con_el_entorno_del_nodo(tmp_path, monkeypatch, capsys):
     assert ins.main(["ejecutar", "--entorno", str(tmp_path / "no.env"), "libraedge-nodo", "estado"]) == 2
 
 
+def test_el_entorno_recupera_lo_conservado_al_desinstalar(tmp_path, capsys):
+    """apt remove borra el nodo.env (tiene el secreto del nodo) y deja SECRET_KEY y la clave del admin en
+    conservado.env: reinstalar con la carga vuelve a abrir lo que libraauth cifro (ADR-012)."""
+    definicion = tmp_path / "producto.json"
+    definicion.write_text(_texto(RAIZ / "instalador" / "productos" / "ventalibra.json"), encoding="utf-8")
+    carga = tmp_path / "carga.json"
+    datos = json.loads(_texto(RAIZ / "instalador" / "carga-de-prueba.json"))
+    carga.write_text(json.dumps(datos), encoding="utf-8")
+    clave = tmp_path / "postgres.clave"
+    clave.write_text("clave-del-pg\n", encoding="utf-8")
+    env = tmp_path / "nodo.env"
+    env.write_text("", encoding="utf-8")  # recien creado, vacio (lo crea instalar.sh con 600)
+    conservado = tmp_path / "conservado.env"
+    conservado.write_text("SECRET_KEY=el-de-antes\nADMIN_PASSWORD=admin-de-antes\n"
+                          "VENTALIBRA_ADMIN_PASSWORD=admin-de-antes\n", encoding="utf-8")
+    argumentos = ["entorno", "--definicion", str(definicion), "--carga", str(carga), "--clave-pg", str(clave),
+                  "--estado", "/e.json", "--data-dir", "/app", "--salida", str(env), "--previo", str(conservado)]
+    assert ins.main(argumentos) == 0
+    escrito = ins.leer_entorno(env.read_text(encoding="utf-8"))
+    assert escrito["SECRET_KEY"] == "el-de-antes" and escrito["VENTALIBRA_ADMIN_PASSWORD"] == "admin-de-antes"
+    # Si el nodo.env tiene uno, manda el del nodo.env.
+    env.write_text("SECRET_KEY=el-del-nodo-env\n", encoding="utf-8")
+    assert ins.main(argumentos) == 0
+    assert ins.leer_entorno(env.read_text(encoding="utf-8"))["SECRET_KEY"] == "el-del-nodo-env"
+    # Sin conservado (o uno que no existe) genera uno nuevo, como antes.
+    env.write_text("", encoding="utf-8")
+    argumentos[-1] = str(tmp_path / "no-esta.env")
+    assert ins.main(argumentos) == 0
+    assert ins.leer_entorno(env.read_text(encoding="utf-8"))["SECRET_KEY"] not in ("el-de-antes", "el-del-nodo-env")
+    assert "el-de-antes" not in capsys.readouterr().out
+
+
 def test_bajar_a_usuario_en_orden(monkeypatch):
     import pwd
 
@@ -110,15 +142,17 @@ def test_ejecutar_lee_el_entorno_antes_de_bajar_de_usuario(tmp_path, monkeypatch
 
 def test_estan_los_scripts_del_nodo_en_linux():
     assert [s.name for s in SCRIPTS] == [
-        "abrir_bandeja.sh", "armar_deb.sh", "comun.sh", "instalar.sh", "preparar_nodo.sh", "preparar_postgres.sh",
-        "respaldo.sh", "verificar_nodo.sh"]
+        "abrir_bandeja.sh", "armar_deb.sh", "comun.sh", "instalar-nodo.sh", "instalar.sh", "preparar_nodo.sh",
+        "preparar_postgres.sh", "respaldo.sh", "verificar_nodo.sh"]
     assert [d.name for d in DEBIAN] == ["postinst", "postrm", "preinst", "prerm"]
 
 
 def test_armar_deb_copia_todos_los_scripts_y_las_unidades():
     armar = _texto(LINUX / "armar_deb.sh")
     copiados = re.search(r"for script in ([^;]+); do", armar).group(1).split()
-    assert sorted(copiados) == sorted(s.name for s in SCRIPTS if s.name not in ("armar_deb.sh", "abrir_bandeja.sh"))
+    # instalar-nodo.sh no va en el paquete: va en el Release, al lado de los .deb.
+    sueltos = ("armar_deb.sh", "abrir_bandeja.sh", "instalar-nodo.sh")
+    assert sorted(copiados) == sorted(s.name for s in SCRIPTS if s.name not in sueltos)
     assert '"$linux"/systemd/*' in armar and "for script in preinst postinst prerm postrm" in armar
     assert '"$ayudante" "$opt/instalador/libraedge_instalador.py"' in armar
     # El mismo arreglo que en Windows: los modulos sueltos de la raiz del producto (plans.py).
@@ -133,7 +167,7 @@ def test_cada_script_es_bash_estricto(script):
     texto = _texto(script)
     assert texto.startswith("#!/usr/bin/env bash\n")
     assert re.search(r"^set -[eu]+o pipefail$|^set -uo pipefail$|^set -u$", texto, re.M), script.name
-    if script.name not in ("armar_deb.sh", "abrir_bandeja.sh"):
+    if script.name not in ("armar_deb.sh", "abrir_bandeja.sh", "instalar-nodo.sh"):
         assert '/comun.sh"' in texto
 
 
@@ -202,11 +236,21 @@ def test_postinst_sin_carga_no_configura_y_con_carga_si():
     assert "sudo libraedge-nodo-instalar /ruta/carga-nodo.json" in postinst
 
 
-def test_desinstalar_conserva_los_datos():
-    postrm = _texto(LINUX / "debian" / "postrm")
-    borra = re.search(r"rm -rf ([^\n]+)", postrm.split("set -e", 1)[1]).group(1).split()
+def test_desinstalar_borra_el_secreto_y_conserva_los_datos():
+    """apt remove borra el nodo.env como Windows; guarda SECRET_KEY y la clave del admin (no el secreto del nodo)."""
+    postrm = _texto(LINUX / "debian" / "postrm").split("set -e", 1)[1]
+    al_quitar = postrm[postrm.index("remove|purge)"):postrm.index(";;")]
+    assert 'rm -f "$env"' in al_quitar
+    guardado = re.search(r"grep -E '([^']+)'", al_quitar).group(1)
+    assert re.match(guardado, "SECRET_KEY=x") and re.match(guardado, "VENTALIBRA_ADMIN_PASSWORD=x")
+    assert not re.match(guardado, "LIBRAEDGE_NODE_SECRET=x") and not re.match(guardado, "VENTALIBRA_DATABASE_URL=x")
+    assert "umask 077" in al_quitar
+    borra = re.search(r"rm -rf ([^\n]+)", postrm).group(1).split()
     assert borra == ["/etc/libraedge-nodo", "/var/lib/libraedge-nodo/estado", "/var/log/libraedge-nodo"]
-    assert "pg_dropcluster" not in postrm.split("set -e", 1)[1]  # solo en el comentario: es a mano
+    assert "pg_dropcluster" not in postrm  # solo en el comentario: es a mano
+    # Reinstalar con la carga recupera lo conservado y despues lo borra.
+    nodo = _texto(LINUX / "preparar_nodo.sh")
+    assert 'previo=(--previo "$CONSERVADO")' in nodo and 'rm -f "$CONSERVADO"' in nodo
 
 
 def test_un_nodo_por_pc_antes_de_desempaquetar():
@@ -353,3 +397,49 @@ def test_el_workflow_prueba_el_deb_en_las_dos_versiones_de_ubuntu():
     assert "libraedge-nodo-${{ matrix.producto }}_amd64.deb" in workflow
     for producto in PRODUCTOS:
         assert producto in workflow
+
+
+# ── el script de una linea (instalar-nodo.sh, en el Release) ────────────────
+
+
+def test_instalar_nodo_controla_el_sistema_y_no_usa_apt_key():
+    script = _texto(LINUX / "instalar-nodo.sh")
+    assert '[ "${ID:-}" = ubuntu ]' in script and "22.04 | 24.04)" in script
+    assert "dpkg --print-architecture)\" = amd64" in script and '[ "$(id -u)" = 0 ]' in script
+    assert "apt-key" not in script.replace("sin apt-key", "")
+    # La forma oficial de PGDG: el script de postgresql-common (llave en un archivo y signed-by).
+    assert "/usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y" in script
+    for producto in PRODUCTOS:
+        assert producto in script
+
+
+def test_instalar_nodo_verifica_el_deb_contra_el_mismo_release():
+    script = _texto(LINUX / "instalar-nodo.sh")
+    assert 'origen="$REPO/releases/latest/download"' in script
+    assert 'origen="$REPO/releases/download/v${LIBRAEDGE_VERSION#v}"' in script
+    assert 'for archivo in SHA256SUMS.txt "$deb"' in script
+    assert "sha256sum --check --strict" in script
+    assert script.index("sha256sum --check") < script.index('LIBRAEDGE_CARGA="$carga" apt-get install')
+    assert "--no-install-recommends" not in script  # con las recomendadas: la bandeja
+
+
+def test_instalar_nodo_lee_todo_antes_de_correr():
+    """Con curl | bash el script llega por la entrada: todo va en una funcion y apt no lee esa entrada."""
+    script = _texto(LINUX / "instalar-nodo.sh")
+    assert script.rstrip().endswith('principal "$@"')
+    assert "    exec < /dev/null" in script
+
+
+@pytest.mark.parametrize("argumentos, codigo", [([], 2), (["otro", "/x"], 1), (["ventalibra", "/x"], 1)])
+def test_instalar_nodo_sale_con_error(argumentos, codigo):
+    if os.geteuid() == 0:
+        pytest.skip("corre como root")
+    resultado = subprocess.run(["bash", str(LINUX / "instalar-nodo.sh"), *argumentos], capture_output=True, text=True)
+    assert resultado.returncode == codigo, resultado.stderr
+
+
+def test_el_release_publica_el_script_y_su_suma():
+    workflow = _texto(RAIZ / ".github" / "workflows" / "publicar-instalador.yml")
+    assert "sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt" in workflow
+    assert "libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
+    assert "probar-instalar-nodo" in workflow and "LIBRAEDGE_DEB_DIR" in workflow

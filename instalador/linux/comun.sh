@@ -29,6 +29,9 @@ ESTADO_DIR="$DATOS/estado"
 ESTADO="$ESTADO_DIR/estado.json"
 RESPALDOS="$DATOS/respaldos"
 MARCA="$DATOS/producto.txt"
+# Lo que apt remove guarda del nodo.env al borrarlo (SECRET_KEY y la clave del admin local, no el secreto del
+# nodo): sin SECRET_KEY no se lee lo que libraauth cifro en la base que queda (ADR-012).
+CONSERVADO="$DATOS/conservado.env"
 
 # El usuario de los servicios del producto y del nodo. No es root: lo que corre
 # expuesto a la red del local no tiene por que poder tocar el sistema.
