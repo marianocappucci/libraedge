@@ -205,10 +205,19 @@ if ($codigo -ne 0) {
     & $nssm set $servicioDesc Description "Contesta a las cajas del local que buscan esta PC (LibraEdge)" | Out-Null
     & $nssm set $servicioDesc Start SERVICE_AUTO_START | Out-Null
     & $nssm set $servicioDesc AppThrottle 15000 | Out-Null
-    & $nssm set $servicioDesc ObjectName "NT AUTHORITY\LocalService" "" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo poner $servicioDesc como LocalService." }
-    Start-Service -Name $servicioDesc
-    Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
+    # Una cuenta del sistema sin clave. Sin el "" de la clave: Windows PowerShell 5.1 descarta los argumentos vacios
+    # a un programa nativo. Si NSSM no la acepta asi, sc.exe (que no pide clave para LocalService).
+    & $nssm set $servicioDesc ObjectName "NT AUTHORITY\LocalService" | Out-Null
+    if ($LASTEXITCODE -ne 0) { & "$env:SystemRoot\System32\sc.exe" config $servicioDesc obj= "NT AUTHORITY\LocalService" | Out-Null }
+    $cuenta = (Get-CimInstance Win32_Service -Filter "Name='$servicioDesc'").StartName
+    if ($cuenta -ne "NT AUTHORITY\LocalService") {
+        # Como SYSTEM no: es un proceso que escucha en la red. Sin el, las cajas escriben la IP a mano.
+        & $nssm remove $servicioDesc confirm | Out-Null
+        Write-Warning "No se pudo poner $servicioDesc como LocalService (quedo '$cuenta'): no se instala; las otras cajas no van a encontrar esta PC solas."
+    } else {
+        Start-Service -Name $servicioDesc
+        Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
+    }
 }
 
 # --- El firewall ---------------------------------------------------------------
