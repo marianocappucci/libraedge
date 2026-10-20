@@ -22,7 +22,7 @@ set -euo pipefail
 
 ESQUEMAS=/usr/share/glib-2.0/schemas
 OVERRIDE="$ESQUEMAS/90_libraedge-nodo.gschema.override"
-[ "${1:-}" = agregar ] && [ -n "${2:-}" ] || { echo "uso: dock.sh agregar <id.desktop>" >&2; exit 2; }
+if [ "${1:-}" != agregar ] || [ -z "${2:-}" ]; then echo "uso: dock.sh agregar <id.desktop>" >&2; exit 2; fi
 desktop="$2"
 
 rm -f "$OVERRIDE"
