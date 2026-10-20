@@ -198,8 +198,10 @@ if ($codigo -ne 0) {
         & $nssm stop $servicioDesc confirm | Out-Null
         & $nssm remove $servicioDesc confirm | Out-Null
     }
-    $scriptDesc = Join-Path $RaizNodo "instalador\libraedge_descubrimiento.py"
-    & $nssm install $servicioDesc $python "-I -B `"$scriptDesc`" responder --datos `"$descubrimiento`""
+    # El script, relativo a AppDirectory: Windows PowerShell 5.1 se come las comillas de adentro de un argumento a un
+    # programa nativo, y "C:\Program Files\..." se partia en dos (CI, 2026-10-20). Los datos van en ProgramData, sin
+    # espacios.
+    & $nssm install $servicioDesc $python "-I -B libraedge_descubrimiento.py responder --datos $descubrimiento"
     if ($LASTEXITCODE -ne 0) { throw "nssm install $servicioDesc fallo" }
     & $nssm set $servicioDesc AppDirectory (Join-Path $RaizNodo "instalador") | Out-Null
     & $nssm set $servicioDesc Description "Contesta a las cajas del local que buscan esta PC (LibraEdge)" | Out-Null
