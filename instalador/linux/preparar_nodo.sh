@@ -90,15 +90,31 @@ systemctl restart "${SERVICIOS_NODO[@]}"
 systemctl start libraedge-respaldo.timer libraedge-estado.path
 registrar "Servicios: $(systemctl is-active "${SERVICIOS_NODO[@]}" | tr '\n' ' ')"
 
+# --- El descubrimiento (ADR-017) ------------------------------------------------------------
+# Las otras cajas del local encuentran esta PC preguntando por UDP: contesta un servicio sin privilegios que lee
+# solo descubrimiento.json (sin secretos). Con la carga, de ahi salen el nodo, la sucursal y el negocio; sin ella
+# (una actualizacion), del nodo.env (solo LIBRAEDGE_NODE_ID), del config.json y del archivo anterior.
+desc_args=(--definicion "$DEFINICION" --salida "$DESCUBRIMIENTO" --entorno "$ARCHIVO_ENV" --config "$DATA_DIR/config.json")
+[ -z "$carga" ] || desc_args+=(--carga "$carga")
+if ayudante descubrimiento "${desc_args[@]}"; then
+    chmod 644 "$DESCUBRIMIENTO"
+    systemctl enable "$SERVICIO_DESCUBRIMIENTO" > /dev/null 2>&1
+    systemctl restart "$SERVICIO_DESCUBRIMIENTO"
+    registrar "Descubrimiento: $(systemctl is-active "$SERVICIO_DESCUBRIMIENTO") (UDP $PUERTO_DESCUBRIMIENTO)."
+else
+    aviso "No se pudo escribir $DESCUBRIMIENTO: las otras cajas no van a encontrar esta PC solas (se escribe la IP a mano)."
+fi
+
 # --- El firewall ----------------------------------------------------------------------------
-# Las cajas son navegadores en la red del local. Si ufw esta activo se abre el
-# puerto solo para las redes privadas; si no, no se toca nada.
+# Las cajas son navegadores (o la app de caja, ADR-017) en la red del local. Si ufw esta activo se abre el
+# puerto del producto y el del descubrimiento (UDP) solo para las redes privadas; si no, no se toca nada.
 puerto="$(plan_campo 'p["puerto"]')"
 if command -v ufw > /dev/null && ufw status 2> /dev/null | grep -q "^Status: active"; then
     for red in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
         ufw allow proto tcp from "$red" to any port "$puerto" comment "LibraEdge producto" > /dev/null
+        ufw allow proto udp from "$red" to any port "$PUERTO_DESCUBRIMIENTO" comment "LibraEdge descubrimiento" > /dev/null
     done
-    registrar "Firewall (ufw): puerto $puerto abierto para las redes privadas."
+    registrar "Firewall (ufw): puerto $puerto (y UDP $PUERTO_DESCUBRIMIENTO) abierto para las redes privadas."
 else
     registrar "Firewall: ufw no esta activo; no se agrega ninguna regla."
 fi

@@ -63,6 +63,9 @@ fn main() {
         "estado",
         "vincular",
         "alternar_pantalla_completa",
+        "buscar_otra",
+        "elegir",
+        "usar_direccion",
     ])))
     .expect("tauri_build");
 }

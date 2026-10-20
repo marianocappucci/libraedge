@@ -49,6 +49,12 @@ ZONA="America/Argentina/Buenos_Aires"
 
 SERVICIOS_NODO=(libraedge-producto.service libraedge-nodo.service)
 
+# Lo que el nodo contesta a las otras cajas del local que lo buscan (ADR-017): sin secretos, 0644. Lo lee
+# libraedge-descubrimiento.service, que contesta en UDP $PUERTO_DESCUBRIMIENTO.
+DESCUBRIMIENTO="$DATOS/descubrimiento.json"
+PUERTO_DESCUBRIMIENTO=47823
+SERVICIO_DESCUBRIMIENTO=libraedge-descubrimiento.service
+
 # -I: aislado (sin PYTHONPATH ni el site del usuario: corre como root).
 # -B: sin __pycache__ en /opt (quedaria al desinstalar).
 py() { "$PYTHON" -I -B "$@"; }

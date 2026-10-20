@@ -12,7 +12,7 @@ case "$1" in
         systemctl stop libraedge-producto.service libraedge-nodo.service 2> /dev/null || true
         ;;
     remove|deconfigure)
-        systemctl disable --now libraedge-producto.service libraedge-nodo.service libraedge-respaldo.timer libraedge-estado.path 2> /dev/null || true
+        systemctl disable --now libraedge-producto.service libraedge-nodo.service libraedge-descubrimiento.service libraedge-respaldo.timer libraedge-estado.path 2> /dev/null || true
         systemctl stop libraedge-respaldo.service libraedge-estado.service 2> /dev/null || true
         if [ -f /etc/postgresql/16/libraedge/start.conf ]; then
             systemctl disable --now postgresql@16-libraedge.service 2> /dev/null || true

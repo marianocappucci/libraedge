@@ -1,13 +1,43 @@
-// Las pantallas propias de la app (ADR-015): «inicio», «espera» y «vincular». Cual se muestra lo decide la app
-// (?p=...), que tambien vuelve al producto apenas responde.
+// Las pantallas propias de la app (ADR-015): «inicio», «espera» y «vincular»; en una caja secundaria (ADR-017),
+// tambien «buscando», «elegir» y «direccion» (la PC principal). Cual se muestra lo decide la app (?p=...), que
+// tambien vuelve al producto apenas responde.
 (function () {
   'use strict';
   var invocar = function (comando, args) { return window.__TAURI_INTERNALS__.invoke(comando, args || {}); };
   var $ = function (id) { return document.getElementById(id); };
   var pantalla = new URLSearchParams(location.search).get('p') || 'inicio';
 
+  var PANTALLAS = ['inicio', 'espera', 'vincular', 'buscando', 'elegir', 'direccion'];
   function mostrar(id) {
-    ['inicio', 'espera', 'vincular'].forEach(function (s) { $(s).hidden = s !== id; });
+    PANTALLAS.forEach(function (s) { $(s).hidden = s !== id; });
+  }
+  function cada(selector, f) { Array.prototype.forEach.call(document.querySelectorAll(selector), f); }
+
+  function lugar(n) {
+    return [n.sucursal, n.negocio].filter(function (x) { return x; }).join(' · ');
+  }
+
+  function armarLista(encontrados) {
+    var lista = $('lista-principales');
+    lista.textContent = '';
+    encontrados.forEach(function (n, i) {
+      var li = document.createElement('li');
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = lugar(n) || ('PC ' + n.ip);
+      var d = document.createElement('span');
+      d.className = 'detalle';
+      d.textContent = 'http://' + n.ip + ':' + n.puerto + '/';
+      b.appendChild(d);
+      b.addEventListener('click', function () {
+        cada('#lista-principales button', function (x) { x.disabled = true; });
+        invocar('elegir', { indice: i }).catch(function () {
+          cada('#lista-principales button', function (x) { x.disabled = false; });
+        });
+      });
+      li.appendChild(b);
+      lista.appendChild(li);
+    });
   }
 
   invocar('estado').then(function (e) {
@@ -19,18 +49,48 @@
     img.alt = '';
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(e.marca);
     $('marca').appendChild(img);
-    $('direccion').placeholder = 'sistema.' + e.producto + '.com.ar';
-    mostrar(pantalla === 'vincular' || pantalla === 'espera' ? pantalla : 'inicio');
-    if (pantalla === 'vincular') { $('direccion').focus(); }
+    $('direccion-sistema').placeholder = 'sistema.' + e.producto + '.com.ar';
+    var caja = e.modo === 'caja';
+    cada('.solo-caja', function (n) { n.hidden = !caja; });
+    cada('.solo-nodo', function (n) { n.hidden = caja || n.id === 'ayuda-espera'; });
+    if (caja && e.principal) {
+      var donde = lugar(e.principal);
+      cada('.donde-principal', function (n) {
+        n.textContent = ' (' + (donde ? donde + ', ' : '') + e.principal.ip + ')';
+      });
+    }
+    if (pantalla === 'elegir') { armarLista(e.encontrados || []); }
+    mostrar(PANTALLAS.indexOf(pantalla) >= 0 ? pantalla : 'inicio');
+    if (pantalla === 'vincular') { $('direccion-sistema').focus(); }
+    if (pantalla === 'direccion') { $('ip').focus(); }
+    if (pantalla === 'espera') {
+      setTimeout(function () { $(caja ? 'ayuda-espera-caja' : 'ayuda-espera').hidden = false; }, 45000);
+    }
   }).catch(function () { mostrar(pantalla); });
 
-  if (pantalla === 'espera') {
-    setTimeout(function () { $('ayuda-espera').hidden = false; }, 45000);
-  }
+  cada('.buscar-otra', function (b) {
+    b.addEventListener('click', function () { b.disabled = true; invocar('buscar_otra'); });
+  });
+
+  $('form-direccion').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var ip = $('ip').value.trim();
+    $('error-ip').hidden = true;
+    if (!ip) { return; }
+    $('boton-ip').disabled = true;
+    $('boton-ip').textContent = 'Conectando…';
+    invocar('usar_direccion', { direccion: ip }).catch(function (detalle) {
+      $('boton-ip').disabled = false;
+      $('boton-ip').textContent = 'Conectar';
+      $('error-ip').textContent = String(detalle || 'No se pudo conectar.');
+      $('error-ip').hidden = false;
+      $('ip').select();
+    });
+  });
 
   $('formulario').addEventListener('submit', function (ev) {
     ev.preventDefault();
-    var direccion = $('direccion').value.trim();
+    var direccion = $('direccion-sistema').value.trim();
     var codigo = $('codigo').value.trim();
     $('error').hidden = true;
     if (!direccion || !codigo) {

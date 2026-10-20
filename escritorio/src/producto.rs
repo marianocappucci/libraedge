@@ -6,6 +6,11 @@
 //!
 //! - Windows: `C:\Program Files\LibraEdge\escritorio\<Producto>.exe` -> `C:\Program Files\LibraEdge`
 //! - Ubuntu:  `/opt/libraedge-nodo/escritorio/libraedge-nodo-<producto>` -> `/opt/libraedge-nodo`
+//!
+//! **El modo sale de ahi** (ADR-017): si en la raiz esta la definicion instalada (`instalador/producto.json`) la app es
+//! la de la PC principal (modo nodo: `localhost`, «Vincular»); si no, es la de una caja secundaria (modo caja: busca la
+//! PC principal en la red del local). Es el mismo binario: el instalador de caja lo pone en otra carpeta
+//! (`C:\Program Files\<Producto> (caja)\<Producto>.exe`, `/opt/libraedge-caja/<producto>/libraedge-caja-<producto>`).
 
 use std::path::{Path, PathBuf};
 
@@ -17,23 +22,46 @@ const SALUD: &str = env!("LIBRAEDGE_SALUD");
 /// La marca del producto, para las pantallas propias (la copia el build de `instalador/marca/<producto>.svg`).
 pub const MARCA_SVG: &str = include_str!(concat!(env!("OUT_DIR"), "/marca.svg"));
 
+/// Donde corre la app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Modo {
+    /// La PC principal: el producto es la copia local del nodo.
+    Nodo,
+    /// Una caja secundaria: el producto es el de la PC principal, que se busca en la red del local.
+    Caja,
+}
+
 #[derive(Clone, Debug)]
 pub struct Producto {
     pub puerto: u16,
     pub salud: String,
     pub raiz: Option<PathBuf>,
+    pub modo: Modo,
 }
 
 impl Producto {
     pub fn detectar() -> Self {
         // En Linux se resuelven los enlaces; en Windows no: canonicalize devuelve `\\?\C:\...`, que PowerShell 5.1
         // no acepta en `-File` (la vinculacion elevada fallaba sin abrir el transcript, CI 2026-10-20).
-        let raiz = std::env::current_exe()
-            .ok()
-            .map(|exe| if cfg!(windows) { exe } else { exe.canonicalize().unwrap_or(exe) })
-            .and_then(|exe| exe.parent().and_then(Path::parent).map(Path::to_path_buf));
-        let mut producto = Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz };
+        match std::env::current_exe() {
+            Ok(exe) if cfg!(windows) => Self::en(&exe),
+            Ok(exe) => Self::en(&exe.canonicalize().unwrap_or(exe)),
+            Err(_) => {
+                Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz: None, modo: Modo::Caja }
+            }
+        }
+    }
+
+    /// Lo que se sabe con el ejecutable en `exe`.
+    pub fn en(exe: &Path) -> Self {
+        let raiz = exe.parent().and_then(Path::parent).map(Path::to_path_buf);
+        let mut producto =
+            Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz, modo: Modo::Caja };
         if let Some(def) = producto.raiz.as_ref().map(|r| r.join("instalador").join("producto.json")) {
+            if def.is_file() {
+                producto.modo = Modo::Nodo;
+            }
             if let Ok(texto) = std::fs::read_to_string(def) {
                 producto.aplicar_definicion(&texto);
             }
@@ -73,6 +101,9 @@ impl Producto {
     /// ¿Esta PC ya esta vinculada? Si no se puede saber (sin permiso para mirar), se asume que si: la app
     /// muestra la espera y no ofrece vincular algo que ya esta.
     pub fn configurado(&self) -> bool {
+        if self.modo == Modo::Caja {
+            return true; // una caja no tiene nodo que vincular
+        }
         match self.archivo_de_configuracion() {
             Some(ruta) => ruta.try_exists().unwrap_or(true),
             None => true,
@@ -85,7 +116,7 @@ mod tests {
     use super::*;
 
     fn base() -> Producto {
-        Producto { puerto: 8000, salud: "/health".into(), raiz: None }
+        Producto { puerto: 8000, salud: "/health".into(), raiz: None, modo: Modo::Nodo }
     }
 
     #[test]
@@ -103,5 +134,20 @@ mod tests {
         p.aplicar_definicion("no es json");
         p.aplicar_definicion(&format!(r#"{{"producto": "{PRODUCTO}", "puerto": 99999, "salud": "sin-barra"}}"#));
         assert_eq!((p.puerto, p.salud.as_str()), (8000, "/health"));
+    }
+
+    #[test]
+    fn sin_la_definicion_instalada_es_una_caja() {
+        let dir = std::env::temp_dir().join(format!("libraedge-modo-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("escritorio")).unwrap();
+        let exe = dir.join("escritorio").join("app");
+        assert_eq!(Producto::en(&exe).modo, Modo::Caja);
+        std::fs::create_dir_all(dir.join("instalador")).unwrap();
+        std::fs::write(dir.join("instalador").join("producto.json"), "{}").unwrap();
+        assert_eq!(Producto::en(&exe).modo, Modo::Nodo);
+        let caja = Producto { modo: Modo::Caja, ..base() };
+        assert!(caja.configurado());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

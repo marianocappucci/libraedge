@@ -271,7 +271,8 @@ def test_shellcheck():
 
 def test_estan_las_unidades():
     assert [u.name for u in UNIDADES] == [
-        "libraedge-estado.path", "libraedge-estado.service", "libraedge-nodo.service", "libraedge-producto.service",
+        "libraedge-descubrimiento.service", "libraedge-estado.path", "libraedge-estado.service",
+        "libraedge-nodo.service", "libraedge-producto.service",
         "libraedge-respaldo.service", "libraedge-respaldo.timer"]
 
 
@@ -441,8 +442,9 @@ def test_instalar_nodo_sale_con_error(argumentos, codigo):
 
 def test_el_release_publica_el_script_y_su_suma():
     workflow = _texto(RAIZ / ".github" / "workflows" / "publicar-instalador.yml")
-    assert "sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt" in workflow
-    assert "libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
+    assert ("sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb libraedge-caja-*.exe libraedge-caja-*.deb"
+            " instalar-nodo.sh > SHA256SUMS.txt") in workflow
+    assert "libraedge-caja-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
     assert "probar-instalar-nodo" in workflow and "LIBRAEDGE_DEB_DIR" in workflow
 
 

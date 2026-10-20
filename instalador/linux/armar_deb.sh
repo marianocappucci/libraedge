@@ -123,6 +123,8 @@ fi
 # --- El instalador -------------------------------------------------------------------------
 cp "$definicion" "$opt/instalador/producto.json"
 cp "$ayudante" "$opt/instalador/libraedge_instalador.py"
+# El que contesta a las cajas del local (ADR-017): libraedge/descubrimiento.py tal cual, solo biblioteca estandar.
+install -m 644 "$instalador/../libraedge/descubrimiento.py" "$opt/instalador/libraedge_descubrimiento.py"
 for script in comun.sh dock.sh instalar.sh preparar_postgres.sh preparar_nodo.sh respaldo.sh verificar_nodo.sh; do
     install -m 755 "$linux/$script" "$opt/instalador/$script"
 done

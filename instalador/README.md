@@ -85,6 +85,37 @@ Queda preparada: con un certificado, se carga el secreto `LIBRAEDGE_FIRMA_CMD` (
 firma cada `.exe` de la app) y se compila el instalador con `ISCC /DFirmar "/Sfirma=signtool sign ... $f"` (firma el
 instalador y el desinstalador).
 
+## Las otras cajas del local: la app de caja (ADR-017)
+
+En las otras PC del local (las que no tienen el nodo) va **la app de caja** del producto: sólo la versión de
+escritorio, sin nodo, base de datos ni Python. Se baja del mismo Release (o de «Sucursal sin internet», «Para las otras
+PC del local»):
+
+- Windows 10/11: `libraedge-caja-<producto>.exe` (en silencio: `/VERYSILENT /SUPPRESSMSGBOXES`). Deja «<Producto>» en
+  el escritorio y el menú Inicio; se desinstala desde «Agregar o quitar programas» («<Producto> (caja)»). Usa el
+  runtime de WebView2 (Windows 11 lo trae; si falta, el instalador avisa).
+- Ubuntu 22.04/24.04/26.04: `sudo apt install ./libraedge-caja-<producto>_amd64.deb`. Deja «<Producto>» en el menú y
+  fijado en el dock.
+
+Al abrirla, **busca sola la PC principal** en la red del local (UDP 47823, broadcast; la PC principal contesta con el
+servicio `LibraEdgeDescubrimiento` / `libraedge-descubrimiento`): si hay una la usa, si hay varias deja elegir (por
+sucursal y negocio) y si no encuentra ninguna pide la dirección, la misma que muestra la PC principal en la bandeja
+(«Otras cajas: http://…») y al terminar de instalar. La recuerda; si la PC principal deja de responder muestra
+«Conectando…» y la vuelve a buscar por si cambió de IP. No ofrece «Vincular»: se vincula la PC principal. F11, la
+sesión recordada, los enlaces externos y las descargas, como en la PC principal.
+
+Dónde guarda lo suyo: Windows `%APPDATA%\ar.com.librasuite.<producto>.caja\principal.json` (la PC principal elegida;
+borrarlo hace buscar de nuevo) y `%LOCALAPPDATA%\ar.com.librasuite.<producto>.caja\`; Ubuntu
+`~/.config/ar.com.librasuite.<producto>.caja/` y `~/.local/share/ar.com.librasuite.<producto>.caja/`.
+
+Para soporte, sin ventana: `"<Producto>.exe" --buscar` (o `libraedge-caja-<producto> --buscar`) lista las PC principales
+que contestan (una línea JSON cada una); `--buscar --a 192.168.0.10` pregunta a esa IP. Desde la PC principal,
+`verificar_nodo` dice si el descubrimiento contesta.
+
+Si no la encuentra nunca: las dos PC tienen que estar en la misma red (la misma subred, sin aislamiento de clientes en el
+WiFi), la red de Windows de la PC principal en **Privada** (la regla de firewall `LibraEdge descubrimiento` no abre en
+redes públicas) y la PC principal con un instalador que ya traiga el descubrimiento. Con la IP escrita a mano anda igual.
+
 Sin Docker Desktop: su licencia para empresas no es gratuita y es una capa más que soportar en la PC de un comercio.
 
 **Un nodo por PC.** Servicios, puerto y carpeta de datos son unos solos: si la PC ya tiene el nodo de otro producto

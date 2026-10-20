@@ -18,11 +18,55 @@
     <section id="espera" hidden>
       <div class="girando" aria-hidden="true"></div>
       <h1>Conectando con <span class="nombre"></span>…</h1>
-      <p class="sub">El sistema de este local está arrancando. La pantalla vuelve sola apenas esté listo.</p>
-      <p class="ayuda" id="ayuda-espera" hidden>
+      <p class="sub solo-nodo">El sistema de este local está arrancando. La pantalla vuelve sola apenas esté listo.</p>
+      <p class="sub solo-caja" hidden>
+        Esperando a la PC principal del local<span class="donde-principal"></span>. La pantalla vuelve sola apenas
+        responda; si cambió de dirección, se la vuelve a buscar.
+      </p>
+      <p class="ayuda solo-nodo" id="ayuda-espera" hidden>
         Si tarda más de unos minutos, reiniciar la PC. Si sigue igual, avisar a soporte: el servicio
         local de <span class="nombre"></span> no responde en <span class="url"></span>.
       </p>
+      <div class="solo-caja" hidden>
+        <p class="ayuda" id="ayuda-espera-caja" hidden>
+          Revisar que la PC principal esté prendida y en la misma red que esta. Si <span class="nombre"></span> ahora
+          está en otra PC, buscarla de nuevo.
+        </p>
+        <button type="button" class="secundario buscar-otra">Buscar otra PC principal</button>
+      </div>
+    </section>
+
+    <section id="buscando" hidden>
+      <div class="girando" aria-hidden="true"></div>
+      <h1>Buscando la PC principal…</h1>
+      <p class="sub">
+        Esta es una de las otras cajas del local: <span class="nombre"></span> está en la PC principal, y se la
+        busca en la red del local.
+      </p>
+    </section>
+
+    <section id="elegir" hidden>
+      <h1>¿Cuál es la PC principal de este local?</h1>
+      <p class="sub">Hay más de una PC con <span class="nombre"></span> en la red. Elegir la de este local:</p>
+      <ul class="lista" id="lista-principales"></ul>
+      <button type="button" class="secundario buscar-otra">Buscar de nuevo</button>
+    </section>
+
+    <section id="direccion" hidden>
+      <h1>No se encontró la PC principal</h1>
+      <p class="sub">
+        Escribir la dirección de la PC principal de este local (la que tiene <span class="nombre"></span> con
+        LibraEdge). La muestra esa PC en el ícono de LibraEdge junto al reloj («Otras cajas: http://…») y al
+        terminar de instalar. Las dos PC tienen que estar en la misma red.
+      </p>
+      <form id="form-direccion" autocomplete="off" novalidate>
+        <label for="ip">Dirección de la PC principal</label>
+        <input id="ip" name="ip" placeholder="192.168.0.10" spellcheck="false" autocapitalize="off" inputmode="decimal" required>
+        <button type="submit" id="boton-ip">Conectar</button>
+      </form>
+      <p class="nota">Se sigue buscando sola mientras tanto.</p>
+      <pre id="error-ip" class="error" role="alert" hidden></pre>
+      <button type="button" class="secundario buscar-otra">Buscar de nuevo</button>
     </section>
 
     <section id="vincular" hidden>
@@ -33,8 +77,8 @@
         El código vale 15 minutos y una sola vez.
       </p>
       <form id="formulario" autocomplete="off" novalidate>
-        <label for="direccion">Dirección del sistema</label>
-        <input id="direccion" name="direccion" placeholder="sistema.contalibra.com.ar" spellcheck="false"
+        <label for="direccion-sistema">Dirección del sistema</label>
+        <input id="direccion-sistema" name="direccion" placeholder="sistema.contalibra.com.ar" spellcheck="false"
                autocapitalize="off" required>
         <label for="codigo">Código de vinculación</label>
         <input id="codigo" name="codigo" placeholder="K7Q4-M2XP" spellcheck="false" autocapitalize="characters"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# postinst de libraedge-caja-@PRODUCTO@ (ADR-017): la app de @NOMBRE@ para las otras cajas del local, sin nodo.
+# Solo fija el acceso directo en el dock; la PC principal se busca al abrir la app.
+set -e
+case "$1" in
+    configure|triggered)
+        /opt/libraedge-caja/@PRODUCTO@/dock.sh || true
+        if [ "$1" = configure ]; then
+            cat <<'TEXTO'
+
+  @NOMBRE@ para las otras cajas del local, instalado.
+  Abrir @NOMBRE@ desde el menu de aplicaciones (o el dock): busca sola la
+  PC principal del local (la que tiene el nodo LibraEdge) en la red. Si no
+  la encuentra, pide su direccion, que la PC principal muestra en el icono
+  de LibraEdge junto al reloj ("Otras cajas: http://...").
+
+TEXTO
+        fi
+        ;;
+esac
+exit 0

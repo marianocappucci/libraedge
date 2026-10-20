@@ -239,6 +239,31 @@ Edge en modo aplicación.
 «Abrirlo al iniciar sesión»), reiniciar. Esperado: la app arranca antes que el servicio, muestra la espera y entra sola
 cuando el producto responde, sin error del navegador.
 
+**V19. Las otras cajas (ADR-017): la VM Windows como caja y la Ubuntu como PC principal.** En la VM Ubuntu Desktop
+instalar el nodo con un código de un `dev.` (o la carga de prueba) y con **ufw activo**; en la VM Windows (sin el nodo:
+restaurada) instalar `libraedge-caja-<producto>.exe` con el asistente. Las dos VMs en la **misma red puenteada o
+interna** (no NAT separadas: el broadcast no cruza). Esperado: el asistente deja «<Producto>» en el escritorio; al
+abrirla, «Buscando la PC principal…» y enseguida el producto de la Ubuntu por su IP (iniciar sesión con un usuario del
+central: depende de la cookie sin `Secure` de ADR-016). En la Ubuntu, `sudo libraedge-nodo-verificar` dice
+«descubrimiento: contesta»; `sudo ufw status` tiene `47823/udp` para las redes privadas. Cerrar y abrir la app: no
+busca de nuevo y la sesión sigue. Cambiar la IP de la Ubuntu (otra reserva de DHCP o `nmcli con mod ... ipv4.addresses`
+y `nmcli con up`): la app muestra «Esperando a la PC principal del local (…)» y vuelve sola con la IP nueva. Apagar el
+servicio (`sudo systemctl stop libraedge-descubrimiento`), borrar `%APPDATA%\ar.com.librasuite.<producto>.caja\principal.json`
+y abrir: pide la dirección; escribir la IP de la Ubuntu: carga el producto. En la Windows marcar la red como
+**Pública** no cambia nada para la caja (sólo pregunta); al revés (Windows como principal con la red Pública) la caja no
+la encuentra y hay que escribir la IP: es lo esperado.
+
+```bash
+# En la caja Windows, sin ventana: las PC principales que contestan.
+ps_vm '& "C:\Program Files\VentaLibra (caja)\VentaLibra.exe" --buscar | Out-String'
+```
+
+**V20. Dos PC principales y la caja en Ubuntu.** Con dos nodos del mismo producto en la red (por ejemplo la VM Windows
+como PC principal de otra sucursal y la Ubuntu), instalar `libraedge-caja-<producto>_amd64.deb` en una tercera PC o en
+una sesión de otra VM. Esperado: «¿Cuál es la PC principal de este local?» con las dos (sucursal · negocio y dirección);
+elegir una la recuerda; «Buscar otra PC principal» en la espera vuelve a la lista. El ícono queda en el dock y agrupa la
+ventana. `sudo apt remove libraedge-caja-<producto>` la saca del menú y del dock.
+
 ## 4. Traer los logs
 
 ```bash

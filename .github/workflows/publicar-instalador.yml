@@ -39,6 +39,12 @@
 # "GET /" en el log del producto), que sin vincular muestra «Vincular con el sistema», que vincula con el central
 # de prueba (pkexec / UAC), que vuelve sola si el producto se reinicia, que el acceso directo y el .desktop
 # apuntan a ella y que desinstalar la saca.
+#
+# Las otras cajas del local (ADR-017): el nodo contesta el descubrimiento (UDP 47823, libraedge/descubrimiento.py) y
+# cada producto tiene un instalador de CAJA, solo con la app (libraedge-caja-<producto>.exe con caja.iss y
+# libraedge-caja-<producto>_amd64.deb con instalador/linux/caja/armar_deb.sh). Se prueba en el mismo runner que el
+# nodo: la app de caja encuentra el nodo por broadcast, carga el producto por la IP del runner (no localhost), vuelve a
+# buscar si la IP guardada deja de responder y desinstalar la saca.
 name: Publicar instalador
 
 on:
@@ -51,6 +57,7 @@ on:
     paths:
       - "instalador/**"
       - "libraedge/instalador.py"
+      - "libraedge/descubrimiento.py"
       - "escritorio/**"
       - "libraedge/pantalla_del_central.py"
       - "libraedge/vinculacion.py"
@@ -203,11 +210,25 @@ jobs:
           mkdir -p _control && dpkg-deb -e instalador/salida/*.deb _control
           shellcheck _control/preinst _control/postinst _control/prerm _control/postrm
           dpkg-deb -I instalador/salida/*.deb
+      # La caja (ADR-017): solo la app, el mismo binario con otro nombre en otra carpeta.
+      - name: Armar el .deb de la caja
+        run: |
+          v=0.0.0
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
+          instalador/linux/caja/armar_deb.sh ${{ matrix.producto }} --escritorio _escritorio --version "$v" --salida _caja
+          dpkg-deb -c _caja/*.deb
+          dpkg-deb -c _caja/*.deb | grep -E "opt/libraedge-caja/${{ matrix.producto }}/libraedge-caja-${{ matrix.producto }}$"
+          mkdir -p _control_caja && dpkg-deb -e _caja/*.deb _control_caja
+          shellcheck _control_caja/postinst _control_caja/postrm instalador/linux/caja/dock.sh instalador/linux/caja/armar_deb.sh
+          dpkg-deb -I _caja/*.deb
+          echo "caja ${{ matrix.producto }}: $(du -h _caja/*.deb | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
       - name: Nombre fijo
         run: |
           mkdir -p publicar
           cp instalador/salida/*.deb publicar/
           cp instalador/salida/*.deb "publicar/libraedge-nodo-${{ matrix.producto }}_amd64.deb"
+          cp _caja/*.deb publicar/
+          cp _caja/*.deb "publicar/libraedge-caja-${{ matrix.producto }}_amd64.deb"
           ls -l publicar
       - uses: actions/upload-artifact@v4
         with:
@@ -399,6 +420,133 @@ jobs:
           esperar "^producto http://localhost:$puerto/" 120 2
           cat "$informe"
           pkill -f "^$app" || true
+      - name: El nodo contesta a las otras cajas (ADR-017)
+        run: |
+          d=/var/lib/libraedge-nodo/descubrimiento.json
+          systemctl is-active --quiet libraedge-descubrimiento || { sudo journalctl -u libraedge-descubrimiento -n 30 --no-pager; exit 1; }
+          stat -c '%U:%G %a' "$d" | grep -qx "root:root 644"
+          cat "$d"
+          # Lo de la carga, nada secreto.
+          [ "$(jq -r .producto "$d")" = "${{ matrix.producto }}" ] && [ "$(jq -r .nodo "$d")" = nodo-vm-prueba ]
+          [ "$(jq -r .sucursal "$d")" = "Casa central" ] && [ "$(jq -r .negocio "$d")" = "Comercio de Prueba S.A." ]
+          if grep -qF -- "$SECRETO_DE_PRUEBA" "$d"; then echo "descubrimiento.json tiene el secreto"; exit 1; fi
+          # Corre con un usuario efimero: ni root ni el del producto.
+          usuario="$(ps -o user= -p "$(systemctl show -p MainPID --value libraedge-descubrimiento)")"
+          echo "corre como $usuario"
+          [ "$usuario" != root ] && [ "$usuario" != libraedge ]
+          # Un pedido corto (que serviria para amplificar) no se contesta; uno de otro producto tampoco.
+          python3 - "${{ matrix.producto }}" <<'PY'
+          import json, socket, sys
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)
+          def pide(datos):
+              s.sendto(datos, ("127.0.0.1", 47823))
+              try:
+                  return s.recv(4096)
+              except TimeoutError:
+                  return None
+          corto = json.dumps({"libraedge": "descubrir/1", "producto": sys.argv[1]}).encode()
+          assert pide(corto) is None, "contesto un pedido corto"
+          otro = json.dumps({"libraedge": "descubrir/1", "producto": "otro"}).encode().ljust(512)
+          assert pide(otro) is None, "contesto a otro producto"
+          r = pide(corto.ljust(512))
+          assert r and len(r) <= 512 and json.loads(r)["producto"] == sys.argv[1], r
+          print("contesta solo pedidos de 512 bytes de su producto:", r.decode())
+          PY
+      - name: La app de caja encuentra el nodo y abre el producto por la IP de esta PC (ADR-017)
+        run: |
+          sudo apt-get install -y -q desktop-file-utils > /dev/null
+          p="${{ matrix.producto }}"
+          puerto="$(jq -r .puerto "instalador/productos/$p.json")"
+          ip="$(ip -4 route get 8.8.8.8 | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+          echo "IP de esta PC: $ip"
+          sudo apt-get install -y -q --no-install-recommends "./deb/libraedge-caja-${p}_amd64.deb" 2>&1 | tee "$RUNNER_TEMP/apt-caja.log"
+          caja="/opt/libraedge-caja/$p/libraedge-caja-$p"
+          if ldd "$caja" | grep -q "not found"; then ldd "$caja" | grep "not found"; exit 1; fi
+          "$caja" --version | tee /dev/stderr | grep -q "modo caja"
+          "/opt/libraedge-nodo/escritorio/$PAQUETE" --version | grep -q "modo nodo"
+          desktop-file-validate "/usr/share/applications/libraedge-caja-$p.desktop"
+          grep -qx "StartupWMClass=libraedge-caja-$p" "/usr/share/applications/libraedge-caja-$p.desktop"
+          # El dock: el del nodo y el de la caja (el override de la caja tiene mas prioridad y no pisa el del nodo).
+          for d in GNOME ubuntu:GNOME; do
+            fav="$(env -i PATH=/usr/bin:/bin HOME=/nonexistent GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=$d \
+              gsettings get org.gnome.shell favorite-apps)"
+            echo "$d: $fav"
+            antes="$(cat "$RUNNER_TEMP/favoritos-antes-${d%%:*}.txt")"
+            [ "$fav" = "${antes%]}, '$PAQUETE.desktop', 'libraedge-caja-$p.desktop']" ] \
+              || { echo "favorite-apps no es el de antes mas el nodo y la caja"; exit 1; }
+          done
+
+          # Sin ventana: la misma busqueda que la app (broadcast), con la IP de quien contesto.
+          "$caja" --buscar | tee "$RUNNER_TEMP/buscar.txt"
+          [ "$(jq -r .ip "$RUNNER_TEMP/buscar.txt" | head -n1)" = "$ip" ] || { echo "no encontro el nodo en $ip"; exit 1; }
+          [ "$(jq -r .nodo "$RUNNER_TEMP/buscar.txt" | head -n1)" = nodo-vm-prueba ]
+
+          informe="$RUNNER_TEMP/informe-caja.txt"
+          esperar() {  # esperar <patron> <segundos> [<cuantas>]
+            for _ in $(seq 1 "$2"); do
+              n="$(grep -c -- "$1" "$informe" 2> /dev/null)" || n=0
+              [ "$n" -ge "${3:-1}" ] && return 0
+              sleep 1
+            done
+            echo "No aparecio '$1' en el informe:"; cat "$informe"; cat "$RUNNER_TEMP/app-caja.log"; return 1
+          }
+          abrir() {
+            LIBRAEDGE_ESCRITORIO_INFORME="$informe" nohup xvfb-run -a dbus-run-session -- "$caja" >> "$RUNNER_TEMP/app-caja.log" 2>&1 &
+          }
+          cerrar() { pkill -f "^$caja" || true; sleep 3; }
+
+          # 1. La primera vez busca, encuentra uno solo y lo usa: el producto por la IP del runner, no localhost.
+          desde="$(date '+%Y-%m-%d %H:%M:%S')"
+          abrir
+          esperar "^producto http://$ip:$puerto/" 90
+          sleep 3
+          cat "$informe"
+          grep -qx "pantalla buscando" "$informe"
+          grep -q "^encontrado $ip:$puerto nodo-vm-prueba$" "$informe"
+          if grep -Eq "^producto http://(localhost|127\.0\.0\.1)" "$informe"; then echo "la caja abrio localhost"; exit 1; fi
+          if grep -q "^pantalla vincular" "$informe"; then echo "la caja no ofrece vincular"; exit 1; fi
+          sudo journalctl -u libraedge-producto --since "$desde" --no-pager > "$RUNNER_TEMP/producto-caja.log"
+          grep -E "$ip:[0-9]+ - \"GET / HTTP/1\.1\" [0-9]{3}" "$RUNNER_TEMP/producto-caja.log" \
+            || { echo "El producto no registro el GET / de la caja desde $ip:"; tail -n 30 "$RUNNER_TEMP/producto-caja.log"; exit 1; }
+          principal="$HOME/.config/ar.com.librasuite.$p.caja/principal.json"
+          cat "$principal"
+          [ "$(jq -r .ip "$principal")" = "$ip" ] && [ "$(jq -r .nodo "$principal")" = nodo-vm-prueba ]
+          cerrar
+
+          # 2. La PC principal «cambio de IP»: la guardada no responde, espera y la vuelve a encontrar por el nodo.
+          jq '.ip = "10.255.255.254"' "$principal" > "$principal.tmp" && mv "$principal.tmp" "$principal"
+          : > "$informe"
+          abrir
+          esperar "^pantalla espera$" 60
+          esperar "^cambio de direccion 10.255.255.254:$puerto -> $ip:$puerto$" 90
+          esperar "^producto http://$ip:$puerto/" 60
+          [ "$(jq -r .ip "$principal")" = "$ip" ]
+          cerrar
+
+          # 3. Sin nadie que conteste: pide la IP a mano; cuando el nodo vuelve a contestar, lo encuentra solo.
+          rm -f "$principal"
+          sudo systemctl stop libraedge-descubrimiento
+          : > "$informe"
+          abrir
+          esperar "^pantalla direccion$" 60
+          sudo systemctl start libraedge-descubrimiento
+          esperar "^producto http://$ip:$puerto/" 90
+          cat "$informe"
+          cerrar
+      - name: Desinstalar la caja la saca (ADR-017)
+        run: |
+          p="${{ matrix.producto }}"
+          sudo apt-get remove -y -q "libraedge-caja-$p"
+          test ! -e "/opt/libraedge-caja"
+          test ! -e "/usr/share/applications/libraedge-caja-$p.desktop"
+          test ! -e /usr/share/glib-2.0/schemas/91_libraedge-caja.gschema.override
+          # Vuelven los favoritos con el nodo solo.
+          for d in GNOME ubuntu:GNOME; do
+            ahora="$(env -i PATH=/usr/bin:/bin HOME=/nonexistent GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=$d \
+              gsettings get org.gnome.shell favorite-apps)"
+            antes="$(cat "$RUNNER_TEMP/favoritos-antes-${d%%:*}.txt")"
+            [ "$ahora" = "${antes%]}, '$PAQUETE.desktop']" ] || { echo "$d: quedo $ahora"; exit 1; }
+          done
       - name: El respaldo restaura
         run: |
           sudo systemctl start libraedge-respaldo.service
@@ -417,6 +565,7 @@ jobs:
           [ "$(huella)" = "$antes" ] || { echo "Actualizar sin la carga cambio SECRET_KEY"; exit 1; }
           echo "$antes" > "$RUNNER_TEMP/huella.txt"  # solo el hash, para despues de desinstalar
           sudo ufw status | grep -E "^8000/tcp +ALLOW +192\.168\.0\.0/16"
+          sudo ufw status | grep -E "^47823/udp +ALLOW +192\.168\.0\.0/16"
           sleep 30
           sudo libraedge-nodo-verificar --sin-central
       - name: Ningun secreto en los logs
@@ -602,6 +751,10 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DProducto=${{ matrix.producto }} /DVersion=${{ steps.version.outputs.version }} nodo.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem salida
+          # La caja (ADR-017): solo la app. En otra carpeta, asi salida\*.exe sigue siendo solo el del nodo.
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DProducto=${{ matrix.producto }} /DVersion=${{ steps.version.outputs.version }} /Osalida-caja caja.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem salida-caja | ForEach-Object { "caja ${{ matrix.producto }}: $([math]::Round($_.Length / 1MB, 1)) MB" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
       - name: Sin carga no instala (V4)
         run: |
           $exe = (Get-ChildItem instalador\salida\*.exe).FullName
@@ -860,6 +1013,99 @@ jobs:
             $n = (Select-String -Path $logs -SimpleMatch $buscado).Count
             if ($n -ne 0) { throw "Un secreto o un codigo aparece $n veces en los logs" }
           }
+      - name: La app de caja encuentra el nodo y abre el producto por la IP de esta PC (ADR-017)
+        run: |
+          $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
+          $nombre = $definicion.nombre; $puerto = $definicion.puerto
+          $log = "$env:ProgramFiles\LibraEdge\logs\LibraEdgeProducto.log"
+          # El que contesta: LocalService, su regla de firewall (UDP 47823, privadas y dominio) y su json sin secretos.
+          $svc = Get-CimInstance Win32_Service -Filter "Name='LibraEdgeDescubrimiento'"
+          Write-Host "LibraEdgeDescubrimiento: $($svc.State) como $($svc.StartName)"
+          if ($svc.State -ne "Running" -or $svc.StartName -ne "NT AUTHORITY\LocalService") { throw "El descubrimiento no corre como LocalService" }
+          $regla = Get-NetFirewallRule -DisplayName "LibraEdge descubrimiento"
+          if (($regla | Get-NetFirewallPortFilter).LocalPort -ne "47823" -or ($regla | Get-NetFirewallPortFilter).Protocol -ne "UDP") { throw "La regla del descubrimiento no es UDP 47823" }
+          $json = Get-Content "$env:ProgramData\LibraEdge\descubrimiento.json" -Raw
+          Write-Host $json
+          if ($json -match "prueba-prueba-prueba") { throw "descubrimiento.json tiene el secreto" }
+          # La IP de esta PC en la ruta por defecto: la que tiene que usar la caja.
+          $ruta = Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1
+          $ip = (Get-NetIPAddress -InterfaceIndex $ruta.ifIndex -AddressFamily IPv4 | Select-Object -First 1).IPAddress
+          Write-Host "IP de esta PC: $ip"
+
+          $instalador = (Get-ChildItem instalador\salida-caja\*.exe).FullName
+          $p = Start-Process $instalador -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:RUNNER_TEMP\inno-caja.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\inno-caja.log" -Tail 40; throw "La caja salio con $($p.ExitCode)" }
+          $app = "$env:ProgramFiles\$nombre (caja)\$nombre.exe"
+          if (-not (Test-Path $app)) { throw "No se instalo $app" }
+          $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "$nombre.lnk"))
+          if ($lnk.TargetPath -ne $app) { throw "El acceso directo apunta a '$($lnk.TargetPath)' y no a la caja" }
+          function Salida($argumentos) {
+            $f = "$env:RUNNER_TEMP\salida-caja.txt"
+            $q = Start-Process $app -ArgumentList $argumentos -RedirectStandardOutput $f -Wait -PassThru
+            [pscustomobject]@{ Codigo = $q.ExitCode; Texto = (Get-Content $f -Raw) }
+          }
+          $v = Salida @("--version")
+          Write-Host $v.Texto
+          if ($v.Texto -notmatch "modo caja") { throw "La app instalada como caja no arranca en modo caja" }
+          # Sin ventana, la misma busqueda que la app: por broadcast y, si el runner no lo devuelve, directo a su IP.
+          $b = Salida @("--buscar")
+          Write-Host "broadcast: $($b.Texto)"
+          if ($b.Codigo -ne 0) {
+            Write-Host "::warning::El broadcast no volvio en este runner; se prueba la IP directa."
+            $b = Salida @("--buscar", "--a", $ip)
+            Write-Host "directo: $($b.Texto)"
+          }
+          if ($b.Codigo -ne 0 -or ($b.Texto | ConvertFrom-Json).ip -ne $ip) { throw "La caja no encontro el nodo en $ip" }
+
+          $informe = "$env:RUNNER_TEMP\informe-caja.txt"
+          function Esperar($patron, $segundos) {
+            for ($i = 0; $i -lt $segundos; $i++) {
+              if ((Test-Path $informe) -and @(Select-String -Path $informe -Pattern $patron).Count -ge 1) { return }
+              Start-Sleep 1
+            }
+            if (Test-Path $informe) { Get-Content $informe }
+            throw "No aparecio '$patron' en el informe"
+          }
+          $antes = @(Select-String -Path $log -Pattern "${ip}:\d+ - .GET / HTTP/1.1.").Count
+          $env:LIBRAEDGE_ESCRITORIO_INFORME = $informe
+          $proc = Start-Process $app -PassThru
+          Remove-Item Env:LIBRAEDGE_ESCRITORIO_INFORME
+          try {
+            Esperar "^(producto|pantalla direccion)" 90
+            if (Select-String -Path $informe -Pattern "^pantalla direccion$" -Quiet) {
+              # Sin broadcast en el runner: la IP a mano, como la escribiria el usuario (la guarda la app).
+              Write-Host "::warning::La caja no encontro el nodo por broadcast; se le da la IP guardada."
+              Stop-Process -Id $proc.Id -Force; Start-Sleep 2
+              $dir = "$env:APPDATA\ar.com.librasuite.${{ matrix.producto }}.caja"
+              New-Item -ItemType Directory -Force $dir | Out-Null
+              (@{ ip = $ip; puerto = $puerto } | ConvertTo-Json) | Set-Content "$dir\principal.json" -Encoding ASCII
+              $env:LIBRAEDGE_ESCRITORIO_INFORME = $informe
+              $proc = Start-Process $app -PassThru
+              Remove-Item Env:LIBRAEDGE_ESCRITORIO_INFORME
+            }
+            Esperar "^producto http://${ip}:${puerto}/" 90
+            Start-Sleep 3
+            Get-Content $informe
+            if (Select-String -Path $informe -Pattern "^producto http://(localhost|127\.0\.0\.1)" -Quiet) { throw "La caja abrio localhost" }
+            if (Select-String -Path $informe -Pattern "^pantalla vincular" -Quiet) { throw "La caja no ofrece vincular" }
+            if ($proc.HasExited) { throw "La app de caja se cerro (codigo $($proc.ExitCode))" }
+            $despues = @(Select-String -Path $log -Pattern "${ip}:\d+ - .GET / HTTP/1.1.").Count
+            if ($despues -le $antes) { Get-Content $log -Tail 20; throw "El producto no registro el GET / de la caja desde $ip" }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+      - name: Desinstalar la caja la saca (ADR-017)
+        run: |
+          $nombre = (Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json).nombre
+          $dir = "$env:ProgramFiles\$nombre (caja)"
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          Start-Sleep 5
+          if (Test-Path "$dir\$nombre.exe") { throw "Desinstalar no saco la app de caja" }
+          foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
+            $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath($carpeta)) "$nombre.lnk"))
+            if ($lnk.TargetPath -like "$dir\*") { throw "Quedo el acceso directo de la caja en $carpeta" }
+          }
+          if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -eq "$nombre (caja)" }) { throw "Quedo la caja en Agregar o quitar programas" }
       - name: Logs
         if: always()
         run: |
@@ -875,6 +1121,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force publicar | Out-Null
           Copy-Item (Get-ChildItem instalador\salida\*.exe).FullName "publicar\libraedge-nodo-${{ matrix.producto }}.exe"
+          Copy-Item (Get-ChildItem instalador\salida-caja\*.exe).FullName "publicar\libraedge-caja-${{ matrix.producto }}.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: instalador-${{ matrix.producto }}
@@ -989,9 +1236,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd publicar
-          sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt
+          sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb libraedge-caja-*.exe libraedge-caja-*.deb instalar-nodo.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits, .exe) y Ubuntu 22.04/24.04/26.04 (amd64, .deb), uno por producto. Cada uno se vincula con la direccion del sistema y el codigo que muestra la pantalla Sucursal sin internet del producto (o con el archivo de carga, para soporte); en Ubuntu, en un paso: curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh | sudo bash -s <producto> --codigo <codigo> --direccion <direccion>. Antes de publicarse se probaron en runners Windows y Ubuntu contra un central de prueba con https: instalan en silencio con el codigo y pasan verificar_nodo. Los productos entran desde ${REF_PRODUCTO}."
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits, .exe) y Ubuntu 22.04/24.04/26.04 (amd64, .deb), uno por producto. Cada uno se vincula con la direccion del sistema y el codigo que muestra la pantalla Sucursal sin internet del producto (o con el archivo de carga, para soporte); en Ubuntu, en un paso: curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh | sudo bash -s <producto> --codigo <codigo> --direccion <direccion>. Antes de publicarse se probaron en runners Windows y Ubuntu contra un central de prueba con https: instalan en silencio con el codigo y pasan verificar_nodo. Para las otras PC del local, la app de caja (libraedge-caja-<producto>.exe y libraedge-caja-<producto>_amd64.deb): sin nodo, busca sola la PC principal en la red. Los productos entran desde ${REF_PRODUCTO}."
           fi
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe libraedge-nodo-*.deb \
+            libraedge-caja-*.exe libraedge-caja-*.deb instalar-nodo.sh SHA256SUMS.txt

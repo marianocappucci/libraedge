@@ -559,7 +559,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
 
 ## ADR-015 — La versión de escritorio: una app propia por producto (Tauri 2) en la PC principal
 
-- Estado: aceptada (parte A; la parte B, las cajas secundarias que encuentran la PC principal, va aparte)
+- Estado: aceptada (parte A; la parte B, las cajas secundarias que encuentran la PC principal, es ADR-017)
 - Fecha: 2026-10-20
 - Contexto: decisiones del humano del 2026-10-20. Comercialmente LibraEdge es la **«versión de escritorio»** de cada
   producto. Hasta ahora el acceso directo abría `http://localhost:<puerto>/` en Edge `--app` (Windows) o en Chrome,
@@ -698,3 +698,118 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
   Lo que pide la parte B: la app de una caja secundaria no tiene nodo (no hay `nodo.env` ni producto local), así que
   necesitará otra fuente para la URL (la PC principal encontrada en la red) y no debe ofrecer «Vincular»; la pantalla de
   espera y la reconexión sirven tal cual.
+
+## ADR-017 — Las otras cajas del local: la app de caja y el descubrimiento de la PC principal
+
+- Estado: aceptada (es la parte B de ADR-015)
+- Fecha: 2026-10-20
+- Contexto: decisión del humano del 2026-10-20: **una app por producto, sin firma por ahora**, también para las otras
+  PC del local (las «cajas secundarias»). Hasta ahora esas cajas entraban por `http://<IP-de-la-PC-principal>:<puerto>`
+  en un navegador, con la IP copiada de la bandeja o del cartel final: si la PC principal cambiaba de IP (DHCP), la caja
+  quedaba en el error del navegador y alguien tenía que buscar la dirección nueva.
+- Qué ya existe (se miró antes de diseñar):
+  - ADR-013: la dirección para las otras cajas sale de un solo lugar, `libraedge_instalador.py acceso` (la IPv4 privada
+    de la ruta por defecto, `ip_de_la_lan`/`es_ip_de_la_lan`), y la muestran el cartel final de los dos instaladores y
+    «Otras cajas: http://<IP>:<puerto> (copiar)» de las dos bandejas. La regla de firewall del producto (Windows
+    `New-NetFirewallRule ... -Profile Private, Domain` en `preparar_nodo.ps1`; Linux `ufw allow proto tcp from <red>`
+    para 10/8, 172.16/12 y 192.168/16 si ufw está activo, en `preparar_nodo.sh`; las borran el `.iss` y el `postrm`
+    de `purge`).
+  - ADR-015: la app (`escritorio/`): ventana propia, reconexión con «Conectando con <Producto>…», F11 con una capacidad
+    remota sólo para `localhost`/`127.0.0.1` en el puerto, sesión recordada (`preferencias.rs`, cookies del host),
+    «Vincular» si no hay `nodo.env`; el clasificador de navegación (`navegacion.rs`) mandaba cualquier otra URL al
+    navegador del sistema. La nota «Para la parte B» pedía otra fuente para la URL y no ofrecer «Vincular».
+  - ADR-012: `armar_deb.sh` y el favorito del dock (`dock.sh`, override de `org.gnome.shell favorite-apps`); ADR-010:
+    `nodo.iss` con la tabla nombre/AppId comparada con las definiciones; NSSM para los servicios de Windows.
+  - En la familia no había descubrimiento en la red: se buscó `broadcast`, `SO_BROADCAST`, `mdns`, `zeroconf`,
+    `avahi`, `dns-sd`, `bonjour`, `ssdp` y `47823` en libraedge, libracore, libra-ui y los productos.
+- Decisión:
+  1. **Descubrimiento por broadcast UDP en el puerto fijo 47823**, con biblioteca estándar de los dos lados. El nodo
+     contesta con `libraedge/descubrimiento.py` (copiado como `libraedge_descubrimiento.py`, como el ayudante: llega con
+     el instalador y no depende del pin de LibraEdge del producto); la app pregunta con `escritorio/src/descubrimiento.rs`.
+     Pedido `{"libraedge": "descubrir/1", "producto": P}` con relleno hasta 512 bytes; respuesta `{"libraedge": "nodo/1",
+     producto, nombre, puerto, nodo, sucursal, negocio}`. La caja manda a `255.255.255.255` y al broadcast de su red /24
+     (en Windows el primero sale por una sola interfaz) y junta respuestas 2 s.
+     - **Por qué no mDNS:** en Windows el puerto 5353 ya lo tiene el servicio DNS Cache del sistema y en Ubuntu Avahi; un
+       responder propio tendría que compartir el puerto (`SO_REUSEADDR`, que en Windows deja robarlo) o registrarse en
+       cada sistema con su API (Bonjour/`dnssd.dll`, D-Bus de Avahi), con dependencias y dos implementaciones. Con
+       broadcast el que contesta son ~250 líneas de biblioteca estándar y la caja no necesita ningún crate nuevo. Lo que
+       se pierde (cruzar subredes, un router que filtre broadcast) tampoco lo resolvería mDNS, que es de enlace local:
+       para eso queda escribir la IP.
+  2. **Seguridad del que contesta.** No ve ningún secreto: lee **sólo** `descubrimiento.json` (producto, nombre, puerto,
+     identificador del nodo, sucursal y negocio; 0644), que escribe el ayudante al configurar (`libraedge_instalador.py
+     descubrimiento`, desde la carga o, al actualizar sin carga, del `LIBRAEDGE_NODE_ID` del `nodo.env`, del
+     `empresa_nombre` del `config.json` y del archivo anterior; textos libres cortados a 80). Corre sin privilegios: en
+     Ubuntu `libraedge-descubrimiento.service` con `DynamicUser=yes` (ni root ni el usuario `libraedge` del producto, que
+     lee `DATA_DIR`), `ProtectSystem=strict`, sin capacidades, sólo `AF_INET`/`AF_UNIX`; en Windows el servicio NSSM
+     `LibraEdgeDescubrimiento` como `NT AUTHORITY\LocalService` (no lee `nodo.env`, cuya ACL es SYSTEM y
+     Administradores), sin log propio. **No sirve para amplificar:** un pedido de menos de 512 bytes no se contesta y la
+     respuesta nunca pasa de 512 (se acortan negocio y sucursal). Sólo contesta a IPv4 privadas, de enlace local o
+     loopback, a pedidos de su producto, y con tope (5 respuestas por origen cada 10 s, 50 por segundo en total). No
+     anota cada pedido. Firewall como el del producto: `LibraEdge descubrimiento` UDP 47823 en Privado y Dominio
+     (Windows) y `ufw allow proto udp ... port 47823` para las redes privadas si ufw está activo; se borran al
+     desinstalar (`.iss`) y en el `purge`.
+  3. **Lo que la caja le cree a una respuesta:** la IP es **la de quien contestó**, nunca un dato del mensaje, y sólo
+     IPv4 privada, de enlace local o loopback; el puerto sí viene en la respuesta. Una respuesta falsa sólo puede venir de
+     alguien en la misma red, que con `http` en la LAN ya podía interceptar el tráfico (riesgo aceptado, el mismo de
+     ADR-013); cuando hay más de una PC principal se muestra la sucursal y el negocio para elegir, y la elegida se
+     reconoce después **por su identificador de nodo**.
+  4. **Un solo binario.** La app decide el modo al arrancar: si al lado está la definición instalada
+     (`<raíz>/instalador/producto.json`, que sólo pone el instalador del nodo) es la de la **PC principal** (modo nodo,
+     todo como ADR-015); si no, es una **caja** (modo caja). Mismo código y misma compilación (`armar.py`); el instalador
+     de caja pone el mismo archivo en otra carpeta. Se descartó un binario por modo (una feature de Cargo): duplicaba la
+     compilación de los tres productos en los dos sistemas y el riesgo de que diverjan, para ahorrar unas líneas. En modo
+     caja la app usa **otro identificador**, `ar.com.librasuite.<producto>.caja` (`Context::config_mut`): otra sesión
+     del navegador embebido, otras preferencias y otra instancia única, así las dos pueden convivir (en el CI conviven).
+     `--version` dice el modo.
+  5. **La app en modo caja.** La primera vez busca («Buscando la PC principal…»): si hay una la usa, si hay varias
+     muestra la lista (sucursal · negocio, y la dirección) y si no hay ninguna pide la IP a mano (con el texto de dónde la
+     muestra la PC principal: la bandeja y el cartel final) y sigue buscando sola cada ~10 s. La IP escrita se valida
+     (IPv4 de la red del local, opcional `:puerto` o `http://`), se le pregunta por el descubrimiento y, si no contesta,
+     se prueba la salud del producto en ese puerto (o el de la definición). La elegida se guarda en `principal.json`
+     (carpeta de configuración del usuario; IP, puerto, nodo, sucursal y negocio). **Si deja de responder**, la misma
+     espera de ADR-015 («Esperando a la PC principal del local (…)») y cada ~6 s vuelve a buscar: si el mismo nodo
+     contesta desde otra IP, la toma y vuelve sola; además, «Buscar otra PC principal». El origen del producto pasa a ser
+     `http://<IP>:<puerto>`: el clasificador lo trata como el producto (no va al navegador del sistema) y `localhost` en
+     una caja ya no lo es; F11 se habilita con una capacidad remota por origen (al arrancar y al elegir otra PC); la
+     sesión se guarda y se repone con el host de la PC principal (si cambia de IP, la misma sesión). **No ofrece
+     «Vincular»** (el comando también lo rechaza) ni lo intenta por `--vincular`.
+  6. **El instalador de caja**, por producto, sólo con la app (sin nodo, PostgreSQL ni Python), con nombre fijo en el
+     Release: **`libraedge-caja-<producto>.exe`** y **`libraedge-caja-<producto>_amd64.deb`** (y los `.deb` con versión).
+     El nombre sigue al de `libraedge-nodo-<producto>` (se reconocen como pareja en el Release y en `apt`) y «caja» es la
+     palabra de ADR-013 y de la bandeja («Otras cajas»); para el usuario la app se llama igual que en la PC principal
+     («ContaLibra»), y en «Agregar o quitar programas» «ContaLibra (caja)».
+     - **Windows: un `.iss` chico** (`instalador/caja.iss`), no el bundler de Tauri: Inno ya está en el CI, con la misma
+       tabla nombre/AppId (AppId propio por producto, comparado con las definiciones), los íconos de ADR-013 y los textos
+       en castellano; el bundler pedía instalar la CLI de Tauri (o WiX) y armar una configuración por producto para un
+       solo archivo. Instala `C:\Program Files\<Producto> (caja)\<Producto>.exe` con «<Producto>» en el escritorio
+       público y el menú Inicio, se desinstala desde «Agregar o quitar programas» (cierra la app de esa carpeta). Avisa
+       (sin frenar en silencio) si la PC ya tiene el nodo del producto o si falta WebView2.
+     - **Ubuntu: `instalador/linux/caja/armar_deb.sh`** → `/opt/libraedge-caja/<producto>/libraedge-caja-<producto>` (el
+       nombre del `.desktop`: WM_CLASS/app_id para el dock), `libraedge-caja-<producto>.desktop`, `Depends:
+       libwebkit2gtk-4.1-0, libgtk-3-0`. El favorito del dock con `dock.sh` **sin Python** (el valor por defecto con
+       `gsettings` en un entorno vacío, como ADR-013, más los `.desktop` de caja y, si estuviera, el del nodo, en
+       `91_libraedge-caja.gschema.override`); el `postrm` lo rehace o lo borra con la última caja.
+  7. **La pantalla del central** (libra-ui `SucursalSinInternet`, ADR-086 del kit): la tarjeta del instalador suma «Para
+     las otras PC del local» con las descargas de caja, armadas al lado del `.exe` del nodo como las otras (el backend no
+     manda nada nuevo).
+  8. **CI** (`publicar-instalador.yml`): el job `deb` arma también el `.deb` de caja (shellcheck de sus scripts) y
+     `compilar` el `.exe` (en `salida-caja`); `publicar` los sube y los suma a `SHA256SUMS.txt`. En Ubuntu
+     22.04/24.04/26.04, con el nodo instalado y configurado en el mismo runner: el servicio activo con un usuario
+     efímero, `descubrimiento.json` 0644 sin el secreto, un pedido corto o de otro producto sin respuesta; la caja
+     instalada con `--no-install-recommends` (bibliotecas resueltas, `--version` en modo caja, `.desktop` válido, dock con
+     el nodo y la caja), `--buscar` encuentra el nodo **por broadcast con la IP del runner**, y bajo `xvfb-run` la app
+     busca, encuentra y carga `http://<IP del runner>:<puerto>/` (el `GET /` desde esa IP en el journal, nunca
+     `localhost`, nunca «vincular»); con una IP guardada que no responde espera y vuelve a encontrar el mismo nodo; sin
+     nadie que conteste pide la IP y, cuando el servicio vuelve, lo encuentra solo; `remove` saca la app, el `.desktop` y
+     el override. En Windows: el servicio como LocalService, la regla UDP, el `.json` sin secretos; la caja instalada en
+     silencio con sus accesos directos, `--version` en modo caja, `--buscar` (si el broadcast no vuelve en el runner, se
+     avisa y se prueba la IP directa), la app carga el producto por la IP del runner con el `GET /` en el log del
+     producto, y desinstalar la saca. `verificar_nodo` (los dos) pregunta como una caja a `127.0.0.1`.
+- Descartadas: mDNS (punto 1); que la respuesta traiga la IP (la decide quien contesta); un binario por modo (punto 4);
+  el bundler de Tauri para la caja de Windows (punto 6); que la caja busque también en `127.0.0.1` (en la PC principal
+  se entra por el acceso directo del nodo, no por la caja); ofrecer «Vincular» en la caja.
+- Consecuencias: lo que el CI no ve (una red de verdad con dos PC, DHCP que cambia la IP, el firewall de Windows con la
+  red en «Pública», la lista con dos PC principales, cómo se ve) se prueba en las VMs (`PROBAR_EN_VM.md`, V19 y V20).
+  El responder llega a las PC principales que ya tienen el nodo cuando se actualicen con el instalador nuevo (un nodo
+  anterior no contesta: la caja pide la IP). Si la red del local filtra broadcast o la caja está en otra subred, se
+  escribe la IP; la caja la recuerda y, si cambia, vuelve a pedirla.

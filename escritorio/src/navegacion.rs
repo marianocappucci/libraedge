@@ -1,15 +1,49 @@
 //! Que se abre adentro de la app y que en el navegador del sistema.
 //!
-//! Adentro: el producto local (`localhost` o `127.0.0.1` en su puerto) y las pantallas propias de la app.
+//! Adentro: el producto (su origen: en la PC principal, `localhost` o `127.0.0.1` en su puerto; en una caja
+//! secundaria, la IP de la PC principal en su puerto, ADR-017) y las pantallas propias de la app.
 //! Afuera, en el navegador del sistema: todo lo demas que sea web o un enlace de otra aplicacion (ARCA,
 //! Mercado Pago, las ayudas, `mailto:`, WhatsApp). Lo que no es ninguna de las dos cosas (`file:`,
 //! `javascript:`) no se abre.
 
 use tauri::Url;
 
+/// De donde se sirve el producto: `http://<host>:<puerto>/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origen {
+    pub host: String,
+    pub puerto: u16,
+}
+
+impl Origen {
+    /// La copia local de la PC principal (ADR-013): siempre `localhost` (otro host es otra sesion).
+    pub fn local(puerto: u16) -> Self {
+        Origen { host: "localhost".into(), puerto }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}:{}/", self.host, self.puerto)
+    }
+
+    /// Los hosts que son el producto: el del origen y, en la PC principal, tambien `127.0.0.1`.
+    pub fn hosts(&self) -> Vec<String> {
+        if self.host == "localhost" {
+            vec!["localhost".into(), "127.0.0.1".into()]
+        } else {
+            vec![self.host.clone()]
+        }
+    }
+
+    fn es(&self, url: &Url) -> bool {
+        url.scheme() == "http"
+            && url.port() == Some(self.puerto)
+            && self.hosts().iter().any(|h| url.host_str() == Some(h.as_str()))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Destino {
-    /// La copia local del producto.
+    /// El producto (la copia local o la PC principal).
     Producto,
     /// Las pantallas propias de la app (espera, vincular).
     Paginas,
@@ -21,11 +55,11 @@ pub enum Destino {
     Bloqueado,
 }
 
-pub fn clasificar(url: &Url, puerto: u16) -> Destino {
+pub fn clasificar(url: &Url, origen: &Origen) -> Destino {
     match url.scheme() {
         "http" | "https" => {
             let host = url.host_str().unwrap_or_default();
-            if url.scheme() == "http" && (host == "localhost" || host == "127.0.0.1") && url.port() == Some(puerto) {
+            if origen.es(url) {
                 Destino::Producto
             } else if host == "tauri.localhost" {
                 Destino::Paginas
@@ -51,7 +85,11 @@ mod tests {
     use super::*;
 
     fn de(texto: &str) -> Destino {
-        clasificar(&Url::parse(texto).unwrap(), 8000)
+        clasificar(&Url::parse(texto).unwrap(), &Origen::local(8000))
+    }
+
+    fn de_caja(texto: &str) -> Destino {
+        clasificar(&Url::parse(texto).unwrap(), &Origen { host: "192.168.0.10".into(), puerto: 8000 })
     }
 
     #[test]
@@ -81,6 +119,20 @@ mod tests {
         assert_eq!(de("blob:http://localhost:8000/1234"), Destino::Interno);
         assert_eq!(de("file:///etc/passwd"), Destino::Bloqueado);
         assert_eq!(de("javascript:alert(1)"), Destino::Bloqueado);
-        assert_eq!(clasificar(&pagina("espera"), 8000), Destino::Paginas);
+        assert_eq!(clasificar(&pagina("espera"), &Origen::local(8000)), Destino::Paginas);
+    }
+
+    #[test]
+    fn en_una_caja_el_producto_es_la_pc_principal_y_localhost_no() {
+        assert_eq!(de_caja("http://192.168.0.10:8000/"), Destino::Producto);
+        assert_eq!(de_caja("http://192.168.0.10:8000/ventas?x=1"), Destino::Producto);
+        assert_eq!(de_caja("http://localhost:8000/"), Destino::Externo);
+        assert_eq!(de_caja("http://127.0.0.1:8000/"), Destino::Externo);
+        assert_eq!(de_caja("http://192.168.0.10:8001/"), Destino::Externo);
+        assert_eq!(de_caja("https://192.168.0.10:8000/"), Destino::Externo);
+        assert_eq!(de_caja("http://192.168.0.11:8000/"), Destino::Externo);
+        assert_eq!(de_caja("http://192.168.0.100:8000/"), Destino::Externo);
+        let o = Origen { host: "192.168.0.10".into(), puerto: 8000 };
+        assert_eq!((o.url(), o.hosts()), ("http://192.168.0.10:8000/".to_string(), vec!["192.168.0.10".to_string()]));
     }
 }

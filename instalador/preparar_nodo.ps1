@@ -181,6 +181,36 @@ foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo")) {
     Start-Service -Name $servicio
 }
 
+# --- El descubrimiento (ADR-017) ------------------------------------------------
+# Las otras cajas del local encuentran esta PC preguntando por UDP 47823. Contesta
+# libraedge_descubrimiento.py (solo biblioteca estandar) como LocalService, sin
+# privilegios: lee SOLO descubrimiento.json, que no tiene secretos (producto,
+# nombre, puerto, nodo, sucursal y negocio), y no puede leer nodo.env (su ACL es
+# SYSTEM y Administradores). Sin logs propios: LocalService no escribe en {app}.
+$descubrimiento = Join-Path $Datos "descubrimiento.json"
+$codigo = Invocar -Programa $python -Argumentos @(
+    $ayudante, "descubrimiento", "--definicion", $definicion, "--carga", $Carga, "--salida", $descubrimiento)
+if ($codigo -ne 0) {
+    Write-Warning "No se pudo escribir $descubrimiento (codigo $codigo): las otras cajas no van a encontrar esta PC solas."
+} else {
+    $servicioDesc = "LibraEdgeDescubrimiento"
+    if (Get-Service -Name $servicioDesc -ErrorAction SilentlyContinue) {
+        & $nssm stop $servicioDesc confirm | Out-Null
+        & $nssm remove $servicioDesc confirm | Out-Null
+    }
+    $scriptDesc = Join-Path $RaizNodo "instalador\libraedge_descubrimiento.py"
+    & $nssm install $servicioDesc $python "-I -B `"$scriptDesc`" responder --datos `"$descubrimiento`""
+    if ($LASTEXITCODE -ne 0) { throw "nssm install $servicioDesc fallo" }
+    & $nssm set $servicioDesc AppDirectory (Join-Path $RaizNodo "instalador") | Out-Null
+    & $nssm set $servicioDesc Description "Contesta a las cajas del local que buscan esta PC (LibraEdge)" | Out-Null
+    & $nssm set $servicioDesc Start SERVICE_AUTO_START | Out-Null
+    & $nssm set $servicioDesc AppThrottle 15000 | Out-Null
+    & $nssm set $servicioDesc ObjectName "NT AUTHORITY\LocalService" "" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo poner $servicioDesc como LocalService." }
+    Start-Service -Name $servicioDesc
+    Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
+}
+
 # --- El firewall ---------------------------------------------------------------
 # Las cajas del local son navegadores que entran a esta PC por la red interna:
 # sin la regla, Windows bloquea el puerto y solo anda desde esta misma PC. Solo
@@ -189,7 +219,12 @@ $regla = "LibraEdge producto"
 Get-NetFirewallRule -DisplayName $regla -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $regla -Direction Inbound -Protocol TCP -LocalPort $plan.puerto `
     -Action Allow -Profile Private, Domain | Out-Null
-Write-Host "Firewall: puerto $($plan.puerto) abierto en redes privadas y de dominio."
+# El descubrimiento (ADR-017): UDP 47823, igual, solo en redes privadas y de dominio.
+$reglaDesc = "LibraEdge descubrimiento"
+Get-NetFirewallRule -DisplayName $reglaDesc -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $reglaDesc -Direction Inbound -Protocol UDP -LocalPort 47823 `
+    -Action Allow -Profile Private, Domain | Out-Null
+Write-Host "Firewall: puerto $($plan.puerto) (y UDP 47823) abierto en redes privadas y de dominio."
 
 # --- El respaldo del nodo --------------------------------------------------------
 # El `sync_outbox` es el unico lugar donde vive una venta cobrada sin internet.

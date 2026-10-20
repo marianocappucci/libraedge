@@ -123,6 +123,8 @@ Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName:
 Source: "paquete\escritorio\{#Producto}.exe"; DestDir: "{app}\escritorio"; DestName: "{#NombreProducto}.exe"; Flags: ignoreversion skipifsourcedoesntexist
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
+; El que contesta a las cajas del local (ADR-017): libraedge/descubrimiento.py tal cual, solo biblioteca estandar.
+Source: "..\libraedge\descubrimiento.py"; DestDir: "{app}\instalador"; DestName: "libraedge_descubrimiento.py"; Flags: ignoreversion
 Source: "comun.ps1";             DestDir: "{app}\instalador"; Flags: ignoreversion
 Source: "instalar.ps1";          DestDir: "{app}\instalador"; Flags: ignoreversion
 Source: "preparar_postgres.ps1"; DestDir: "{app}\instalador"; Flags: ignoreversion
@@ -144,6 +146,8 @@ Filename: "{app}\escritorio\{#NombreProducto}.exe"; Description: "Abrir {#Nombre
 ; La app abierta en cualquier sesion tiene tomado su .exe: se cierra antes de borrar.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ""{#NombreProducto}.exe"""; Flags: runhidden; RunOnceId: "CerrarApp"
 ; Se detienen y se quitan los servicios, en orden inverso al de creacion.
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeDescubrimiento confirm";   Flags: runhidden; RunOnceId: "PararDescubrimiento"
+Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeDescubrimiento confirm"; Flags: runhidden; RunOnceId: "QuitarDescubrimiento"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm";       Flags: runhidden; RunOnceId: "PararNodo"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";     Flags: runhidden; RunOnceId: "QuitarNodo"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeProducto confirm";   Flags: runhidden; RunOnceId: "PararProducto"
@@ -156,12 +160,15 @@ Filename: "{sys}\net.exe"; Parameters: "stop LibraEdgePostgres /y"; Flags: runhi
 Filename: "{app}\postgres\bin\pg_ctl.exe"; Parameters: "unregister -N LibraEdgePostgres"; Flags: runhidden; RunOnceId: "QuitarPG"
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN LibraEdgeRespaldo /F"; Flags: runhidden; RunOnceId: "QuitarRespaldo"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LibraEdge producto"""; Flags: runhidden; RunOnceId: "QuitarFirewall"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LibraEdge descubrimiento"""; Flags: runhidden; RunOnceId: "QuitarFirewallDescubrimiento"
 
 [UninstallDelete]
 ; El secreto del nodo NO puede quedar en el disco de una PC que se da de baja:
 ; nodo.env lo escribe instalar.ps1, asi que el desinstalador no sabe de el.
 Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
+; Lo que contestaba a las cajas del local (ADR-017; sin secretos): sin nodo no se contesta.
+Type: files; Name: "{commonappdata}\LibraEdge\descubrimiento.json"
 Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
 ; Los accesos directos del producto (ADR-013), que tambien crea preparar_nodo.ps1:
 ; el del escritorio publico, el del menu Inicio y, si se activo a mano la opcion
@@ -416,6 +423,8 @@ begin
   Result := '';
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeNodo /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeProducto /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  { El que contesta a las cajas (ADR-017) corre con el mismo Python. }
+  Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeDescubrimiento /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   { PostgreSQL tambien: sus binarios se reemplazan y el RestartManager no puede
     cerrar un servicio. En silencio eso es un Abort y la actualizacion se
     deshace (medido en la VM, 2026-10-19). preparar_postgres.ps1 lo vuelve a
@@ -448,6 +457,7 @@ begin
     Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgePostgres', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
     Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgeProducto', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
     Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgeNodo', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+    Exec(ExpandConstant('{sys}\net.exe'), 'start LibraEdgeDescubrimiento', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   end;
 end;
 

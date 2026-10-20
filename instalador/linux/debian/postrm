@@ -13,7 +13,7 @@
 #   activa a mano) no es del paquete: se borra aca. Tampoco el override de los
 #   favoritos del dock, que escribe dock.sh: se borra y se recompilan los esquemas.
 # purge: ademas, el resto de /etc/libraedge-nodo, el estado, los logs y la regla
-#   del firewall. Los datos siguen quedando. Borrarlos es a mano, despues de
+#   del firewall (la del producto y la del descubrimiento). Los datos siguen quedando. Borrarlos es a mano, despues de
 #   confirmar que el outbox no tiene nada sin subir:
 #       sudo pg_dropcluster --stop 16 libraedge && sudo rm -rf /var/lib/libraedge-nodo
 set -e
@@ -28,6 +28,8 @@ case "$1" in
             rm -f "$env"
         fi
         rm -f /etc/xdg/autostart/libraedge-nodo-@PRODUCTO@.desktop
+        # Lo que contestaba a las cajas (ADR-017): sin nodo no se contesta nada (sin secretos; lo rehace configurar).
+        rm -f /var/lib/libraedge-nodo/descubrimiento.json
         # El acceso directo fijado en el dock (ADR-013): sin el override vuelven los favoritos del sistema.
         if [ -e /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override ]; then
             rm -f /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
@@ -44,6 +46,7 @@ case "$1" in
         if command -v ufw > /dev/null 2>&1; then
             for red in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
                 ufw delete allow proto tcp from "$red" to any port @PUERTO@ > /dev/null 2>&1 || true
+                ufw delete allow proto udp from "$red" to any port 47823 > /dev/null 2>&1 || true
             done
         fi
         systemctl daemon-reload 2> /dev/null || true

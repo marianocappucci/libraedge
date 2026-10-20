@@ -191,7 +191,7 @@ try {
     }
     $salida = 1
     if (-not $tocado) {
-        foreach ($servicio in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo")) {
+        foreach ($servicio in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo", "LibraEdgeDescubrimiento")) {
             $s = Get-Service -Name $servicio -ErrorAction SilentlyContinue
             if ($s -and $s.Status -ne "Running") {
                 Write-Host "Se vuelve a arrancar $servicio (no se toco nada)."
