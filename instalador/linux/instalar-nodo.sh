@@ -51,7 +51,7 @@ principal() {
         esac
     done
     if [ -n "$codigo" ] || [ -n "$direccion" ]; then
-        [ -n "$codigo" ] && [ -n "$direccion" ] && [ -z "$carga" ] || { echo "$uso" >&2; exit 2; }
+        if [ -z "$codigo" ] || [ -z "$direccion" ] || [ -n "$carga" ]; then echo "$uso" >&2; exit 2; fi
     elif [ -z "$carga" ]; then
         echo "$uso" >&2; exit 2
     fi

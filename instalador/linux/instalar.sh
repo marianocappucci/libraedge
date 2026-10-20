@@ -44,7 +44,10 @@ while [ $# -gt 0 ]; do
 done
 unset LIBRAEDGE_CODIGO
 if [ -n "$codigo_vinc" ] || [ -n "$direccion" ]; then
-    [ -n "$codigo_vinc" ] && [ -n "$direccion" ] || { echo "ERROR: el codigo va con la direccion del sistema. $uso" >&2; exit 2; }
+    if [ -z "$codigo_vinc" ] || [ -z "$direccion" ]; then
+        echo "ERROR: el codigo va con la direccion del sistema. $uso" >&2
+        exit 2
+    fi
     [ -z "$carga" ] || { echo "ERROR: o el codigo o el archivo de carga, no los dos. $uso" >&2; exit 2; }
 fi
 
