@@ -316,7 +316,11 @@ ayudante (`acceso --json`) cada minuto y al hacer clic la copia.
 
 **No se deja un ícono en el escritorio de los usuarios:** en GNOME un `.desktop` en `~/Escritorio` aparece como «no
 confiable» hasta que el usuario lo habilita, y `/etc/skel` sólo llega a los usuarios nuevos. El acceso directo está en
-el menú de aplicaciones y se ancla al dock.
+el menú de aplicaciones y **fijado en el dock de todos los usuarios**: `instalador/dock.sh` suma
+`libraedge-nodo-<producto>.desktop` a los favoritos por defecto del sistema de cada versión (22.04, 24.04, 26.04) en
+`/usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override`, y desinstalar lo borra. Cambia el valor por defecto:
+quien ya ordenó su dock a mano conserva lo suyo. El navegador: modo aplicación si ya hay Chrome, Chromium o Edge; si
+no, una pestaña (se espera a Tauri, sin agregar Chromium).
 
 ### Armar
 
@@ -335,7 +339,8 @@ La bandeja en una sesión gráfica real (los runners no tienen escritorio). Para
 (y otra con 22.04), instalar el `.deb` con la carga de prueba **con las recomendadas**, y mirar que aparezca el círculo
 al lado del reloj, que pase a ámbar al cortar la red (`sudo systemctl stop libraedge-nodo` lo pone rojo), que «Abrir
 <Producto>» abra la ventana en modo aplicación (con Chrome o Chromium instalado) o el navegador, que «Otras cajas»
-copie la dirección, que el acceso directo aparezca en el menú con la marca del producto y se pueda anclar al dock, y que
+copie la dirección, que el acceso directo aparezca en el menú con la marca del producto y fijado en el dock (con un usuario nuevo y con
+uno que ya tenía el dock ordenado), y que
 vuelva al cerrar y abrir sesión. También: el producto desde otra PC de la red con ufw
 activo, y un corte de energía con el nodo cobrando.
 

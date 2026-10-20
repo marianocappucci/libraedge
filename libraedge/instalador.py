@@ -33,6 +33,7 @@ Uso (lo invocan los scripts del instalador)::
         libraedge-nodo sincronizar          (Linux, ADR-012)
     python libraedge_instalador.py acceso --definicion producto.json     (ADR-013: como se entra, con la IP)
     python libraedge_instalador.py acceso --definicion producto.json --json
+    python libraedge_instalador.py favoritos --actual "['a.desktop']" --agregar libraedge-nodo-x.desktop  (dock.sh)
 
 En Linux (``instalador/linux/``, ADR-012) lo usa ``instalar.sh`` igual que ``instalar.ps1`` en Windows; lo unico
 que agrega es que ``ejecutar`` cargue el ``nodo.env`` y baje al usuario del servicio **dentro** del proceso: asi
@@ -43,6 +44,7 @@ el entorno, que tiene los secretos, no pasa por ``env VAR=...`` (se veria en ``/
 from __future__ import annotations
 
 import argparse
+import ast
 import ipaddress
 import json
 import os
@@ -776,6 +778,31 @@ def acceso(definicion: Definicion, ip: str | None) -> dict:
             "url_local": url_local(definicion.puerto), "url_lan": otras, "lineas": lineas}
 
 
+def favoritos_con(actual: str, agregar: str) -> str:
+    """Los favoritos del dock de GNOME (``org.gnome.shell favorite-apps``, un ``as`` de GVariant como lo imprime
+    ``gsettings get``) con ``agregar`` al final si no estaba (ADR-013). Lo usa ``linux/dock.sh``.
+
+    ``"['firefox_firefox.desktop', 'yelp.desktop']"`` o ``"@as []"`` -> el mismo formato, que es el de un
+    ``.gschema.override``."""
+    texto = actual.strip()
+    if texto.startswith("@as"):
+        texto = texto[3:].strip()
+    try:
+        lista = ast.literal_eval(texto) if texto else []
+    except (ValueError, SyntaxError) as exc:
+        raise ErrorDeInstalacion(f"favorite-apps no es una lista: {actual!r}") from exc
+    if not isinstance(lista, list) or not all(isinstance(x, str) for x in lista):
+        raise ErrorDeInstalacion(f"favorite-apps no es una lista de textos: {actual!r}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.desktop", agregar):
+        raise ErrorDeInstalacion(f"No es el nombre de un .desktop: {agregar!r}")
+    if agregar not in lista:
+        lista.append(agregar)
+    for item in lista:
+        if "'" in item or "\\" in item:
+            raise ErrorDeInstalacion(f"Un favorito con comillas o barras no se reescribe: {item!r}")
+    return "[" + ", ".join(f"'{item}'" for item in lista) + "]"
+
+
 # ── la linea de comandos ────────────────────────────────────────────────────
 
 
@@ -806,6 +833,9 @@ def _parser() -> argparse.ArgumentParser:
     entrar = sub.add_parser("acceso", help="como se entra al producto en el local, con la IP de esta PC (ADR-013)")
     entrar.add_argument("--definicion", required=True)
     entrar.add_argument("--json", action="store_true", help="en JSON (la bandeja), en vez del texto")
+    fav = sub.add_parser("favoritos", help="favorite-apps del dock con un .desktop mas (ADR-013, Linux)")
+    fav.add_argument("--actual", required=True, help="lo que imprime gsettings get org.gnome.shell favorite-apps")
+    fav.add_argument("--agregar", required=True, help="el .desktop que se agrega al final si no esta")
     correr = sub.add_parser("ejecutar", help="corre un console script del Python del nodo")
     correr.add_argument("--entorno", help="nodo.env que se carga en el proceso antes de correr (Linux)")
     correr.add_argument("--como", help="usuario al que se baja despues de leer --entorno (Linux, root)")
@@ -833,6 +863,9 @@ def main(argv: list[str] | None = None) -> int:
                 bajar_a_usuario(args.como)
             argumentos = args.argumentos[1:] if args.argumentos[:1] == ["--"] else args.argumentos
             return ejecutar(args.nombre, argumentos)
+        if args.comando == "favoritos":
+            print(favoritos_con(args.actual, args.agregar))
+            return 0
         definicion = leer_definicion(args.definicion)
         if args.comando == "plan":
             print(json.dumps(definicion.plan(), ensure_ascii=False))

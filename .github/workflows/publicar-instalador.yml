@@ -192,6 +192,16 @@ jobs:
           dpkg-deb -x gnome-shell-common_*.deb x
           cat x/usr/share/gnome-shell/modes/ubuntu.json
           grep -q '"ubuntu-appindicators@ubuntu.com"' x/usr/share/gnome-shell/modes/ubuntu.json
+      # Los favoritos del dock de Ubuntu Desktop (ADR-013): el esquema de GNOME Shell y los valores por defecto de
+      # cada version (ubuntu-settings), sin el escritorio entero. Se guardan antes de instalar el nodo.
+      - name: Los favoritos del dock de Ubuntu, antes de instalar
+        run: |
+          sudo apt-get install -y -q --no-install-recommends gnome-shell-common ubuntu-settings libglib2.0-bin > /dev/null
+          for d in GNOME ubuntu:GNOME; do
+            env -i PATH=/usr/bin:/bin HOME=/nonexistent GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=$d \
+              gsettings get org.gnome.shell favorite-apps | tee "$RUNNER_TEMP/favoritos-antes-${d%%:*}.txt"
+          done
+          grep -q "\.desktop" "$RUNNER_TEMP/favoritos-antes-ubuntu.txt"
       - name: Instalar sin carga no configura
         run: |
           sudo apt-get install -y -q --no-install-recommends "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-sin-carga.log"
@@ -204,6 +214,17 @@ jobs:
           cat "$RUNNER_TEMP/instalar-sin-carga.log"
           [ "$codigo" -ne 0 ] || { echo "Sin carga tenia que salir con algo distinto de 0"; exit 1; }
           test ! -e /etc/libraedge-nodo/nodo.env
+      - name: El acceso directo queda fijado en el dock de todos los usuarios (ADR-013)
+        run: |
+          cat /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
+          for d in GNOME ubuntu:GNOME; do
+            ahora="$(env -i PATH=/usr/bin:/bin HOME=/nonexistent GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=$d \
+              gsettings get org.gnome.shell favorite-apps)"
+            echo "$d: $ahora"
+            antes="$(cat "$RUNNER_TEMP/favoritos-antes-${d%%:*}.txt")"
+            # Los del sistema, en el mismo orden, y el nuestro al final.
+            [ "$ahora" = "${antes%]}, '$PAQUETE.desktop']" ] || { echo "favorite-apps no es el de antes mas $PAQUETE.desktop"; exit 1; }
+          done
       - name: Una carga de otro producto se rechaza sin tocar nada
         run: |
           otro=$(for p in restolibra ventalibra contalibra; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
@@ -293,6 +314,13 @@ jobs:
           sudo apt-get remove -y -q "$PAQUETE"
           test ! -e "/usr/share/applications/$PAQUETE.desktop"
           test ! -e "/etc/xdg/autostart/$PAQUETE.desktop"
+          # El dock vuelve a los favoritos del sistema.
+          test ! -e /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
+          for d in GNOME ubuntu:GNOME; do
+            ahora="$(env -i PATH=/usr/bin:/bin HOME=/nonexistent GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=$d \
+              gsettings get org.gnome.shell favorite-apps)"
+            [ "$ahora" = "$(cat "$RUNNER_TEMP/favoritos-antes-${d%%:*}.txt")" ] || { echo "$d: quedo $ahora"; exit 1; }
+          done
           if systemctl is-active --quiet libraedge-producto; then echo "el producto sigue corriendo"; exit 1; fi
           sudo test ! -e /etc/libraedge-nodo/nodo.env
           if sudo grep -rqsF -- "$SECRETO_DE_PRUEBA" /etc/libraedge-nodo /var/lib/libraedge-nodo; then

@@ -10,7 +10,8 @@
 #   Reinstalar pide la carga y configura sobre esos datos.
 #   El acceso directo del menu (/usr/share/applications) lo borra dpkg; la copia
 #   en /etc/xdg/autostart (la opcion de abrirlo al iniciar sesion, ADR-013, que se
-#   activa a mano) no es del paquete: se borra aca.
+#   activa a mano) no es del paquete: se borra aca. Tampoco el override de los
+#   favoritos del dock, que escribe dock.sh: se borra y se recompilan los esquemas.
 # purge: ademas, el resto de /etc/libraedge-nodo, el estado, los logs y la regla
 #   del firewall. Los datos siguen quedando. Borrarlos es a mano, despues de
 #   confirmar que el outbox no tiene nada sin subir:
@@ -27,6 +28,11 @@ case "$1" in
             rm -f "$env"
         fi
         rm -f /etc/xdg/autostart/libraedge-nodo-@PRODUCTO@.desktop
+        # El acceso directo fijado en el dock (ADR-013): sin el override vuelven los favoritos del sistema.
+        if [ -e /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override ]; then
+            rm -f /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
+            glib-compile-schemas /usr/share/glib-2.0/schemas 2> /dev/null || true
+        fi
         ;;
 esac
 case "$1" in

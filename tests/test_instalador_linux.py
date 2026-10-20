@@ -142,8 +142,8 @@ def test_ejecutar_lee_el_entorno_antes_de_bajar_de_usuario(tmp_path, monkeypatch
 
 def test_estan_los_scripts_del_nodo_en_linux():
     assert [s.name for s in SCRIPTS] == [
-        "abrir_bandeja.sh", "abrir_producto.sh", "armar_deb.sh", "comun.sh", "instalar-nodo.sh", "instalar.sh",
-        "preparar_nodo.sh", "preparar_postgres.sh", "respaldo.sh", "verificar_nodo.sh"]
+        "abrir_bandeja.sh", "abrir_producto.sh", "armar_deb.sh", "comun.sh", "dock.sh", "instalar-nodo.sh",
+        "instalar.sh", "preparar_nodo.sh", "preparar_postgres.sh", "respaldo.sh", "verificar_nodo.sh"]
     assert [d.name for d in DEBIAN] == ["postinst", "postrm", "preinst", "prerm"]
 
 
@@ -544,3 +544,60 @@ def test_la_bandeja_pregunta_la_direccion_de_las_otras_cajas():
         raise FileNotFoundError("python3")
 
     assert bandeja.otras_cajas(8000, correr=falla) == "http://<IP de esta PC>:8000"
+
+
+# ── el acceso directo fijado en el dock de todos los usuarios (ADR-013) ─────
+
+
+@pytest.mark.parametrize("actual, esperado", [
+    # Los favoritos por defecto de Ubuntu cambian por version: se respetan y el nuestro va al final.
+    ("['firefox_firefox.desktop', 'thunderbird.desktop', 'org.gnome.Nautilus.desktop', 'yelp.desktop']",
+     "['firefox_firefox.desktop', 'thunderbird.desktop', 'org.gnome.Nautilus.desktop', 'yelp.desktop', "
+     "'libraedge-nodo-ventalibra.desktop']"),
+    ("@as []", "['libraedge-nodo-ventalibra.desktop']"),
+    ("['libraedge-nodo-ventalibra.desktop', 'yelp.desktop']", "['libraedge-nodo-ventalibra.desktop', 'yelp.desktop']"),
+])
+def test_los_favoritos_del_dock_con_el_producto(actual, esperado):
+    assert ins.favoritos_con(actual, "libraedge-nodo-ventalibra.desktop") == esperado
+
+
+@pytest.mark.parametrize("actual, agregar", [
+    ("no es una lista", "x.desktop"), ("[1, 2]", "x.desktop"), ("['a.desktop']", "x; rm -rf /"),
+    ('["it\'s.desktop"]', "x.desktop"),
+])
+def test_favoritos_raros_no_se_reescriben(actual, agregar):
+    with pytest.raises(ins.ErrorDeInstalacion):
+        ins.favoritos_con(actual, agregar)
+
+
+def test_el_ayudante_favoritos(capsys):
+    assert ins.main(["favoritos", "--actual", "['yelp.desktop']", "--agregar", "libraedge-nodo-x.desktop"]) == 0
+    assert capsys.readouterr().out.strip() == "['yelp.desktop', 'libraedge-nodo-x.desktop']"
+    assert ins.main(["favoritos", "--actual", "basura", "--agregar", "x.desktop"]) == 2
+
+
+def test_dock_lee_el_valor_por_defecto_sin_el_nuestro_y_escribe_un_override_propio():
+    dock = _texto(LINUX / "dock.sh")
+    assert 'OVERRIDE="$ESQUEMAS/90_libraedge-nodo.gschema.override"' in dock
+    # Primero se borra el nuestro y se recompila: el valor por defecto que se lee es el del sistema.
+    borrar, compilar = dock.index('rm -f "$OVERRIDE"'), dock.index('glib-compile-schemas "$ESQUEMAS"')
+    assert borrar < compilar < dock.index("por_defecto GNOME")
+    # Sin la configuracion de ningun usuario: el backend en memoria.
+    assert "GSETTINGS_BACKEND=memory" in dock and "env -i" in dock
+    assert "por_defecto GNOME" in dock and "por_defecto ubuntu:GNOME" in dock
+    assert '"[org.gnome.shell]"' in dock and '"[org.gnome.shell:ubuntu]"' in dock
+    # Sin GNOME Shell no hace nada.
+    assert '"$ESQUEMAS/org.gnome.shell.gschema.xml"' in dock
+
+
+def test_postinst_fija_el_dock_y_postrm_lo_quita():
+    postinst = _texto(LINUX / "debian" / "postinst")
+    assert "/opt/libraedge-nodo/instalador/dock.sh agregar libraedge-nodo-@PRODUCTO@.desktop || true" in postinst
+    assert "    triggered)\n        # Cambiaron" in postinst
+    assert "    configure)\n        systemctl daemon-reload || true\n        dock\n" in postinst
+    postrm = _texto(LINUX / "debian" / "postrm")
+    borrado = postrm[postrm.index("remove|purge)"):postrm.index("esac")]
+    assert "rm -f /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override" in borrado
+    assert "glib-compile-schemas /usr/share/glib-2.0/schemas" in borrado
+    armar = _texto(LINUX / "armar_deb.sh")
+    assert 'echo "interest-noawait /usr/share/glib-2.0/schemas" > "$raiz/DEBIAN/triggers"' in armar

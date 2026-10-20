@@ -413,7 +413,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
        `Icon=/opt/libraedge-nodo/marca/<producto>.svg`. `abrir_producto.sh` usa Google Chrome, Chromium o Edge con
        `--app=` y, si no hay ninguno (Ubuntu trae Firefox, sin modo aplicación), `xdg-open`. **No se deja ícono en el
        escritorio de cada usuario**: GNOME lo muestra como no confiable hasta que el usuario lo habilita, y `/etc/skel`
-       sólo llega a los usuarios nuevos; el acceso está en el menú y se ancla al dock.
+       sólo llega a los usuarios nuevos; el acceso está en el menú y **fijado en el dock** (punto 7).
   2. **«Abrir <Producto>» de la bandeja usa el mismo lanzamiento:** en Windows abre el `.lnk` del menú Inicio (si no
      está, la URL en el navegador) y es la acción por defecto; en Linux corre `abrir_producto.sh`. Las dos suman
      **«Otras cajas: http://<IP>:<puerto> (copiar)»**, que al hacer clic copia la dirección (`clip.exe`; el portapapeles
@@ -432,12 +432,28 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      directo al inicio común (Windows) o el `.desktop` a `/etc/xdg/autostart/` (Ubuntu). Desinstalar borra la copia en
      los dos (`[UninstallDelete]` y `postrm`).
   6. **La pantalla del central lo dice** (libra-ui ADR-084): la tarjeta del instalador y el alta del nodo.
+  7. **Ubuntu: el acceso directo fijado en el dock de todos los usuarios** (decisión del humano, 2026-10-20).
+     `instalador/dock.sh` (desde el `postinst`) borra su override, recompila y lee el valor por defecto de
+     `org.gnome.shell favorite-apps` **del sistema** con `gsettings` en un entorno vacío (`GSETTINGS_BACKEND=memory`, sin
+     la configuración de ningún usuario), para la sesión genérica (`XDG_CURRENT_DESKTOP=GNOME`) y para la «ubuntu»
+     (`ubuntu:GNOME`, los favoritos de `10_ubuntu-settings`, distintos en 22.04, 24.04 y 26.04). Les suma
+     `libraedge-nodo-<producto>.desktop` al final (`libraedge_instalador.py favoritos`) y los escribe en
+     `/usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override`, de prioridad propia, y recompila. El `postrm`
+     (`remove` y `purge`) lo borra y recompila. Un trigger `interest-noawait /usr/share/glib-2.0/schemas` lo rehace si
+     el sistema cambia sus favoritos (una actualización de `ubuntu-settings`). Sin GNOME Shell no hace nada. Se descartó
+     una base de dconf del sistema (`/etc/dconf/db/local.d`): exige crear `/etc/dconf/profile/user`, que Ubuntu no trae,
+     y eso cambia cómo lee dconf toda la PC. **Cambia el valor por defecto:** quien ya ordenó su dock a mano conserva lo
+     suyo y lo agrega desde el menú.
+  8. **Navegador en Ubuntu (decisión del humano, 2026-10-20): esperar a Tauri.** No se agrega Chromium: modo aplicación
+     si ya hay Chrome, Chromium o Edge; si no, una pestaña del navegador por defecto.
 - CI (`publicar-instalador.yml`): en Windows, que estén los dos `.lnk` con destino `msedge.exe`, argumentos
   `--app=http://localhost:<puerto>/` e ícono `producto.ico`, que `acceso.txt`, `instalacion.log` y el log de Inno digan
   cómo se entra con una IP privada, y que desinstalar los borre. En Ubuntu 22.04/24.04/26.04, que el `.desktop` pase
   `desktop-file-validate` con su `Exec` y su ícono, que `abrir_producto.sh` llame al navegador con `--app=` (con uno
   falso adelante en el `PATH`), que la salida de `libraedge-nodo-instalar` y de `instalar-nodo.sh` diga cómo se entra
-  con una IP privada, y que `remove` borre el `.desktop` y la copia del autostart.
+  con una IP privada, que `remove` borre el `.desktop` y la copia del autostart, y que el valor por defecto de `favorite-apps` (con
+  `gnome-shell-common` y `ubuntu-settings` instalados) sea el de antes más el `.desktop` después de instalar y
+  exactamente el de antes después de `remove`, en las sesiones genérica y «ubuntu».
 - Consecuencias: lo que el CI no puede ver se prueba en una VM (`PROBAR_EN_VM.md`, V8b; README, sección Linux): cómo se
   ve la ventana en modo aplicación, el ícono en el escritorio y en el dock, la página final del asistente, y si Edge pide
   su configuración inicial la primera vez. En Windows, «Abrir» y «Otras cajas» de la bandeja llegan cuando los

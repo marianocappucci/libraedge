@@ -115,7 +115,7 @@ fi
 # --- El instalador -------------------------------------------------------------------------
 cp "$definicion" "$opt/instalador/producto.json"
 cp "$ayudante" "$opt/instalador/libraedge_instalador.py"
-for script in comun.sh instalar.sh preparar_postgres.sh preparar_nodo.sh respaldo.sh verificar_nodo.sh; do
+for script in comun.sh dock.sh instalar.sh preparar_postgres.sh preparar_nodo.sh respaldo.sh verificar_nodo.sh; do
     install -m 755 "$linux/$script" "$opt/instalador/$script"
 done
 chmod 644 "$opt/instalador/comun.sh"
@@ -142,6 +142,10 @@ done
 for script in preinst postinst prerm postrm; do
     reemplazar "$linux/debian/$script" "$raiz/DEBIAN/$script" 755
 done
+# Si el sistema cambia sus esquemas (los favoritos del dock de ubuntu-settings), el postinst rehace el override del
+# dock (ADR-013, dock.sh). Sin esperar: no frena la configuracion de los otros paquetes.
+echo "interest-noawait /usr/share/glib-2.0/schemas" > "$raiz/DEBIAN/triggers"
+chmod 644 "$raiz/DEBIAN/triggers"
 reemplazar "$linux/libraedge-nodo-producto.desktop" "$raiz/usr/share/applications/libraedge-nodo-$producto.desktop" 644
 
 # --- El control ------------------------------------------------------------------------------
