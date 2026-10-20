@@ -173,13 +173,17 @@ jobs:
           sudo apt-get install -s "./deb/$DEB" > "$RUNNER_TEMP/simulado.txt"
           # La extension viene en gnome-shell-extension-appindicator (22.04 y 24.04) o en
           # gnome-shell-ubuntu-extensions (26.04): el .deb la recomienda como alternativa.
-          ext=gnome-shell-extension-appindicator
-          apt-cache show "$ext" > /dev/null 2>&1 || ext=gnome-shell-ubuntu-extensions
-          echo "extension en $ext" >> "$GITHUB_STEP_SUMMARY"
-          for p in python3-gi gir1.2-ayatanaappindicator3-0.1 "$ext"; do
+          for p in python3-gi gir1.2-ayatanaappindicator3-0.1; do
             grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1 \
               || { echo "apt no instalaria $p"; exit 1; }
           done
+          # La que apt elija de la alternativa (o la que ya este instalada).
+          ext=""
+          for p in gnome-shell-extension-appindicator gnome-shell-ubuntu-extensions; do
+            if grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1; then ext=$p; break; fi
+          done
+          [ -n "$ext" ] || { echo "apt no instalaria la extension de la bandeja"; grep "^Inst" "$RUNNER_TEMP/simulado.txt"; exit 1; }
+          echo "extension en $ext" >> "$GITHUB_STEP_SUMMARY"
           # La extension, y que Ubuntu Desktop la trae habilitada para todos: el modo «ubuntu» de
           # GNOME Shell (gnome-shell-common, modes/ubuntu.json) la lista en enabledExtensions.
           mkdir -p _pkgs && cd _pkgs
