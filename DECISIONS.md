@@ -698,3 +698,61 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
   Lo que pide la parte B: la app de una caja secundaria no tiene nodo (no hay `nodo.env` ni producto local), así que
   necesitará otra fuente para la URL (la PC principal encontrada en la red) y no debe ofrecer «Vincular»; la pantalla de
   espera y la reconexión sirven tal cual.
+
+## ADR-016 — La cookie de sesión del producto sale sin `Secure` en el nodo (`LIBRAAUTH_COOKIE_SECURE=0`)
+
+- Estado: aceptada (propuesta; entra en vigor cuando los productos suban el pin de libraauth a la versión del ADR-026)
+- Fecha: 2026-10-20
+- Contexto: en una VM Ubuntu 26.04 con el nodo de ContaLibra (v0.15.0), la app de escritorio (Tauri sobre WebKitGTK)
+  no podía entrar: `POST /api/login` daba 200, la cookie no se guardaba y el pedido siguiente daba 401. El nodo sirve el
+  producto por **http** (`http://localhost:<puerto>` en la PC, `http://<IP>:<puerto>` desde las otras cajas, ADR-013) y
+  libraauth ponía la cookie de sesión con `secure=True` fijo. WebKitGTK no hace la excepción de `localhost` para cookies
+  `Secure` por http; WebView2 (Windows) y Chrome sí, pero **ningún** navegador la guarda desde una IP, así que las cajas
+  secundarias tampoco podían entrar en ningún sistema operativo.
+- Qué ya existe (se miró antes de diseñar):
+  - libraauth: la cookie de `SessionAuth.create_session_cookie` (login, login de la demo y renovación deslizante) es la
+    única que pone el producto en el nodo; el captcha (ALTCHA) no usa cookies, no hay CSRF ni «recordarme» con cookie
+    propia, y la lectura de la sesión no mira el esquema. `AdminAuth` (backoffice) tiene su propia cookie `Secure`, pero
+    no se sirve en nodos. En los tres productos del nodo no hay otros `set_cookie` (se buscó en ContaLibra, RestoLibra y
+    VentaLibra); el portal de jugadores de LibraClub tiene una cookie `Secure` propia, pero LibraClub no tiene nodo.
+  - libracore pone `Strict-Transport-Security`, que por http los navegadores ignoran (RFC 6797 §8.1) y no aplica a IPs.
+  - `armar_entorno` (este repo) ya fija variables iguales en todos los nodos (`TZ`) y `revisar_entorno` exige las que
+    arma; una definición de producto no puede pisarlas (`variables` lo rechaza).
+  - La actualización por `apt` (Linux) y la del instalador de Windows sin vincular sobre un nodo ya vinculado no vuelven
+    a armar el `nodo.env` (ADR-012, ADR-015).
+- Decisión:
+  1. **El arreglo de fondo está en libraauth** (ADR-026 de libraauth, propuesta v0.53.0): `LIBRAAUTH_COOKIE_SECURE`,
+     default `Secure`; sólo `0`, `false`, `no` u `off` la apagan, y cualquier otro valor la deja puesta. En la nube no
+     cambia nada.
+  2. **El nodo la apaga.** `VARIABLES_FIJAS_DEL_NODO = {"LIBRAAUTH_COOKIE_SECURE": "0"}` en `libraedge/instalador.py`:
+     `armar_entorno` la escribe en el `nodo.env` de Windows y de Linux (es la misma función), `revisar_entorno` la exige
+     (`verificar_nodo` la nombra si falta), la carga no la puede traer y la definición del producto no la puede pisar.
+  3. **Los nodos que se actualizan sin carga la reciben igual**: `libraedge_instalador.py completar-entorno --entorno
+     nodo.env` agrega las variables fijas que falten al final del archivo, sin tocar lo demás (ni el orden, ni los
+     secretos, ni la ACL: escribe sobre el archivo existente). Lo llaman `preparar_nodo.sh` sin carga (actualización por
+     `apt`) e `instalar.ps1 -SinVincular` si ya hay `nodo.env`. Una variable que ya está, con cualquier valor, se respeta.
+  4. **Un producto con libraauth anterior a v0.53.0 ignora la variable** y queda como hoy (login roto por http en
+     WebKitGTK y desde las otras cajas) hasta que suba el pin: no hace falta coordinar las dos versiones.
+  5. **La app de escritorio no cambia**: `sesion.json` guarda la marca `Secure` tal como vino (`segura`) y la repone
+     igual; una cookie sin `Secure` vuelve sin `Secure` (test nuevo en `preferencias.rs`). Ni la app ni el producto
+     exigen https para leer la sesión (`GET /api/me`, `/auth/me`).
+  6. **CI** (`publicar-instalador.yml`): en Windows (después de V6) y en Ubuntu 22.04/24.04/26.04 (después de
+     `--sin-central`), un **login real por http contra la IP de la red local** (sin la excepción de `localhost`) con el
+     admin local del nodo: el `nodo.env` tiene `LIBRAAUTH_COOKIE_SECURE=0`; `tests/login_por_http.py`, con el Python del
+     nodo, lee la versión de libraauth instalada y arma el cuerpo del login (la clave del admin sale del `nodo.env` —por
+     la entrada en Linux, que es de root— y el captcha ALTCHA se resuelve ahí; nada pasa por una línea de comandos ni se
+     imprime, y el archivo se borra apenas se usa); `curl -c` hace `POST <prefijo>/login` (`/api` en ContaLibra y
+     RestoLibra, `/auth` en VentaLibra: se detecta por la ruta del captcha) y `curl -b` el `GET <prefijo>/me`. Con
+     libraauth >= 0.53.0 se exige 200 en el login, ningún `Set-Cookie` con `Secure` y 200 con el admin en `/me`; con una
+     versión anterior se exige el 200 del login y se deja un *warning* con lo que dio. En Linux la clave del admin se
+     suma a «Ningún secreto en los logs».
+- Descartadas: servir el nodo por https con un certificado local (otra autoridad que instalar en cada caja, y no
+  resuelve el problema hoy); que libraauth apague `Secure` solo cuando el pedido llega por http (dejaría a una instancia
+  de la nube mal configurada detrás del proxy emitiendo cookies sin `Secure` sin que nadie lo decida); poner la variable
+  en la definición de cada producto (son tres copias de lo mismo y `variables` no puede fijar lo que arma el instalador).
+- Consecuencias: en el nodo la cookie viaja en claro por la red del local, igual que ya viajaba la clave en el
+  `POST /login` por http; el riesgo es el de una LAN, no uno nuevo. Para que el arreglo llegue a una PC hacen falta las
+  dos cosas: el instalador de esta versión (o `completar-entorno` por una actualización) y el producto empaquetado desde
+  `main` con libraauth >= 0.53.0. Lo que el CI no ve —la app de escritorio entrando de verdad en WebKitGTK y otra caja
+  entrando por la IP desde un navegador— va a `PROBAR_EN_VM.md`.
+

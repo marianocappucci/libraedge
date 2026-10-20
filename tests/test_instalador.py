@@ -345,8 +345,78 @@ def test_el_entorno_completo_del_nodo():
         "ADMIN_PASSWORD": "generado-1",
         "VENTALIBRA_ADMIN_PASSWORD": "generado-1",
         "TZ": "America/Argentina/Buenos_Aires",
+        "LIBRAAUTH_COOKIE_SECURE": "0",
     }
     assert ins.revisar_entorno(ins.definicion_desde_dict(_definicion()), entorno) == []
+
+
+# ── la cookie de sesion por http (ADR-016) ──────────────────────────────────
+
+
+@pytest.mark.parametrize("producto", PRODUCTOS)
+def test_el_nodo_apaga_la_cookie_secure_en_los_tres_productos(producto):
+    """El nodo sirve el producto por http en la LAN: la cookie de sesion no puede salir `Secure` (libraauth ADR-026).
+    Es la misma funcion para Windows y Linux, asi que alcanza con armar el entorno de cada producto."""
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / f"{producto}.json"))
+    carga = ins.carga_desde_dict(_carga(producto), producto)
+    entorno = ins.armar_entorno(definicion, carga, clave_pg="x", estado="e", data_dir="d")
+    assert entorno["LIBRAAUTH_COOKIE_SECURE"] == "0"
+    # Y es un "falso" de los que libraauth reconoce (0, false, no, off): otro valor la dejaria Secure.
+    assert entorno["LIBRAAUTH_COOKIE_SECURE"].strip().lower() in {"0", "false", "no", "off"}
+    assert "LIBRAAUTH_COOKIE_SECURE=0\n" in ins.formatear_entorno(entorno)
+
+
+def test_la_variable_de_la_cookie_no_la_puede_traer_la_carga():
+    """La carga termina en el entorno de servicios que corren como SYSTEM/root: solo trae lo que emite el central."""
+    with pytest.raises(ins.ErrorDeInstalacion):
+        ins.carga_desde_dict(_carga(variables={"LIBRAAUTH_COOKIE_SECURE": "1"}), "ventalibra")
+
+
+def test_una_reinstalacion_vuelve_a_poner_la_variable_de_la_cookie():
+    entorno = _armar(previo={"SECRET_KEY": "el-de-antes", "LIBRAAUTH_COOKIE_SECURE": "1"})
+    assert entorno["LIBRAAUTH_COOKIE_SECURE"] == "0"
+
+
+def test_la_definicion_del_producto_no_puede_pisar_la_variable_de_la_cookie():
+    with pytest.raises(ins.ErrorDeInstalacion, match="LIBRAAUTH_COOKIE_SECURE"):
+        ins.definicion_desde_dict(_definicion(variables={"LIBRAAUTH_COOKIE_SECURE": "1"}))
+
+
+def test_revisar_entorno_pide_la_variable_de_la_cookie():
+    definicion = ins.definicion_desde_dict(_definicion())
+    entorno = _armar()
+    del entorno["LIBRAAUTH_COOKIE_SECURE"]
+    assert ins.revisar_entorno(definicion, entorno) == ["LIBRAAUTH_COOKIE_SECURE"]
+
+
+def test_completar_entorno_agrega_solo_lo_que_falta():
+    """La actualizacion sin carga (apt en Linux) no vuelve a armar el nodo.env: un nodo de antes de ADR-016 recibe
+    la variable sin que se toque nada de lo demas (ni el orden, ni los comentarios, ni los secretos)."""
+    viejo = f"# comentario\nSECRET_KEY=el-de-antes\nLIBRAEDGE_NODE_SECRET={SECRETO}"
+    nuevo, agregadas = ins.completar_entorno(viejo)
+    assert agregadas == ["LIBRAAUTH_COOKIE_SECURE"]
+    assert nuevo == viejo + "\nLIBRAAUTH_COOKIE_SECURE=0\n"
+    # Una segunda vez no cambia nada.
+    assert ins.completar_entorno(nuevo) == (nuevo, [])
+    # Si ya esta, con cualquier valor, se respeta.
+    puesto = "LIBRAAUTH_COOKIE_SECURE=1\n"
+    assert ins.completar_entorno(puesto) == (puesto, [])
+
+
+def test_el_ayudante_completa_el_entorno_sin_mostrar_valores(tmp_path, capsys):
+    env = tmp_path / "nodo.env"
+    assert ins.main(["completar-entorno", "--entorno", str(env)]) == 2
+    assert "No esta" in capsys.readouterr().err
+    env.write_text(f"\ufeffSECRET_KEY=el-de-antes\r\nLIBRAEDGE_NODE_SECRET={SECRETO}\r\n", encoding="utf-8")
+    assert ins.main(["completar-entorno", "--entorno", str(env)]) == 0
+    salida = capsys.readouterr().out
+    assert "1 variables agregadas (LIBRAAUTH_COOKIE_SECURE)" in salida and SECRETO not in salida
+    texto = env.read_text(encoding="utf-8")
+    assert not texto.startswith("\ufeff") and "\r" not in texto
+    assert ins.leer_entorno(texto) == {"SECRET_KEY": "el-de-antes", "LIBRAEDGE_NODE_SECRET": SECRETO,
+                                       "LIBRAAUTH_COOKIE_SECURE": "0"}
+    assert ins.main(["completar-entorno", "--entorno", str(env)]) == 0
+    assert "0 variables agregadas." in capsys.readouterr().out
 
 
 def test_una_reinstalacion_conserva_lo_generado():
