@@ -149,6 +149,19 @@ mod tests {
     }
 
     #[test]
+    fn la_cookie_del_nodo_sin_secure_vuelve_sin_secure() {
+        // El nodo sirve por http y la cookie de libraauth sale sin Secure (libraedge ADR-016, libraauth ADR-026), tal
+        // cual la escribe Starlette: al reponerla no se le puede agregar, o WebKitGTK no la mandaria por http.
+        let sesion = Cookie::parse("libra_session=abc.123; HttpOnly; Path=/; SameSite=lax").unwrap();
+        let guardadas = de_sesion(&[sesion]);
+        assert_eq!(guardadas.len(), 1);
+        let vuelta = a_cookie(&guardadas[0]);
+        assert_ne!(vuelta.secure(), Some(true));
+        assert!(!vuelta.to_string().to_lowercase().contains("secure"));
+        assert_eq!((vuelta.http_only(), vuelta.same_site()), (Some(true), Some(SameSite::Lax)));
+    }
+
+    #[test]
     fn sin_sesion_se_borra_el_archivo() {
         let archivo = tmp("sesion").join("sesion.json");
         let c = de_sesion(&[Cookie::parse("s=1; Path=/").unwrap()]);

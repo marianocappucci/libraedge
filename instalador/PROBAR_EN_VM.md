@@ -239,7 +239,14 @@ Edge en modo aplicación.
 «Abrirlo al iniciar sesión»), reiniciar. Esperado: la app arranca antes que el servicio, muestra la espera y entra sola
 cuando el producto responde, sin error del navegador.
 
-**V19. Las otras cajas (ADR-017): la VM Windows como caja y la Ubuntu como PC principal.** En la VM Ubuntu Desktop
+**V19. Entrar por http, en la app y desde otra caja (ADR-016).** Con el nodo configurado y un producto con libraauth
+v0.53.0 o más: en la PC, entrar con un usuario en la app «VentaLibra» y navegar (no tiene que volver al login); desde
+otra máquina de la red, entrar por `http://<IP>:8000` (la de `acceso.txt`) con Chrome o Firefox. Esperado: las dos
+sesiones andan y en las herramientas del navegador la cookie de sesión **no** tiene la marca `Secure`. En Ubuntu, lo
+mismo con la app sobre WebKitGTK (es donde se vio el 401). Con un producto con libraauth anterior, la app de Windows
+entra (WebView2 exceptúa `localhost`) y la otra caja no: es lo esperado hasta que suba el pin.
+
+**V20. Las otras cajas (ADR-017): la VM Windows como caja y la Ubuntu como PC principal.** En la VM Ubuntu Desktop
 instalar el nodo con un código de un `dev.` (o la carga de prueba) y con **ufw activo**; en la VM Windows (sin el nodo:
 restaurada) instalar `libraedge-caja-<producto>.exe` con el asistente. Las dos VMs en la **misma red puenteada o
 interna** (no NAT separadas: el broadcast no cruza). Esperado: el asistente deja «<Producto>» en el escritorio; al
@@ -258,7 +265,7 @@ la encuentra y hay que escribir la IP: es lo esperado.
 ps_vm '& "C:\Program Files\VentaLibra (caja)\VentaLibra.exe" --buscar | Out-String'
 ```
 
-**V20. Dos PC principales y la caja en Ubuntu.** Con dos nodos del mismo producto en la red (por ejemplo la VM Windows
+**V21. Dos PC principales y la caja en Ubuntu.** Con dos nodos del mismo producto en la red (por ejemplo la VM Windows
 como PC principal de otra sucursal y la Ubuntu), instalar `libraedge-caja-<producto>_amd64.deb` en una tercera PC o en
 una sesión de otra VM. Esperado: «¿Cuál es la PC principal de este local?» con las dos (sucursal · negocio y dirección);
 elegir una la recuerda; «Buscar otra PC principal» en la espera vuelve a la lista. El ícono queda en el dock y agrupa la

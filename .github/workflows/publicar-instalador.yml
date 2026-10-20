@@ -62,6 +62,7 @@ on:
       - "libraedge/pantalla_del_central.py"
       - "libraedge/vinculacion.py"
       - "tests/central_de_prueba.py"
+      - "tests/login_por_http.py"
       - ".github/central-de-prueba.sh"
       - ".github/workflows/publicar-instalador.yml"
   workflow_dispatch:
@@ -389,6 +390,49 @@ jobs:
             sudo journalctl -u libraedge-producto -u libraedge-nodo -n 80 --no-pager
             exit 1
           fi
+      - name: Login real por http, como desde otra caja (cookie sin Secure, ADR-016)
+        # El nodo sirve el producto por http: con la cookie de sesion Secure el login da 200 y el pedido siguiente 401
+        # (libraauth ADR-026). Se entra con el admin local (su clave sale del nodo.env y no se imprime) contra la IP de
+        # la red local, sin la excepcion de localhost. Solo se exige el arreglo si el producto ya trae libraauth >= 0.53.0.
+        run: |
+          py=/opt/libraedge-nodo/python/bin/python3
+          puerto="$(jq -r .puerto "instalador/productos/${{ matrix.producto }}.json")"
+          sudo grep -qx 'LIBRAAUTH_COOKIE_SECURE=0' /etc/libraedge-nodo/nodo.env \
+            || { echo "El nodo.env no apaga la marca Secure de la cookie"; exit 1; }
+          read -r version estado < <("$py" -I tests/login_por_http.py version)
+          echo "libraauth $version en el nodo ($estado)"
+          case "$estado" in nueva|vieja) ;; *) echo "No se pudo leer la version de libraauth del nodo"; exit 1;; esac
+          ip="$(grep -Eo "http://(10|172|192)\.[0-9.]+:$puerto" "$RUNNER_TEMP/instalar.log" | tail -n1 | sed -E 's#^http://##; s#:[0-9]+$##')"
+          [ -n "$ip" ] || { echo "No esta la IP de la red local en el log de la instalacion"; exit 1; }
+          base="http://$ip:$puerto"
+          d="$RUNNER_TEMP/login"
+          mkdir -p "$d" && chmod 700 "$d"
+          prefijo=""
+          for p in /api /auth; do
+            if curl -fsS -o "$d/desafio.json" "$base$p/captcha" 2> /dev/null; then prefijo="$p"; break; fi
+          done
+          [ -n "$prefijo" ] || { echo "El producto no contesta $base/api/captcha ni $base/auth/captcha"; exit 1; }
+          sudo cat /etc/libraedge-nodo/nodo.env | "$py" -I tests/login_por_http.py cuerpo - "$d/desafio.json" "$d/cuerpo.json"
+          codigo="$(curl -sS -o "$d/login.json" -D "$d/login.cabeceras" -c "$d/frasco" -H 'Content-Type: application/json' \
+            --data-binary @"$d/cuerpo.json" -w '%{http_code}' "$base$prefijo/login")"
+          rm -f "$d/cuerpo.json"
+          [ "$codigo" = 200 ] || { echo "POST $prefijo/login dio $codigo"; cat "$d/login.json"; exit 1; }
+          tr -d '\r' < "$d/login.cabeceras" | grep -i '^set-cookie:' > "$d/cookies" \
+            || { echo "POST $prefijo/login no puso ninguna cookie"; exit 1; }
+          echo "Las cookies del login (sin el valor):"
+          sed -E 's/^([Ss]et-[Cc]ookie: *[^=]+=)[^;]*/\1…/' "$d/cookies"
+          segura=no
+          if grep -iqE ';[[:space:]]*secure[[:space:]]*(;|$)' "$d/cookies"; then segura=si; fi
+          me="$(curl -sS -b "$d/frasco" -o "$d/me.json" -w '%{http_code}' "$base$prefijo/me")"
+          echo "GET $prefijo/me con la cookie: $me"
+          if [ "$estado" = nueva ]; then
+            [ "$segura" = no ] || { echo "libraauth $version ya lee LIBRAAUTH_COOKIE_SECURE y la cookie salio Secure"; exit 1; }
+            [ "$me" = 200 ] || { echo "GET $prefijo/me con la cookie del login dio $me"; cat "$d/me.json"; exit 1; }
+            [ "$(jq -r .username "$d/me.json")" = admin ] || { echo "GET $prefijo/me no devolvio al admin"; exit 1; }
+            echo "Login por http: cookie sin Secure y GET $prefijo/me autenticado con 200."
+          else
+            echo "::warning::El producto trae libraauth $version (anterior a 0.53.0): la cookie sale Secure=$segura y GET $prefijo/me da $me. Se exige cuando suba el pin."
+          fi
       - name: La app abre el producto local y vuelve sola si el producto se reinicia (ADR-015)
         run: |
           app="/opt/libraedge-nodo/escritorio/$PAQUETE"
@@ -577,7 +621,9 @@ jobs:
           cp "$RUNNER_TEMP"/*.log "$RUNNER_TEMP/logs/"
           # La clave de PostgreSQL se busca sin mostrarla.
           clave_pg="$(sudo cat /var/lib/libraedge-nodo/postgres.clave)"
-          for secreto in "$SECRETO_DE_PRUEBA" "$clave_pg"; do
+          # Y la del admin local, que uso la prueba de login por http (ADR-016).
+          clave_admin="$(sudo sed -n 's/^ADMIN_PASSWORD=//p' /etc/libraedge-nodo/nodo.env)"
+          for secreto in "$SECRETO_DE_PRUEBA" "$clave_pg" "$clave_admin"; do
             if grep -rqF -- "$secreto" "$RUNNER_TEMP/logs"; then
               echo "Un secreto aparece en: $(grep -rlF -- "$secreto" "$RUNNER_TEMP/logs" | tr '\n' ' ')"
               exit 1
@@ -834,6 +880,55 @@ jobs:
             Get-Content "$env:ProgramFiles\LibraEdge\logs\LibraEdgeProducto.log" -Tail 60 -ErrorAction SilentlyContinue
             exit $LASTEXITCODE
           }
+      - name: Login real por http, como desde otra caja (cookie sin Secure, ADR-016)
+        # Lo mismo que en Ubuntu: el admin local (su clave sale del nodo.env y no se imprime) contra la IP de la red
+        # local, con curl.exe -c/-b. Solo se exige el arreglo si el producto ya trae libraauth >= 0.53.0.
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
+          $raiz = "$env:ProgramFiles\LibraEdge"
+          $py = "$raiz\python\python.exe"
+          $archivoEnv = "$raiz\nodo.env"
+          if (-not (Select-String -Path $archivoEnv -Pattern '^LIBRAAUTH_COOKIE_SECURE=0$' -CaseSensitive -Quiet)) {
+            throw "El nodo.env no apaga la marca Secure de la cookie"
+          }
+          $version, $estado = ((& $py -I tests\login_por_http.py version) | Out-String).Trim() -split ' '
+          Write-Host "libraauth $version en el nodo ($estado)"
+          if (@("nueva", "vieja") -notcontains $estado) { throw "No se pudo leer la version de libraauth del nodo" }
+          $acceso = Get-Content "$raiz\instalador\acceso.txt" -Raw
+          $ip = [regex]::Match($acceso, "http://((10|172|192)\.[0-9.]+):$($definicion.puerto)").Groups[1].Value
+          if (-not $ip) { throw "No esta la IP de la red local en acceso.txt" }
+          $base = "http://${ip}:$($definicion.puerto)"
+          $d = "$env:RUNNER_TEMP\login"
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $prefijo = $null
+          foreach ($p in "/api", "/auth") {
+            & curl.exe -fsS -o "$d\desafio.json" "$base$p/captcha" 2> $null
+            if ($LASTEXITCODE -eq 0) { $prefijo = $p; break }
+          }
+          if (-not $prefijo) { throw "El producto no contesta $base/api/captcha ni $base/auth/captcha" }
+          & $py -I tests\login_por_http.py cuerpo $archivoEnv "$d\desafio.json" "$d\cuerpo.json"
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo armar el cuerpo del login" }
+          $codigo = & curl.exe -sS -o "$d\login.json" -D "$d\login.cabeceras" -c "$d\frasco" -H "Content-Type: application/json" `
+            --data-binary "@$d\cuerpo.json" -w "%{http_code}" "$base$prefijo/login"
+          Remove-Item "$d\cuerpo.json" -Force
+          if ($codigo -ne "200") { Get-Content "$d\login.json"; throw "POST $prefijo/login dio $codigo" }
+          $cookies = @(Get-Content "$d\login.cabeceras" | Where-Object { $_ -match '^set-cookie:' } | ForEach-Object { $_.TrimEnd() })
+          if ($cookies.Count -eq 0) { throw "POST $prefijo/login no puso ninguna cookie" }
+          Write-Host "Las cookies del login (sin el valor):"
+          $cookies | ForEach-Object { Write-Host ($_ -replace '^(set-cookie:\s*[^=]+=)[^;]*', '$1…') }
+          $segura = @($cookies | Where-Object { $_ -match ';\s*secure\s*(;|$)' }).Count -gt 0
+          $me = & curl.exe -sS -b "$d\frasco" -o "$d\me.json" -w "%{http_code}" "$base$prefijo/me"
+          Write-Host "GET $prefijo/me con la cookie: $me"
+          if ($estado -eq "nueva") {
+            if ($segura) { throw "libraauth $version ya lee LIBRAAUTH_COOKIE_SECURE y la cookie salio Secure" }
+            if ($me -ne "200") { Get-Content "$d\me.json"; throw "GET $prefijo/me con la cookie del login dio $me" }
+            if ((Get-Content "$d\me.json" -Raw | ConvertFrom-Json).username -ne "admin") { throw "GET $prefijo/me no devolvio al admin" }
+            Write-Host "Login por http: cookie sin Secure y GET $prefijo/me autenticado con 200."
+          } else {
+            Write-Host "::warning::El producto trae libraauth $version (anterior a 0.53.0): la cookie sale Secure=$segura y GET $prefijo/me da $me. Se exige cuando suba el pin."
+          }
+          exit 0
       - name: La app abre el producto local y vuelve sola si el producto se reinicia (V17, ADR-015)
         run: |
           $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
