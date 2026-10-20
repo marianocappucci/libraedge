@@ -3,9 +3,11 @@
 #
 # - Primera instalacion SIN carga: deja los archivos y explica como configurar
 #   (sale con 0: el paquete queda instalado; el nodo, sin configurar).
-# - Con LIBRAEDGE_CARGA=/ruta/carga-nodo.json en el entorno: configura, y si la
-#   configuracion falla sale con error (apt lo informa) y se reintenta con
-#   `sudo libraedge-nodo-instalar <carga>` o `sudo dpkg --configure -a`.
+# - Con LIBRAEDGE_CODIGO y LIBRAEDGE_DIRECCION en el entorno (el codigo de
+#   vinculacion de «Sucursal sin internet», ADR-014) o con
+#   LIBRAEDGE_CARGA=/ruta/carga-nodo.json: configura, y si la configuracion falla
+#   sale con error (apt lo informa) y se reintenta con `sudo libraedge-nodo-instalar
+#   --codigo ... --direccion ...` (con un codigo nuevo) o `<carga>`.
 # - Actualizacion de un nodo ya configurado: migra y rearranca con el nodo.env
 #   que ya esta (no vuelve a pedir la carga; conserva SECRET_KEY y los datos).
 # - Siempre: fija el acceso directo del producto en el dock (dock.sh, ADR-013),
@@ -23,7 +25,10 @@ case "$1" in
     configure)
         systemctl daemon-reload || true
         dock
-        if [ -n "${LIBRAEDGE_CARGA:-}" ]; then
+        if [ -n "${LIBRAEDGE_CODIGO:-}" ]; then
+            # El codigo sigue en el entorno: instalar.sh lo lee de ahi, sin pasarlo por la linea de comandos.
+            /opt/libraedge-nodo/instalador/instalar.sh
+        elif [ -n "${LIBRAEDGE_CARGA:-}" ]; then
             /opt/libraedge-nodo/instalador/instalar.sh "$LIBRAEDGE_CARGA"
         elif [ -s /etc/libraedge-nodo/nodo.env ]; then
             /opt/libraedge-nodo/instalador/instalar.sh
@@ -31,10 +36,12 @@ case "$1" in
             cat <<'TEXTO'
 
   Nodo LibraEdge de @NOMBRE@ instalado, SIN CONFIGURAR.
-  Configurarlo con la carga del nodo que emite el central (pantalla
-  «Sucursal sin internet»):
+  Configurarlo con la direccion y el codigo que muestra el sistema
+  (Configuracion > «Sucursal sin internet», al dar de alta el nodo):
 
-      sudo libraedge-nodo-instalar /ruta/carga-nodo.json
+      sudo libraedge-nodo-instalar --codigo <codigo> --direccion <direccion>
+
+  (o, si soporte le dio el archivo de carga: sudo libraedge-nodo-instalar /ruta/carga-nodo.json)
 
   Despues: sudo libraedge-nodo-verificar
 

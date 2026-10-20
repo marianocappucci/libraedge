@@ -264,7 +264,7 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
 
 ## ADR-011 — «Sucursal sin internet»: el alta del nodo desde la pantalla del central
 
-- Estado: aceptada
+- Estado: aceptada; los puntos 6 y 7 (el adicional y el menú) los reemplaza ADR-014
 - Fecha: 2026-10-19
 - Contexto: con ADR-010 el instalador está publicado en los Releases (`libraedge-nodo-<producto>.exe`, v0.10.0) y la
   carga del nodo sólo la emite `libraedge-central nodo registrar --carga`, un comando en el VPS. Decisión del humano
@@ -459,3 +459,99 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
   su configuración inicial la primera vez. En Windows, «Abrir» y «Otras cajas» de la bandeja llegan cuando los
   productos suban el pin de LibraEdge; el acceso directo y el cartel final llegan con el instalador.
 
+
+
+## ADR-014 — LibraEdge incluido en todos los planes y activación del nodo con un código de vinculación
+
+- Estado: aceptada
+- Fecha: 2026-10-20
+- Contexto: decisiones del humano del 2026-10-20. (1) **LibraEdge es parte del sistema e incluido en todos los planes**:
+  el alta, la carga nueva y la baja de nodos están disponibles para el administrador de cualquier instancia de los
+  productos con LibraEdge, sin el adicional `offline`. (2) **El nodo se activa con «dirección + código»** en lugar de
+  llevar el archivo `carga-nodo.json` a la PC del local; el archivo queda como alternativa para soporte.
+- Qué ya existe (se miró antes de diseñar):
+  - En LibraEdge: el router de «Sucursal sin internet» (`pantalla_del_central.create_nodos_router`, ADR-011) con el alta
+    que publica y registra (`aprovisionamiento.registrar`, que devuelve el secreto y guarda sólo su hash,
+    `NodeRepository.register_node`), la carga como adjunto con `Cache-Control: no-store` y la URL pública del central
+    (`resolver_url_del_central`); la carga y su validación en el ayudante del instalador (`instalador.armar_carga`,
+    `carga_desde_dict`, `escribir_en_archivo_protegido`, ADR-010), la entrada por `/CARGA=` (Windows) y
+    `LIBRAEDGE_CARGA`/argumento (Ubuntu, ADR-012); la guarda del adicional `guarda_offline_de_libracore` (ADR-008) y el
+    `contratado` del `GET` y del `/menu` (ADR-011).
+  - En libraauth: el **token de un solo uso** del reseteo de clave (`password_reset.py`: `secrets`, se guarda sólo el
+    SHA-256, vencimiento con reloj inyectable, **un solo error** `InvalidResetToken` para «no existe / usado / vencido»);
+    el **límite de intentos por IP** del login (`auth_events.ip_del_request`, que lee `X-Forwarded-For` desde la derecha
+    detrás de los proxies de confianza, y el conteo de fallidos en la base para que valga entre procesos); y el captcha
+    (ADR-014 de libraauth), que explica por qué un tope por IP solo no frena a quien reparte intentos entre muchas.
+  - En libracore: el catálogo de adicionales (ADR-048) donde los productos declaran `offline`, sin lógica propia de
+    LibraEdge. LibraEdge **no importa** libracore ni libraauth en runtime: lo de libraauth se replica en su forma (hash,
+    error único, conteo en la base) y la IP real entra por una costura (`ip_del_request`).
+- Decisión:
+  1. **Sin adicional.** `Aprovisionamiento.verificar_alta` pasa a `sin_guarda` por defecto; `guarda_offline_de_libracore`
+     y `adicional_offline_contratado` quedan exportadas por compatibilidad (un producto que todavía las pase sigue
+     andando). **Compatibilidad hacia atrás:** `GET /api/nodos-offline` sigue mandando `contratado`, siempre `true`, y
+     `GET /api/nodos-offline/menu` contesta `visible: true` siempre: una pantalla o un layout del kit anterior ven todo
+     habilitado sin cambiar nada. Un rechazo de la guarda del producto (si alguno la pone) es 403 `alta_rechazada`.
+  2. **El código.** 8 símbolos de un alfabeto de 31 sin caracteres confusos (`23456789ABCDEFGHJKMNPQRSTUVWXYZ`: sin
+     `0 O 1 I L`), en dos grupos (`K7Q4-M2XP`), con `secrets`: 31^8 ≈ 8,5 × 10^11 (≈ 39,6 bits). **Un solo uso, vence a
+     los 15 minutos, se puede anular**; pedir otro para el mismo nodo anula los pendientes, y también los anulan la baja
+     y el archivo de soporte. Se guarda **sólo el SHA-256** (`libraedge_vinculacion`); el estado muestra que hay un código
+     pendiente y su vencimiento, nunca el código. Al tipearlo se aceptan minúsculas, espacios y guiones; nada se
+     «corrige» (una `O` no pasa a `0`).
+  3. **El alta con código registra el nodo** (como el alta con archivo: publica, `node_id` nuevo, prefijo) con un
+     secreto que nadie ve, y devuelve `{node_id, prefijo, sucursal, direccion, central_url, codigo, vence}` sin caché.
+     **El canje lo vuelve a registrar** (`ap.registrar`, el mismo paso que la carga nueva): ahí nace el secreto que se
+     usa, y sólo viaja en la respuesta del canje. Pedir otro código no rota el secreto en uso: un nodo instalado sigue
+     sincronizando hasta que se reinstale con el código.
+  4. **El canje es una ruta pública** (`create_canje_router`, `POST /sync/v1/vinculacion`, al lado de las del nodo, que
+     tampoco llevan sesión), montada por el producto **sin guarda**: sólo https (directo o `X-Forwarded-Proto`), el
+     producto del instalador tiene que ser el de la instancia (si no, 422 sin mirar el código), y antes de gastar nada
+     se valida que se pueda armar la carga (URL pública, CUIT del emisor). El código se marca usado con **una sola
+     sentencia** (`UPDATE ... WHERE usado_at IS NULL AND anulado_at IS NULL AND vence_at > ? RETURNING node_id`): con dos
+     canjes simultáneos, PostgreSQL toma la fila en el primero y el segundo, al reevaluar el `WHERE`, no encuentra nada
+     (probado con dos conexiones en los dos motores). El commit es el de `ap.registrar`: si el registro falla, el código
+     no queda gastado. Un código que no sirve —inexistente, vencido, usado, anulado o de un nodo dado de baja— es **un
+     solo** 404 `codigo_invalido`.
+  5. **Límite de intentos.** Canjes **fallidos** en una ventana de 15 minutos, contados en la base
+     (`libraedge_canje_fallido`, para que valga entre procesos y sobreviva a un reinicio): **10 por IP y 60 en total**.
+     Pasado cualquiera, 429 `demasiados_intentos` con `Retry-After`, **sin mirar el código** y sin anotar el intento (el
+     bloqueo no se extiende solo). Justificación: el tope global vale aunque el atacante reparta los intentos entre
+     muchas IP; en los 15 minutos de vida de un código entran como mucho dos ventanas, ≤ 120 intentos, y la
+     probabilidad de acertar un código vivo es ≤ 120 / 31^8 ≈ 1,4 × 10^-10 (con diez códigos vivos a la vez, ≈ 1,4 ×
+     10^-9). Costo aceptado: quien sature el tope global frena 15 minutos el canje legítimo; para eso queda el archivo,
+     que no pasa por esta ruta. La IP real la da el producto (`libraauth.auth_events.ip_del_request`).
+  6. **Logs sin el código ni el secreto**: dicen IP, resultado y `node_id` (probado con `caplog`).
+  7. **Las tablas** (`libraedge_vinculacion`, `libraedge_canje_fallido`) las crea `init_schema`, que el arranque y la
+     revisión `*_libraedge` de los productos ya llaman: aparecen en las instancias vivas sin una migración nueva.
+  8. **Los instaladores piden dirección + código.** El canje lo hace el ayudante (`libraedge_instalador.py canjear`,
+     sólo biblioteca estándar, `urllib` con `ssl.create_default_context()`, que verifica certificado y nombre; en
+     Linux se suma el almacén del sistema por si el OpenSSL del Python propio busca en otro lado) y escribe la carga
+     con permisos de secreto, como el archivo; después sigue el camino de siempre (`validar`, `entorno`...). El ayudante
+     **no acepta el código por argumento**: lo lee de `LIBRAEDGE_CODIGO` o de `--archivo-codigo`.
+     - **Windows:** una página «Vincular con el sistema» (dirección y código) antes de la del archivo, que se saltea con
+       el código. En silencio: `/DIRECCION=` y `LIBRAEDGE_CODIGO` (o `/CODIGO=`). El `.iss` pasa el código a
+       `instalar.ps1` por la variable del proceso (`SetEnvironmentVariableW`), nunca en la línea de comandos que anota
+       el transcript; `instalar.ps1 -Direccion` canjea **antes de tocar nada** (después de controlar «un nodo por PC»)
+       a `C:\ProgramData\LibraEdge\carga-nodo.json`, creado antes con la ACL de SYSTEM y Administradores, y lo borra al
+       terminar bien. 🔴 **`/CODIGO=` queda en el `/LOG` de Inno**, que escribe su línea de comandos: riesgo
+       documentado y aceptado (un solo uso, 15 minutos, el instalador lo canjea apenas copia); con la variable no queda
+       en ningún lado.
+     - **Ubuntu:** `instalar-nodo.sh <producto> --codigo C --direccion D` y `libraedge-nodo-instalar --codigo C
+       --direccion D` (o `LIBRAEDGE_CODIGO`/`LIBRAEDGE_DIRECCION`, que es como el postinst los recibe de apt), además
+       del archivo. `instalar.sh` crea la carga canjeada 600 de root en `/var/lib/libraedge-nodo/carga-nodo.json`, la
+       borra al terminar bien y, si falla después del canje, dice cómo reintentar con ella. El código no se escribe en
+       el log; por argumento queda un momento en `/proc/<pid>/cmdline` y, con `sudo`, en su registro: mismo riesgo
+       aceptado, y `sudo --preserve-env=LIBRAEDGE_CODIGO` lo evita.
+  9. **El CI lo prueba de punta a punta** (`publicar-instalador.yml`): un central de prueba con https de verdad en el
+     runner (`tests/central_de_prueba.py`: el router del motor sobre SQLite, con una autoridad de `trustme` instalada en
+     el almacén del sistema) y Windows (`/DIRECCION=` + `LIBRAEDGE_CODIGO`, después `/CODIGO=`, después un código usado
+     que sale con 20 sin tocar el `nodo.env`) y Ubuntu 22.04/24.04/26.04 (apt con `LIBRAEDGE_CODIGO`,
+     `libraedge-nodo-instalar --codigo`, `instalar-nodo.sh --codigo`, un código usado que sale con 2) se instalan con el
+     código; se verifica que el secreto del `nodo.env` es el que el central verifica (`/prueba/secreto`), que el código
+     no sirve dos veces, que la carga canjeada no queda y que ni el código ni el secreto aparecen en los logs.
+- Descartadas: mostrar el secreto (o un QR con él) en la pantalla; un código de 6 símbolos (≈ 30 bits: con el mismo
+  tope sería ≈ 1,4 × 10^-7 por código, aceptable, pero 8 cuesta dos teclas y deja margen si el límite fallara); el
+  límite en memoria (con varios procesos se multiplica, como el login de libraauth antes de su tabla); guardar el código
+  cifrado para volver a mostrarlo (con el hash alcanza: se pide otro).
+- Consecuencias: los productos montan `create_canje_router` **sin guarda** con su `ip_del_request`, sacan `offline` de su
+  catálogo de adicionales, de la siembra de `modulos` y de `medir`, y dejan de pasar `guarda_offline_de_libracore`. La
+  pantalla del kit (libra-ui ADR-085) muestra el código; las webs dejan de decir «se contrata por sucursal».

@@ -341,12 +341,13 @@ def test_la_guarda_de_libracore_por_defecto_importa_plans(producto, monkeypatch)
         ap.registrar(producto, _aprov(verificar_alta=ap.guarda_offline_de_libracore()), "node-1")
 
 
-def test_sin_libracore_no_se_registra_sin_guarda(producto, monkeypatch):
+def test_sin_libracore_la_guarda_del_adicional_no_registra(producto, monkeypatch):
+    """La guarda vieja, para un producto que todavia la pase (desde ADR-014 la de por defecto es `sin_guarda`)."""
     import sys
 
     monkeypatch.setitem(sys.modules, "libracore.adicionales", None)
     aprov = ap.Aprovisionamiento(prefijo="x", tablas_de_referencia=["productos"],
-                                 listar_sucursales=_sucursales)
+                                 listar_sucursales=_sucursales, verificar_alta=ap.guarda_offline_de_libracore())
     with pytest.raises(ap.AltaRechazada, match="libracore no esta instalado"):
         ap.registrar(producto, aprov, "node-1")
 

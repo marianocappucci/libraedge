@@ -21,9 +21,10 @@ declarativa, ``Aprovisionamiento``:
   aprendio que una PK escrita a mano se equivoca en silencio (``units`` tiene PK
   ``code``, no ``id``);
 - **como listar las sucursales** de la instancia (``id``, ``nombre``, ``activa``);
-- **la guarda del adicional** ``offline`` (libracore ADR-048). Por defecto la de
-  libracore, importada recien al registrar: LibraEdge no depende de libracore en
-  runtime;
+- **una guarda del alta**, opcional. Desde v0.14 (ADR-014) LibraEdge es parte del
+  sistema e incluido en todos los planes: por defecto no hay guarda (``sin_guarda``).
+  ``guarda_offline_de_libracore`` (el adicional ``offline`` de libracore ADR-048)
+  queda por compatibilidad, para un producto que todavia la pase;
 - **el prefijo** de las variables del producto (``RESTOLIBRA`` ->
   ``RESTOLIBRA_DATABASE_URL``, ``RESTOLIBRA_EDGE_NODE_ID``).
 
@@ -85,12 +86,15 @@ class Sucursal:
 
 
 def sin_guarda(conn, node_id: str, branch_id: str) -> None:
-    """Para un producto que no cobra el offline como adicional: no frena nada."""
+    """No frena nada. Es la guarda por defecto desde v0.14: LibraEdge esta incluido en todos los planes (ADR-014)."""
 
 
 def guarda_offline_de_libracore(plans: Any = "plans", clave: str = "offline",
                                 cfg: Callable[[], dict] | None = None):
     """La guarda del adicional ``offline`` de libracore (ADR-048), como callable.
+
+    🔴 **Ya no es la de por defecto** (v0.14, ADR-014): LibraEdge es parte del sistema e incluido en todos los planes,
+    y los productos sacaron el adicional ``offline`` de su catalogo. Queda para un producto que todavia la pase.
 
     - Sin el modulo prendido en ``modulos``: no se registra ningun nodo.
     - Si la sucursal ya tiene un nodo activo (otro, o este mismo al
@@ -137,15 +141,15 @@ class Aprovisionamiento:
     ``{nombre: clave | None}`` o ``Tabla``. ``listar_sucursales(conn)`` devuelve
     ``Sucursal`` o dicts con ``id``, ``nombre`` (o ``name``) y ``activa`` (o
     ``active``): ``erp.catalogo.get_all_sucursales`` de LibraCommerce sirve tal cual.
-    ``verificar_alta(conn, node_id, branch_id)`` levanta ``AltaRechazada``.
+    ``verificar_alta(conn, node_id, branch_id)`` levanta ``AltaRechazada``; por defecto
+    ``sin_guarda`` (LibraEdge incluido en todos los planes, ADR-014).
     ``conectar()`` es opcional: sin ``--base`` el CLI lo usa antes que el entorno.
     """
 
     prefijo: str
     tablas_de_referencia: Any
     listar_sucursales: Callable[[Any], Iterable]
-    verificar_alta: Callable[[Any, str, str], None] = field(
-        default_factory=guarda_offline_de_libracore)
+    verificar_alta: Callable[[Any, str, str], None] = sin_guarda
     conectar: Callable[[], Any] | None = None
     tablas: tuple[Tabla, ...] = field(init=False)
 

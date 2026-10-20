@@ -4,8 +4,17 @@
 # termina con 0.
 #
 # Se puede volver a correr a mano para reparar (todo es idempotente):
+#     $env:LIBRAEDGE_CODIGO = "K7Q4-M2XP"
 #     powershell -ExecutionPolicy Bypass -File "C:\Program Files\LibraEdge\instalador\instalar.ps1" `
-#         -RaizNodo "C:\Program Files\LibraEdge" -Carga C:\ruta\carga-nodo.json
+#         -RaizNodo "C:\Program Files\LibraEdge" -Direccion sistema.contalibra.com.ar
+# o, con el archivo de carga (soporte):
+#     ... instalar.ps1 -RaizNodo "C:\Program Files\LibraEdge" -Carga C:\ruta\carga-nodo.json
+#
+# El codigo de vinculacion (ADR-014) llega en la variable LIBRAEDGE_CODIGO del
+# proceso (el .iss la pone antes de llamar a este script) y NUNCA como
+# argumento: el transcript anota la linea de comandos. Se canjea por la carga
+# antes de tocar nada; la carga queda en <Datos>\carga-nodo.json (solo SYSTEM y
+# Administradores) y se borra al terminar bien.
 #
 # El detalle queda en <RaizNodo>\logs\instalacion.log. Nada de lo que se
 # registra ahi es un secreto: los scripts pasan RUTAS de archivos, nunca
@@ -14,7 +23,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RaizNodo,
-    [Parameter(Mandatory = $true)][string]$Carga,
+    [string]$Carga = "",
+    [string]$Direccion = "",
     [string]$Datos = (Join-Path $env:ProgramData "LibraEdge"),
     [int]$IntervaloSegundos = 60
 )
@@ -35,15 +45,50 @@ Start-Transcript -Path (Join-Path $logs "instalacion.log") -Append | Out-Null
 # servicios para copiar archivos y aca se vuelven a arrancar (una reinstalacion
 # con una carga equivocada no deja el local sin sistema).
 $tocado = $false
+$canjeada = ""
 try {
     . (Join-Path $PSScriptRoot "comun.ps1")
     $python     = Join-Path $RaizNodo "python\python.exe"
     $ayudante   = Join-Path $RaizNodo "instalador\libraedge_instalador.py"
     $definicion = Join-Path $RaizNodo "instalador\producto.json"
-    $Carga      = (Resolve-Path $Carga).Path
 
     $plan = Leer-Plan -Python $python -Ayudante $ayudante -Definicion $definicion
     Write-Host "== Nodo LibraEdge de $($plan.nombre)"
+
+    # --- Un nodo por PC (antes de canjear: un codigo gastado en la PC equivocada no vuelve) ---
+    # Los servicios, el puerto de PostgreSQL y la carpeta de datos son unos solos.
+    # El .iss ya lo controla al arrancar; esto cubre la reparacion a mano.
+    $marca = Join-Path $Datos "producto.txt"
+    if (Test-Path $marca) {
+        $previo = ([System.IO.File]::ReadAllText($marca)).Trim()
+        if ($previo -and $previo -ne $plan.producto) {
+            throw "Esta PC ya tiene el nodo de $previo. Un nodo por PC."
+        }
+    }
+
+    # --- 0. El codigo de vinculacion, si vino (ADR-014) ---------------------------
+    # La carga canjeada nace con la ACL de SYSTEM y Administradores ANTES de que
+    # el ayudante escriba el secreto adentro (como el nodo.env). El codigo lo lee
+    # el ayudante de LIBRAEDGE_CODIGO; despues se saca del entorno.
+    if ($Direccion) {
+        if ($Carga) { throw "O el codigo o el archivo de carga, no los dos." }
+        if (-not $env:LIBRAEDGE_CODIGO) { throw "Falta el codigo de vinculacion (LIBRAEDGE_CODIGO)." }
+        $canjeada = Join-Path $Datos "carga-nodo.json"
+        Proteger-Archivo -Ruta $canjeada
+        Write-Host "Canjeando el codigo de vinculacion en $Direccion..."
+        $codigoCanje = Invocar -Programa $python -Argumentos @($ayudante, "canjear", "--definicion", $definicion,
+            "--direccion", $Direccion, "--salida", $canjeada)
+        Remove-Item Env:LIBRAEDGE_CODIGO -ErrorAction SilentlyContinue
+        if ($codigoCanje -ne 0) {
+            Remove-Item $canjeada -Force -ErrorAction SilentlyContinue
+            $canjeada = ""
+            throw "No se pudo canjear el codigo (el motivo esta arriba). Pedir otro en Sucursal sin internet."
+        }
+        Test-ArchivoProtegido -Ruta $canjeada -Lanzar | Out-Null
+        $Carga = $canjeada
+    }
+    if (-not $Carga) { throw "Falta la carga del nodo: -Direccion con LIBRAEDGE_CODIGO, o -Carga <archivo>." }
+    $Carga = (Resolve-Path $Carga).Path
 
     # --- 1. La carga, antes de tocar nada --------------------------------------
     # Una carga de otro producto, incompleta o con una URL sin https se rechaza
@@ -54,17 +99,6 @@ try {
     Write-Host ("Carga: nodo {0}, prefijo {1}, central {2}, {3} tablas espejo." -f
         $resumen.node_id, $resumen.prefijo, $resumen.central, $resumen.tablas_espejo)
     foreach ($aviso in @($resumen.avisos)) { if ($aviso) { Write-Warning $aviso } }
-
-    # --- 2. Un nodo por PC ---------------------------------------------------------
-    # Los servicios, el puerto de PostgreSQL y la carpeta de datos son unos solos.
-    # El .iss ya lo controla al arrancar; esto cubre la reparacion a mano.
-    $marca = Join-Path $Datos "producto.txt"
-    if (Test-Path $marca) {
-        $previo = ([System.IO.File]::ReadAllText($marca)).Trim()
-        if ($previo -and $previo -ne $plan.producto) {
-            throw "Esta PC ya tiene el nodo de $previo. Un nodo por PC."
-        }
-    }
 
     # --- 3. El runtime de Visual C++ ---------------------------------------------
     # El ZIP de PostgreSQL no lo trae y un Windows limpio tampoco: sin el,
@@ -95,13 +129,23 @@ try {
 
     Escribir-SinBom -Ruta $marca -Texto $plan.producto
     Write-Host ""
-    Write-Host "La carga ($Carga) tiene el secreto del nodo: borrarla de esta PC y de donde se haya copiado."
+    if ($canjeada) {
+        # El secreto ya esta en el nodo.env: la carga canjeada no tiene por que quedar.
+        Remove-Item $canjeada -Force -ErrorAction SilentlyContinue
+        $canjeada = ""
+    } else {
+        Write-Host "La carga ($Carga) tiene el secreto del nodo: borrarla de esta PC y de donde se haya copiado."
+    }
     Write-Host "== Listo."
     $salida = 0
 } catch {
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)"
     Write-Host "En: $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)"
+    if ($canjeada -and (Test-Path $canjeada)) {
+        Write-Host "El codigo ya se uso: la carga quedo en $canjeada (solo SYSTEM y Administradores)."
+        Write-Host "Reintentar con: instalar.ps1 -RaizNodo `"$RaizNodo`" -Carga `"$canjeada`""
+    }
     $salida = 1
     if (-not $tocado) {
         foreach ($servicio in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo")) {

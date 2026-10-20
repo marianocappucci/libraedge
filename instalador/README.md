@@ -83,8 +83,16 @@ La tabla de `nodo.iss` (nombre y `AppId` por producto) tiene que coincidir con l
 
 ## La carga del nodo
 
-Lo que el central emite para **un** nodo llega al instalador como **un archivo**, `carga-nodo.json` (formato
-`libraedge-carga/1`), que escribe el mismo comando que registra el nodo, adentro del contenedor del cliente:
+Lo que el central emite para **un** nodo es la **carga** (formato `libraedge-carga/1`). Desde v0.14 (ADR-014) llega al
+instalador como **dirección + código de vinculación**: el administrador da de alta el nodo en «Sucursal sin internet»,
+la pantalla muestra, por ejemplo, «Dirección: sistema.contalibra.com.ar · Código: K7Q4-M2XP», y el instalador los pide
+y canjea el código por la carga (`libraedge_instalador.py canjear`, https con verificación de certificado, contra
+`POST /sync/v1/vinculacion` del central). El código vale **15 minutos y una sola vez**; si vence o se usó, se pide otro
+en la misma pantalla. El secreto del nodo no se muestra nunca: sale recién en la respuesta del canje, que el ayudante
+escribe con permisos de secreto (como el archivo) y se borra al terminar bien.
+
+**La alternativa para soporte es el archivo** `carga-nodo.json`: se baja de la misma pantalla («Archivo de carga») o lo
+escribe el mismo comando que registra el nodo, adentro del contenedor del cliente:
 
 ```bash
 export LIBRAEDGE_APROVISIONAMIENTO=app.offline:aprovisionamiento
@@ -128,21 +136,35 @@ Se arma en dos lugares:
 
 ## Instalar
 
-- **Con el asistente:** pide la carpeta y el archivo de carga. Nada más: la clave de PostgreSQL ya no se tipea (se
-  genera la primera vez y queda en `postgres.clave`).
-- **Desatendida:**
+- **Con el asistente:** pide la carpeta, y en «Vincular con el sistema» la **dirección** y el **código** que muestra
+  «Sucursal sin internet». Si soporte dio un archivo de carga, se dejan vacíos y se elige el archivo en la página
+  siguiente. Nada más: la clave de PostgreSQL ya no se tipea (se genera la primera vez y queda en `postgres.clave`).
+- **Desatendida, con el código** (en la variable `LIBRAEDGE_CODIGO`, que no queda en ningún log):
 
   ```powershell
-  .\libraedge-nodo-ventalibra-0.10.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+  $env:LIBRAEDGE_CODIGO = "K7Q4-M2XP"
+  .\libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIRECCION=sistema.ventalibra.com.ar /LOG=C:\ruta\inno.log
   ```
 
-  Sin `/CARGA` (o con un archivo que no existe) aborta antes de tocar el disco.
+  También anda `/CODIGO=K7Q4-M2XP`, pero **Inno Setup escribe su línea de comandos en el `/LOG`**: el código queda en
+  ese archivo. Como sirve una sola vez, vence a los 15 minutos y el instalador lo canjea apenas termina de copiar, el
+  riesgo es chico; con la variable no queda en ningún lado.
+- **Desatendida, con el archivo (soporte):**
+
+  ```powershell
+  .\libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+  ```
+
+  Sin código ni `/CARGA` (o con un archivo que no existe) aborta antes de tocar el disco.
 
 **Ningún secreto pasa por una línea de comandos**: Inno Setup escribe la suya en `/LOG` y `Start-Transcript` la suya en
 `logs\instalacion.log`. Viaja la **ruta** de la carga; el secreto lo lee `libraedge_instalador.py` y los mensajes nombran
-variables, nunca valores.
+variables, nunca valores. El código va del instalador a `instalar.ps1` y al ayudante en la variable `LIBRAEDGE_CODIGO`
+del proceso; `instalar.ps1` lo canjea antes de tocar nada y deja la carga en `C:\ProgramData\LibraEdge\carga-nodo.json`
+(sólo SYSTEM y Administradores) hasta terminar bien. Si algo falla después del canje, el código ya se usó: se reintenta
+con `instalar.ps1 -Carga` sobre ese archivo, o con otro código.
 
-**Códigos de salida:** `0` bien; `1` no arrancó (falta `/CARGA` u otro producto ya instalado); `20` se copiaron los
+**Códigos de salida:** `0` bien; `1` no arrancó (falta el código o `/CARGA`, u otro producto ya instalado); `20` se copiaron los
 archivos pero la configuración falló (el motivo está en `C:\Program Files\LibraEdge\logs\instalacion.log`); el resto,
 los de Inno Setup. Antes los pasos eran entradas de `[Run]`, cuyo código Inno no mira: un paso roto terminaba con 0.
 
@@ -223,15 +245,20 @@ la primera sincronización y la verificación son **las mismas**, por el mismo `
 
 ```bash
 curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh \
-    | sudo bash -s ventalibra /ruta/carga-nodo.json
+    | sudo bash -s ventalibra --codigo K7Q4-M2XP --direccion sistema.ventalibra.com.ar
+# o con el archivo (soporte): ... | sudo bash -s ventalibra /ruta/carga-nodo.json
 sudo libraedge-nodo-verificar
 ```
 
 `instalar-nodo.sh <producto> <carga>` controla que sea Ubuntu 22.04 o 24.04 amd64 y que corra como root, agrega el
 repositorio de PGDG de la forma oficial (el script de `postgresql-common`: llave en un archivo y `signed-by`, sin
 `apt-key`), baja `libraedge-nodo-<producto>_amd64.deb` del mismo Release, lo verifica contra su `SHA256SUMS.txt` y lo
-instala **con las recomendadas** (la bandeja) y `LIBRAEDGE_CARGA`. Ante cualquier falla sale con un código distinto de 0.
-La carga es una ruta: el secreto no pasa por los argumentos. Una versión fija: `sudo LIBRAEDGE_VERSION=0.12.0 bash -s
+instala **con las recomendadas** (la bandeja) y `LIBRAEDGE_CODIGO` + `LIBRAEDGE_DIRECCION` (o `LIBRAEDGE_CARGA`), que
+el postinst le pasa a `libraedge-nodo-instalar` por el entorno. Ante cualquier falla sale con un código distinto de 0.
+El secreto no pasa por los argumentos; el código sí, un momento (está en la línea de comandos de `bash -s` y, con
+`sudo`, en el registro de `sudo` del sistema): sirve una sola vez y vence a los 15 minutos. Para no dejarlo ni ahí:
+`sudo LIBRAEDGE_CODIGO=... libraedge-nodo-instalar --direccion ...` no lo saca del registro de `sudo`, pero
+`export LIBRAEDGE_CODIGO=...; sudo --preserve-env=LIBRAEDGE_CODIGO libraedge-nodo-instalar --direccion ...` sí. Una versión fija: `sudo LIBRAEDGE_VERSION=0.12.0 bash -s
 ...`. En el CI se prueba con `LIBRAEDGE_DEB_DIR` (un directorio con el `.deb` y `SHA256SUMS.txt`) en vez de bajar.
 
 **A mano**, en tres pasos:
@@ -245,7 +272,8 @@ sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
 sudo LIBRAEDGE_CARGA=/ruta/carga-nodo.json apt install ./libraedge-nodo-ventalibra_0.12.0_amd64.deb
 #    o en dos pasos:
 sudo apt install ./libraedge-nodo-ventalibra_0.12.0_amd64.deb      # instala SIN configurar (sale con 0 y lo explica)
-sudo libraedge-nodo-instalar /ruta/carga-nodo.json                  # configura (0 bien; 2 falta la carga o no sirve)
+sudo libraedge-nodo-instalar --codigo K7Q4-M2XP --direccion sistema.ventalibra.com.ar   # configura con el código
+sudo libraedge-nodo-instalar /ruta/carga-nodo.json                  # o con el archivo (0 bien; 2 falta o no sirve)
 
 # 3. Verificar.
 sudo libraedge-nodo-verificar            # --sin-central con la carga de prueba o sin internet

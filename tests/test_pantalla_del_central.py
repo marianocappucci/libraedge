@@ -5,7 +5,8 @@ Con el producto de juguete de `test_aprovisionamiento.py`, contra los dos motore
 1. **El secreto sólo viaja en la respuesta que es la carga**, como adjunto y sin caché; ni el `GET`, ni un error,
    ni una cabecera lo traen, y la base guarda sólo el hash.
 2. La carga que sale es la que el instalador acepta (`carga_desde_dict`, las mismas reglas con que la va a leer).
-3. Las guardas del CLI siguen siendo las guardas: segundo nodo, adicional `offline`, sucursal inexistente.
+3. Las guardas del CLI siguen siendo las guardas: segundo nodo, sucursal inexistente y la guarda del producto (que
+   desde ADR-014 por defecto no frena nada: LibraEdge está incluido en todos los planes).
 4. Nada se emite si la URL del central o el emisor no sirven (se valida antes del alta).
 """
 
@@ -76,7 +77,8 @@ def test_el_estado_lista_sucursales_nodos_e_instalador(producto, config):
     assert datos["instalador_url"] == (
         "https://github.com/marianocappucci/libraedge/releases/latest/download/libraedge-nodo-juguete.exe")
     assert datos["central_url"] == CENTRAL and datos["central_url_error"] is None
-    assert datos["contratado"] is False  # la tabla `modulos` del juguete está vacía
+    assert datos["contratado"] is True  # incluido en todos los planes (ADR-014), aunque `modulos` esté vacía
+    assert datos["direccion"] == "demo.juguete.com.ar" and datos["vinculacion_minutos"] == 15
     assert datos["emisor_faltan"] == [] and datos["emisor_error"] is None
     assert [(s["id"], s["nombre"], s["activa"], s["nodo"]) for s in datos["sucursales"]] == [
         ("1", "Centro", True, None), ("2", "Norte", True, "nodo-viejo"), ("3", "Vieja", False, None)]
@@ -100,10 +102,16 @@ def test_el_estado_de_cada_nodo(producto, config):
     assert estados == {"a": "al_dia", "b": "sin_noticias", "c": "baja"}
 
 
-def test_el_adicional_contratado_se_informa(producto, config):
-    producto.execute("INSERT INTO modulos (modulo, habilitado) VALUES ('offline', 1)")
+def test_contratado_es_siempre_true_salvo_que_el_producto_pase_otra_cosa(producto, config):
+    producto.execute("INSERT INTO modulos (modulo, habilitado) VALUES ('offline', 0)")
     producto.commit()
+    # El módulo `offline` apagado ya no importa: LibraEdge es parte del sistema (ADR-014).
     assert _cliente(producto, config).get("/api/nodos-offline").json()["contratado"] is True
+    # La costura sigue: un producto viejo que pase la de antes ve lo de antes.
+    from libraedge.pantalla_del_central import adicional_offline_contratado
+
+    viejo = _cliente(producto, config, contratado=adicional_offline_contratado)
+    assert viejo.get("/api/nodos-offline").json()["contratado"] is False
 
 
 def test_sin_config_el_estado_dice_que_falta_el_emisor(producto, tmp_path):
@@ -159,13 +167,13 @@ def test_una_sucursal_inactiva_o_inexistente_es_422(producto, config, sucursal):
     assert producto.execute("SELECT COUNT(*) FROM node_identity").fetchone()[0] == 0
 
 
-def test_sin_el_adicional_el_alta_es_403_con_el_mensaje_de_la_guarda(producto, config):
-    def guarda(conn, node_id, branch_id):  # como `guarda_offline_de_libracore` sin el adicional contratado
-        raise ap.AltaRechazada("El plan no incluye «Modo offline».")
+def test_una_guarda_del_producto_que_rechaza_es_403_con_su_mensaje(producto, config):
+    def guarda(conn, node_id, branch_id):  # una costura del producto que no deja (ya no hay adicional, ADR-014)
+        raise ap.AltaRechazada("Esta instancia no puede tener nodos.")
 
     r = _cliente(producto, config, verificar_alta=guarda).post("/api/nodos-offline", json={"sucursal_id": "1"})
     assert r.status_code == 403
-    assert r.json()["detail"] == {"codigo": "adicional_offline", "mensaje": "El plan no incluye «Modo offline»."}
+    assert r.json()["detail"] == {"codigo": "alta_rechazada", "mensaje": "Esta instancia no puede tener nodos."}
     assert producto.execute("SELECT COUNT(*) FROM node_identity").fetchone()[0] == 0
 
 
@@ -277,34 +285,26 @@ def test_el_modulo_no_importa_libracore():
     assert "import libracore" not in fuente and "from libracore" not in fuente
 
 
-# ── el menú (decisión del humano, 2026-10-19) ───────────────────────────────
+# ── el menú: compatibilidad (ADR-014) ───────────────────────────────────────
 
-def test_el_menu_se_ve_con_el_adicional_o_con_nodos_activos(producto, config):
+def test_el_menu_se_ve_siempre(producto, config):
+    """Hasta v0.13 se veía con el adicional o con nodos activos; desde ADR-014 LibraEdge está incluido en todos los
+    planes y el kit ya no la pregunta. Un layout viejo que la pida ve la entrada siempre."""
     cliente = _cliente(producto, config)
-    # Sin adicional y sin nodos: no se ve.
-    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": False, "nodos_activos": 0, "visible": False}
-
-    # Sin adicional pero con un nodo activo: se ve, para poder darlo de baja.
-    NodeRepository(producto).register_node("nodo-activo", branch_id="1", prefijo="S01")
-    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": False, "nodos_activos": 1, "visible": True}
-    assert cliente.get("/api/nodos-offline").json()["nodos_activos"] == 1
-
-    # Dado de baja el último, vuelve a esconderse.
-    assert cliente.delete("/api/nodos-offline/nodo-activo").status_code == 200
-    assert cliente.get("/api/nodos-offline/menu").json()["visible"] is False
-
-    # Con el adicional, se ve aunque no haya nodos.
-    producto.execute("INSERT INTO modulos (modulo, habilitado) VALUES ('offline', 1)")
-    producto.commit()
     assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": True, "nodos_activos": 0, "visible": True}
+    NodeRepository(producto).register_node("nodo-activo", branch_id="1", prefijo="S01")
+    assert cliente.get("/api/nodos-offline/menu").json() == {"contratado": True, "nodos_activos": 1, "visible": True}
+    assert cliente.delete("/api/nodos-offline/nodo-activo").status_code == 200
+    assert cliente.get("/api/nodos-offline/menu").json()["visible"] is True
 
 
-def test_sin_el_adicional_con_nodos_activos_solo_se_puede_dar_de_baja(producto, config):
-    def guarda(conn, node_id, branch_id):  # la de libracore con el módulo apagado: frena también la carga nueva
-        raise ap.AltaRechazada("El plan no incluye «Modo offline».")
+def test_con_una_guarda_que_rechaza_sigue_andando_la_baja(producto, config):
+    def guarda(conn, node_id, branch_id):  # una guarda del producto que frena también la carga nueva
+        raise ap.AltaRechazada("Esta instancia no puede tener nodos.")
 
     NodeRepository(producto).register_node("nodo-activo", branch_id="1", prefijo="S01")
     cliente = _cliente(producto, config, verificar_alta=guarda)
     assert cliente.post("/api/nodos-offline", json={"sucursal_id": "2"}).status_code == 403
+    assert cliente.post("/api/nodos-offline/vinculacion", json={"sucursal_id": "2"}).status_code == 403
     assert cliente.post("/api/nodos-offline/nodo-activo/carga").status_code == 403
     assert cliente.delete("/api/nodos-offline/nodo-activo").status_code == 200

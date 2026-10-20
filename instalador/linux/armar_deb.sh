@@ -165,8 +165,8 @@ Description: Nodo LibraEdge de $nombre (sucursal sin internet)
  La instancia local de $nombre para una sucursal: el producto con su propio
  Python 3.12, PostgreSQL 16 (PGDG) en un cluster propio en 127.0.0.1:55432,
  el proceso que sincroniza con el central, el respaldo verificado cada hora
- y el icono de bandeja. Se configura con la carga del nodo que emite el
- central: sudo libraedge-nodo-instalar /ruta/carga-nodo.json
+ y el icono de bandeja. Se configura con la direccion y el codigo que
+ muestra el central: sudo libraedge-nodo-instalar --codigo C --direccion D
  Revision del producto: $(cat "$opt/producto/REVISION").
 EOF
 

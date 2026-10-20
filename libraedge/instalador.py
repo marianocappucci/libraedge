@@ -23,6 +23,8 @@ Uso (lo invocan los scripts del instalador)::
 
     python libraedge_instalador.py plan --definicion producto.json
     python libraedge_instalador.py validar --definicion producto.json --carga carga-nodo.json
+    python libraedge_instalador.py canjear --definicion producto.json --direccion sistema.contalibra.com.ar \\
+        --salida carga-nodo.json        (el codigo, de LIBRAEDGE_CODIGO o de --archivo-codigo; ADR-014)
     python libraedge_instalador.py entorno --definicion ... --carga ... --clave-pg ARCHIVO \\
         --estado RUTA --data-dir RUTA --salida nodo.env
     python libraedge_instalador.py entorno ... --previo /var/lib/libraedge-nodo/conservado.env   (Linux)
@@ -58,6 +60,10 @@ from dataclasses import dataclass, field
 from urllib.parse import quote, urlsplit
 
 FORMATO_DEFINICION = "libraedge-producto/1"
+#: La ruta publica del central donde se canjea el codigo de vinculacion (``pantalla_del_central.RUTA_DE_CANJE``).
+RUTA_DE_CANJE = "/sync/v1/vinculacion"
+#: De donde sale el codigo si no viene en un archivo: asi no pasa por ninguna linea de comandos.
+VARIABLE_CODIGO = "LIBRAEDGE_CODIGO"
 FORMATO_CARGA = "libraedge-carga/1"
 
 #: El PostgreSQL embebido del nodo: solo 127.0.0.1 y no el 5432, que la PC puede tener ocupado.
@@ -640,6 +646,140 @@ def escribir_carga(ruta: str, carga: Mapping) -> None:
         archivo.write("\n")
 
 
+# ── el codigo de vinculacion (ADR-014) ──────────────────────────────────────
+
+#: Las mismas reglas que ``libraedge.vinculacion`` (este modulo no puede importarlo): 8 simbolos sin ``0 O 1 I L``.
+_ALFABETO_DEL_CODIGO = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+#: Donde suele estar el almacen de certificados del sistema en Linux, por si el OpenSSL del Python del nodo no lo
+#: encuentra solo (el de python-build-standalone puede traer otra ruta por defecto).
+_ALMACENES_LINUX = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem")
+
+
+def normalizar_direccion(direccion: str) -> str:
+    """``sistema.contalibra.com.ar`` -> ``https://sistema.contalibra.com.ar``. Solo https (http solo a esta PC).
+
+    Es lo que muestra la pantalla «Sucursal sin internet» al lado del codigo: sin esquema, se le pone ``https://``."""
+    direccion = (direccion or "").strip()
+    if not direccion:
+        raise ErrorDeInstalacion("Falta la direccion del sistema (la que muestra «Sucursal sin internet»).")
+    if "://" not in direccion:
+        direccion = "https://" + direccion
+    try:
+        return normalizar_url_del_central(direccion)
+    except ErrorDeInstalacion:
+        raise ErrorDeInstalacion(
+            "La direccion del sistema no es valida: es la que muestra «Sucursal sin internet» al lado del codigo"
+            " (por ejemplo sistema.contalibra.com.ar), siempre por https.") from None
+
+
+def normalizar_codigo(codigo: str) -> str:
+    """``k7q4 m2xp`` -> ``K7Q4-M2XP``. ``ErrorDeInstalacion`` si no puede ser un codigo (sin decir cual es)."""
+    limpio = "".join(c for c in (codigo or "") if c not in " -\t\r\n").upper()
+    if len(limpio) != 8 or any(c not in _ALFABETO_DEL_CODIGO for c in limpio):
+        raise ErrorDeInstalacion(
+            "El codigo de vinculacion no tiene el formato de la pantalla (8 letras y numeros, como K7Q4-M2XP).")
+    return f"{limpio[:4]}-{limpio[4:]}"
+
+
+def leer_codigo(archivo: str | None = None, entorno: Mapping[str, str] | None = None) -> str:
+    """El codigo, de ``archivo`` o de :data:`VARIABLE_CODIGO`. Nunca de un argumento: la linea de comandos se loguea."""
+    if archivo:
+        texto = _leer_texto(archivo)
+        if not texto.strip():
+            raise ErrorDeInstalacion(f"El archivo del codigo esta vacio o no existe: {archivo}")
+        return normalizar_codigo(texto)
+    entorno = os.environ if entorno is None else entorno
+    if not (entorno.get(VARIABLE_CODIGO) or "").strip():
+        raise ErrorDeInstalacion(f"Falta el codigo de vinculacion ({VARIABLE_CODIGO} o --archivo-codigo).")
+    return normalizar_codigo(entorno[VARIABLE_CODIGO])
+
+
+def contexto_tls():
+    """El contexto de https con verificacion de certificado y de nombre. Nunca se apaga la verificacion.
+
+    En Windows, ``create_default_context`` lee el almacen del sistema; en Linux se suma el archivo del sistema por si
+    el OpenSSL del Python del nodo busca en otro lado (``SSL_CERT_FILE`` sigue mandando si esta)."""
+    import ssl
+
+    contexto = ssl.create_default_context()
+    if sys.platform.startswith("linux") and not os.environ.get("SSL_CERT_FILE"):
+        for ruta in _ALMACENES_LINUX:
+            if os.path.isfile(ruta):
+                contexto.load_verify_locations(cafile=ruta)
+                break
+    return contexto
+
+
+def _mensaje_del_central(cuerpo: bytes) -> str | None:
+    try:
+        detalle = json.loads(cuerpo.decode("utf-8")).get("detail")
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return None
+    if isinstance(detalle, dict) and isinstance(detalle.get("mensaje"), str):
+        return detalle["mensaje"][:400]
+    return detalle[:400] if isinstance(detalle, str) else None
+
+
+def canjear_codigo(direccion: str, codigo: str, producto: str, *, abrir=None, timeout: float = 30) -> dict:
+    """Canjea el codigo contra el central y devuelve la carga **validada**, como si se la hubiera elegido de un archivo.
+
+    🔴 La respuesta tiene el secreto del nodo: no se imprime, no va en el texto de ningun error. Los errores son los
+    del central (que tampoco lo traen) o el motivo de red, sin el codigo.
+    """
+    import urllib.error
+    import urllib.request
+
+    base = normalizar_direccion(direccion)
+    codigo = normalizar_codigo(codigo)
+    pedido = urllib.request.Request(
+        base + RUTA_DE_CANJE, method="POST",
+        data=json.dumps({"codigo": codigo, "producto": producto}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "libraedge-instalador"})
+    abrir = abrir or (lambda p: urllib.request.urlopen(p, timeout=timeout, context=contexto_tls()))  # noqa: S310
+    try:
+        with abrir(pedido) as respuesta:
+            cuerpo = respuesta.read()
+    except urllib.error.HTTPError as exc:
+        mensaje = _mensaje_del_central(exc.read() or b"")
+        if exc.code == 404:
+            raise ErrorDeInstalacion(mensaje or "El codigo no es valido o ya vencio: pedir otro.") from None
+        if exc.code == 429:
+            espera = exc.headers.get("Retry-After") if exc.headers else None
+            raise ErrorDeInstalacion((mensaje or "Demasiados intentos.")
+                                     + (f" (reintentar en {espera} segundos)" if espera else "")) from None
+        raise ErrorDeInstalacion(f"El sistema contesto {exc.code} al canjear el codigo"
+                                 + (f": {mensaje}" if mensaje else ".")) from None
+    except urllib.error.URLError as exc:
+        motivo = getattr(exc, "reason", exc)
+        raise ErrorDeInstalacion(
+            f"No se pudo conectar con {base} para canjear el codigo ({type(motivo).__name__}: {motivo}). Revisar la"
+            " direccion y la conexion a internet de esta PC.") from None
+    except (OSError, TimeoutError) as exc:
+        raise ErrorDeInstalacion(f"No se pudo conectar con {base} para canjear el codigo ({type(exc).__name__}).") \
+            from None
+    try:
+        datos = json.loads(cuerpo.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise ErrorDeInstalacion(f"{base} no contesto una carga de nodo: revisar la direccion.") from None
+    carga_desde_dict(datos, producto)  # las mismas reglas que una carga de archivo
+    return datos
+
+
+def escribir_carga_canjeada(ruta: str, carga: Mapping) -> None:
+    """Escribe la carga canjeada con permisos de secreto, como la del archivo.
+
+    Si el archivo ya existe se escribe encima conservando su ACL (Windows: lo crea antes ``instalar.ps1`` solo para
+    SYSTEM y Administradores, igual que el ``nodo.env``). Si no existe se crea con permisos 600 (Linux)."""
+    contenido = json.dumps(carga, ensure_ascii=False, indent=2) + "\n"
+    if os.path.isfile(ruta):
+        escribir_en_archivo_protegido(ruta, contenido)
+        return
+    descriptor = os.open(ruta, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as archivo:
+        archivo.write(contenido)
+
+
 # ── correr un console script sin su .exe ────────────────────────────────────
 
 
@@ -814,6 +954,11 @@ def _parser() -> argparse.ArgumentParser:
     validar = sub.add_parser("validar", help="valida la carga contra el producto; imprime un resumen sin secretos")
     validar.add_argument("--definicion", required=True)
     validar.add_argument("--carga", required=True)
+    canje = sub.add_parser("canjear", help="canjea el codigo de vinculacion por la carga y la escribe (ADR-014)")
+    canje.add_argument("--definicion", required=True)
+    canje.add_argument("--direccion", required=True, help="la direccion del sistema (sistema.contalibra.com.ar)")
+    canje.add_argument("--archivo-codigo", help=f"archivo con el codigo; sin esto, de la variable {VARIABLE_CODIGO}")
+    canje.add_argument("--salida", required=True, help="donde se escribe la carga (permisos de secreto)")
     entorno = sub.add_parser("entorno", help="escribe el nodo.env (que ya tiene que existir, con su ACL)")
     entorno.add_argument("--definicion", required=True)
     entorno.add_argument("--carga", required=True)
@@ -879,6 +1024,11 @@ def main(argv: list[str] | None = None) -> int:
             for nombre in faltan:
                 print(f"FALTA {nombre}")
             return 1 if faltan else 0
+        if args.comando == "canjear":
+            carga_cruda = canjear_codigo(args.direccion, leer_codigo(args.archivo_codigo), definicion.producto)
+            escribir_carga_canjeada(args.salida, carga_cruda)
+            print(json.dumps(carga_desde_dict(carga_cruda, definicion.producto).resumen(), ensure_ascii=False))
+            return 0
         carga = leer_carga(args.carga, definicion.producto)
         if args.comando == "validar":
             print(json.dumps(carga.resumen(), ensure_ascii=False))
