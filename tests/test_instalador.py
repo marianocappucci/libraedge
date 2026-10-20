@@ -595,3 +595,104 @@ def test_ejecutar_devuelve_lo_que_devuelve_el_script(monkeypatch, capsys):
     con(sale_con_texto)
     assert ins.ejecutar("x", []) == 1
     assert "fallo la migracion" in capsys.readouterr().err
+
+
+# ── como se entra al producto en el local (ADR-013) ────────────────────────
+
+
+@pytest.mark.parametrize("ip, de_la_lan", [
+    ("192.168.1.20", True), ("10.0.0.5", True), ("172.16.3.4", True), ("172.31.255.1", True),
+    ("127.0.1.1", False), ("169.254.10.1", False), ("8.8.8.8", False), ("172.32.0.1", False),
+    ("0.0.0.0", False), ("fe80::1", False), ("no-es-ip", False), ("", False),
+])
+def test_que_ip_es_de_la_red_del_local(ip, de_la_lan):
+    assert ins.es_ip_de_la_lan(ip) is de_la_lan
+
+
+def test_la_ip_de_la_lan_es_la_de_la_ruta_por_defecto():
+    assert ins.ip_de_la_lan(lambda: "192.168.1.20", lambda: ["10.0.0.5"]) == "192.168.1.20"
+
+
+def test_sin_ruta_por_defecto_la_primera_privada_del_nombre():
+    def sin_ruta():
+        raise OSError("Network is unreachable")
+
+    assert ins.ip_de_la_lan(sin_ruta, lambda: ["127.0.1.1", "10.0.0.5", "192.168.1.9"]) == "10.0.0.5"
+    # La ruta por defecto por una interfaz publica (una PC con IP publica) tampoco es para las cajas.
+    assert ins.ip_de_la_lan(lambda: "200.1.2.3", lambda: ["192.168.1.9"]) == "192.168.1.9"
+
+
+def test_sin_ip_privada_es_none_y_nunca_levanta():
+    def falla():
+        raise OSError("sin red")
+
+    assert ins.ip_de_la_lan(falla, falla) is None
+    assert ins.ip_de_la_lan(lambda: "127.0.0.1", lambda: ["127.0.1.1"]) is None
+
+
+def test_el_texto_de_como_se_entra():
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / "contalibra.json"))
+    datos = ins.acceso(definicion, "192.168.1.20")
+    assert datos["url_local"] == "http://localhost:8000/"
+    assert datos["url_lan"] == "http://192.168.1.20:8000"
+    assert datos["lineas"] == [
+        "En este local se entra siempre por la copia local, aunque haya internet:",
+        '  en esta PC, con el acceso directo "ContaLibra" (o http://localhost:8000/);',
+        "  desde las otras cajas, con http://192.168.1.20:8000",
+        "La direccion de la nube es para entrar desde afuera del local.",
+    ]
+    # Inno Setup lee el texto con la pagina de codigos del sistema: sin acentos.
+    assert all(linea.isascii() for linea in datos["lineas"])
+
+
+def test_sin_ip_el_texto_lo_dice():
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / "ventalibra.json"))
+    datos = ins.acceso(definicion, None)
+    assert datos["ip"] is None and datos["url_lan"] == "http://<IP de esta PC>:8000"
+    assert datos["lineas"][2] == ("  desde las otras cajas, con http://<IP de esta PC>:8000 "
+                                  "(no se encontro la IP de esta PC en la red del local)")
+
+
+def test_el_ayudante_acceso_en_texto_y_en_json(monkeypatch, capsys):
+    monkeypatch.setattr(ins, "ip_de_la_lan", lambda: "10.1.2.3")
+    definicion = str(CARPETA / "productos" / "restolibra.json")
+    assert ins.main(["acceso", "--definicion", definicion]) == 0
+    texto = capsys.readouterr().out
+    assert '"RestoLibra" (o http://localhost:8000/)' in texto and "http://10.1.2.3:8000" in texto
+    assert ins.main(["acceso", "--definicion", definicion, "--json"]) == 0
+    datos = json.loads(capsys.readouterr().out)
+    assert datos["url_lan"] == "http://10.1.2.3:8000" and datos["nombre"] == "RestoLibra"
+
+
+def test_los_accesos_directos_de_windows_y_su_desinstalacion():
+    """preparar_nodo.ps1 los crea con "<nombre>.lnk"; el .iss los borra con {#NombreProducto}, que un test ya ata al
+    nombre de cada definicion (test_el_iss_tiene_la_misma_tabla_que_las_definiciones)."""
+    nodo = (CARPETA / "preparar_nodo.ps1").read_text(encoding="utf-8")
+    seccion = nodo[nodo.index("# --- El acceso directo del producto"):]
+    assert 'foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms"))' in seccion
+    assert '"$($plan.nombre).lnk"' in seccion
+    assert '$urlLocal = "http://localhost:$($plan.puerto)/"' in seccion
+    assert '$lnk.Arguments = "--app=$urlLocal"' in seccion
+    # Sin Edge, la URL en el navegador por defecto.
+    assert 'Join-Path $env:SystemRoot "explorer.exe"' in seccion and "$lnk.Arguments = $urlLocal" in seccion
+    assert '$lnk.IconLocation = "$iconoProducto,0"' in seccion and '"producto.ico"' in seccion
+    # Edge: el registro primero, despues las rutas conocidas.
+    buscar = seccion[seccion.index("function Buscar-Edge"):seccion.index("$urlLocal =")]
+    assert buscar.index("App Paths\\msedge.exe") < buscar.index("Edge\\Application\\msedge.exe")
+    # Como se entra: acceso.txt, que lee la pagina final del asistente.
+    assert '"acceso", "--definicion", $definicion' in seccion and '"instalador\\acceso.txt"' in seccion
+
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    borrar = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
+    for carpeta in ("commondesktop", "commonprograms", "commonstartup"):
+        assert f'Type: files; Name: "{{{carpeta}}}\\{{#NombreProducto}}.lnk"' in borrar
+
+
+def test_la_pagina_final_y_el_log_dicen_como_se_entra():
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    assert "ExpandConstant('{app}\\instalador\\acceso.txt')" in iss
+    # Pascal: la funcion se declara antes de usarla.
+    assert iss.index("function TextoDeAcceso") < iss.index("Log(TextoDeAcceso)")
+    pagina = iss[iss.index("procedure CurPageChanged"):]
+    assert "CurPageID = wpFinished" in pagina and "WizardForm.FinishedLabel.Caption" in pagina
+    assert "FinishedLabel.AdjustHeight" in pagina

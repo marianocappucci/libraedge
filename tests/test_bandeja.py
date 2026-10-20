@@ -211,3 +211,70 @@ def test_bandeja_no_toca_la_base_ni_el_central(tmp_path, monkeypatch, capsys):
 
     assert main(["bandeja", "--una-vez"]) == 1
     assert "todavía no sincronizó" in capsys.readouterr().out
+
+
+# ── Abrir el producto y la direccion para las otras cajas (ADR-013) ────────
+
+
+def test_el_producto_sale_de_la_definicion_instalada(tmp_path):
+    from libraedge.bandeja import producto_del_nodo
+
+    definicion = tmp_path / "producto.json"
+    definicion.write_text('{"nombre": "ContaLibra", "puerto": 8000}', encoding="utf-8")
+    assert producto_del_nodo(str(definicion)) == ("ContaLibra", 8000)
+    definicion.write_text('{"puerto": 8000}', encoding="utf-8")
+    assert producto_del_nodo(str(definicion)) is None
+    assert producto_del_nodo(str(tmp_path / "no-esta.json")) is None
+
+
+def test_el_acceso_directo_es_el_del_menu_inicio_comun():
+    import ntpath
+
+    from libraedge.bandeja import acceso_directo_de_windows
+
+    ruta = acceso_directo_de_windows("VentaLibra", "C:\\ProgramData")
+    partes = ruta.replace(ntpath.sep, "/").split("/")
+    assert partes[-5:] == ["Microsoft", "Windows", "Start Menu", "Programs", "VentaLibra.lnk"]
+    assert acceso_directo_de_windows("VentaLibra", None) is None
+
+
+def test_abrir_usa_el_acceso_directo_y_si_no_esta_el_navegador():
+    from libraedge.bandeja_windows import abrir_producto
+
+    abiertos, navegados = [], []
+    usado = abrir_producto("C:/x/VentaLibra.lnk", "http://localhost:8000/", existe=lambda _: True,
+                           abrir_archivo=abiertos.append, navegador=navegados.append)
+    assert (usado, abiertos, navegados) == ("acceso", ["C:/x/VentaLibra.lnk"], [])
+    usado = abrir_producto("C:/x/VentaLibra.lnk", "http://localhost:8000/", existe=lambda _: False,
+                           abrir_archivo=abiertos.append, navegador=navegados.append)
+    assert (usado, navegados) == ("navegador", ["http://localhost:8000/"])
+    assert abrir_producto(None, "http://localhost:8000/", navegador=navegados.append) == "navegador"
+
+
+def test_copiar_va_a_clip_y_un_fallo_no_tumba_la_bandeja():
+    from libraedge.bandeja_windows import copiar
+
+    vistos = []
+    copiar("http://192.168.1.20:8000", correr=lambda comando, **opciones: vistos.append((comando, opciones)))
+    assert vistos[0][0] == ["clip"] and vistos[0][1]["input"] == "http://192.168.1.20:8000"
+
+    def falla(*_, **__):
+        raise FileNotFoundError("clip")
+
+    copiar("x", correr=falla)
+
+
+def test_la_linea_de_las_otras_cajas():
+    from libraedge.bandeja import etiqueta_otras_cajas
+
+    assert etiqueta_otras_cajas("http://192.168.1.20:8000") == "Otras cajas: http://192.168.1.20:8000 (copiar)"
+
+
+def test_la_definicion_instalada_esta_al_lado_del_python_embebido(monkeypatch):
+    import os
+    import sys
+
+    from libraedge.bandeja_windows import definicion_instalada
+
+    monkeypatch.setattr(sys, "prefix", os.path.join("raiz", "python"))
+    assert definicion_instalada() == os.path.join("raiz", "instalador", "producto.json")

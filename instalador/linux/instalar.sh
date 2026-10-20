@@ -100,7 +100,9 @@ printf '%s\n' "$producto" > "$MARCA"
 # --- 6. La bandeja, si hay alguien con sesion grafica ----------------------------------------
 "$RAIZ_NODO/bandeja/abrir_bandeja.sh" || true
 
-echo
+# --- 7. Como se entra: el acceso directo «<Producto>» y la direccion para las otras cajas (ADR-013) ---
+mostrar_acceso
+
 if [ -n "$carga" ]; then
     echo "La carga ($carga) tiene el secreto del nodo: borrarla de esta PC y de donde se haya copiado."
 fi

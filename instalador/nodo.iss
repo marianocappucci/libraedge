@@ -90,6 +90,8 @@ Source: "paquete\herramientas\nssm.exe";  DestDir: "{app}\herramientas"; Flags: 
 ; queda en {app} para poder reparar sin el instalador.
 Source: "paquete\herramientas\vc_redist.x64.exe"; DestDir: "{app}\herramientas"; Flags: ignoreversion
 Source: "libraedge.ico";                 DestDir: "{app}";              Flags: ignoreversion
+; La marca del producto, para su acceso directo (ADR-013; lo crea preparar_nodo.ps1).
+Source: "iconos\{#Producto}.ico";        DestDir: "{app}"; DestName: "producto.ico"; Flags: ignoreversion
 Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
@@ -127,6 +129,12 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
 Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
+; Los accesos directos del producto (ADR-013), que tambien crea preparar_nodo.ps1:
+; el del escritorio publico, el del menu Inicio y, si se activo a mano la opcion
+; de abrirlo al iniciar sesion (README), su copia en el inicio comun.
+Type: files; Name: "{commondesktop}\{#NombreProducto}.lnk"
+Type: files; Name: "{commonprograms}\{#NombreProducto}.lnk"
+Type: files; Name: "{commonstartup}\{#NombreProducto}.lnk"
 Type: filesandordirs; Name: "{app}\logs"
 ; Los __pycache__ los genera Python al importar: sin esto la carpeta queda.
 Type: filesandordirs; Name: "{app}\app"
@@ -272,6 +280,20 @@ begin
   end;
 end;
 
+{ Como se entra al producto, con la IP de esta PC (ADR-013): lo escribe
+  preparar_nodo.ps1 en acceso.txt. En esta PC se entra SIEMPRE por la copia
+  local, aunque haya internet. }
+function TextoDeAcceso: String;
+var
+  Lineas: TArrayOfString;
+  I: Integer;
+begin
+  Result := '';
+  if LoadStringsFromFile(ExpandConstant('{app}\instalador\acceso.txt'), Lineas) then
+    for I := 0 to GetArrayLength(Lineas) - 1 do
+      Result := Result + Lineas[I] + #13#10;
+end;
+
 { Todo lo que no es copiar archivos lo hace instalar.ps1, y su codigo de salida
   pasa a ser el del instalador (GetCustomSetupExitCode). Antes eran entradas de
   la seccion Run, cuyo codigo de salida Inno no mira: un paso fallido terminaba
@@ -305,6 +327,7 @@ begin
     else
     begin
       Log('instalar.ps1 termino bien.');
+      Log(TextoDeAcceso);
       { La bandeja se abre sola al iniciar sesion (acceso directo de Inicio),
         pero despues de instalar o actualizar no estaba hasta el proximo inicio:
         PrepareToInstall la cierra y nadie la volvia a abrir (VM, 2026-10-19).
@@ -369,6 +392,21 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
     GuardarConservado;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Texto: String;
+begin
+  if (CurPageID = wpFinished) and (CodigoDeSalida = 0) then
+  begin
+    Texto := TextoDeAcceso;
+    if Texto <> '' then
+    begin
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + Texto;
+      WizardForm.FinishedLabel.AdjustHeight;
+    end;
+  end;
 end;
 
 function GetCustomSetupExitCode: Integer;

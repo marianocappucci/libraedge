@@ -20,6 +20,35 @@ En la PC designada del local (Windows 10/11 x64, una sola por sucursal; las caja
 3. La tarea programada `LibraEdgeRespaldo` (cada hora, con verificación), la regla de firewall del puerto del producto
    (perfiles Privado y Dominio) y el ícono de bandeja en el inicio común.
 
+4. **El acceso directo «<Producto>»** en el escritorio público y en el menú Inicio (ADR-013), con la marca del producto:
+   abre `http://localhost:<puerto>/` en **modo aplicación de Edge** (`msedge.exe --app=...`: una ventana sin barra de
+   direcciones, con el título y el ícono de la página). Sin Edge, la URL en el navegador por defecto. Lo quita la
+   desinstalación.
+
+## En el local se entra siempre por la copia local (ADR-013)
+
+En la PC con el nodo **se entra siempre por la copia local, aunque haya internet**: el nodo sincroniza por detrás. Quien
+entra por la nube desde el local (`demo.contalibra.com.ar`) se queda sin sistema cuando se corta internet, y tiene que
+abrir `localhost:8000` y volver a loguearse (VM, 2026-10-20). Por eso:
+
+- **En esa PC**, el acceso directo «<Producto>» (Windows: escritorio y menú Inicio; Ubuntu: el menú de aplicaciones,
+  desde donde se ancla al dock con «Agregar a favoritos»). También `http://localhost:8000`.
+- **Desde las otras cajas del local**, `http://<IP de esa PC>:8000`. El final de la instalación lo muestra con la IP ya
+  completa (Windows: la página final del asistente, `logs\instalacion.log` y el log de Inno; Linux: la salida de
+  `libraedge-nodo-instalar` y de `instalar-nodo.sh`), y la bandeja lo repite en su menú («Otras cajas: http://… (copiar)»).
+  La IP es la privada de la ruta por defecto (`libraedge_instalador.py acceso`).
+- **La dirección de la nube** es para entrar desde afuera del local.
+- «Abrir <Producto>» de la bandeja usa el mismo lanzamiento que el acceso directo.
+
+**Abrirlo al iniciar sesión** (opcional, apagado por defecto). Windows: copiar el acceso directo del menú Inicio al
+inicio común (`copy "%ProgramData%\Microsoft\Windows\Start Menu\Programs\<Producto>.lnk" "%ProgramData%\Microsoft\Windows\Start Menu\Programs\StartUp\"`,
+como administrador). Ubuntu: `sudo cp /usr/share/applications/libraedge-nodo-<producto>.desktop /etc/xdg/autostart/`.
+Desinstalar borra la copia en los dos.
+
+Los íconos: `instalador/iconos/<producto>.ico` (Windows) y `instalador/marca/<producto>.svg` (Linux) salen de las marcas
+de libra-ui (`marcas/<producto>.svg` y `-favicon.svg`) con `python instalador/armar_icono.py <chrome>`, que arma también
+`libraedge.ico`. Los `.ico` se commitean.
+
 Sin Docker Desktop: su licencia para empresas no es gratuita y es una capa más que soportar en la PC de un comercio.
 
 **Un nodo por PC.** Servicios, puerto y carpeta de datos son unos solos: si la PC ya tiene el nodo de otro producto
@@ -279,6 +308,20 @@ sesión «ubuntu» la trae habilitada para todos (el CI lo comprueba en los paqu
 `/etc/xdg/autostart/libraedge-nodo-bandeja.desktop`, y al terminar de instalar se abre en las sesiones gráficas activas
 (`systemd-run --user` en la sesión de cada usuario).
 
+«Abrir <Producto>» corre `bandeja/abrir_producto.sh` (ADR-013), el mismo que el acceso directo del menú
+(`/usr/share/applications/libraedge-nodo-<producto>.desktop`, ícono `/opt/libraedge-nodo/marca/<producto>.svg`): con
+Google Chrome, Chromium o Edge, en modo aplicación (`--app=`); si no hay ninguno (Ubuntu trae Firefox, que no tiene
+modo aplicación), `xdg-open` de la URL. La línea «Otras cajas: http://<IP>:8000 (copiar)» le pregunta la IP al
+ayudante (`acceso --json`) cada minuto y al hacer clic la copia.
+
+**No se deja un ícono en el escritorio de los usuarios:** en GNOME un `.desktop` en `~/Escritorio` aparece como «no
+confiable» hasta que el usuario lo habilita, y `/etc/skel` sólo llega a los usuarios nuevos. El acceso directo está en
+el menú de aplicaciones y **fijado en el dock de todos los usuarios**: `instalador/dock.sh` suma
+`libraedge-nodo-<producto>.desktop` a los favoritos por defecto del sistema de cada versión (22.04, 24.04, 26.04) en
+`/usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override`, y desinstalar lo borra. Cambia el valor por defecto:
+quien ya ordenó su dock a mano conserva lo suyo. El navegador: modo aplicación si ya hay Chrome, Chromium o Edge; si
+no, una pestaña (se espera a Tauri, sin agregar Chromium).
+
 ### Armar
 
 ```bash
@@ -295,7 +338,10 @@ Corre en el WSL **sin sudo** (necesita `uv`, `git` con acceso a la familia y `dp
 La bandeja en una sesión gráfica real (los runners no tienen escritorio). Para verla: una VM con Ubuntu Desktop 24.04
 (y otra con 22.04), instalar el `.deb` con la carga de prueba **con las recomendadas**, y mirar que aparezca el círculo
 al lado del reloj, que pase a ámbar al cortar la red (`sudo systemctl stop libraedge-nodo` lo pone rojo), que «Abrir
-<Producto>» abra el navegador y que vuelva al cerrar y abrir sesión. También: el producto desde otra PC de la red con ufw
+<Producto>» abra la ventana en modo aplicación (con Chrome o Chromium instalado) o el navegador, que «Otras cajas»
+copie la dirección, que el acceso directo aparezca en el menú con la marca del producto y fijado en el dock (con un usuario nuevo y con
+uno que ya tenía el dock ordenado), y que
+vuelva al cerrar y abrir sesión. También: el producto desde otra PC de la red con ufw
 activo, y un corte de energía con el nodo cobrando.
 
 ## Historia: la versión de RestoLibra en una VM (2026-08)

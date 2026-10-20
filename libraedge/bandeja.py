@@ -20,6 +20,8 @@ nodo muerto: exactamente la pantalla que no puede mentir. Por eso lo primero que
 mira `resumen_para_la_bandeja` es **cuándo** se escribió, no qué dice.
 """
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from enum import StrEnum
@@ -126,3 +128,32 @@ def resumen_para_la_bandeja(estado, ahora: datetime | None = None,
         Severidad.OK, "Al día",
         f"Última sincronización {_describir(antiguedad)}.",
     )
+
+
+# ── abrir el producto y la direccion para las otras cajas (ADR-013) ──────────
+#
+# En la PC con el nodo se entra SIEMPRE por la copia local, aunque haya internet. La bandeja lo hace obvio: «Abrir
+# <Producto>» abre el mismo acceso directo que deja el instalador (modo aplicacion de Edge), y una linea del menu dice
+# la direccion para las otras cajas del local, con la IP de esta PC.
+
+
+def producto_del_nodo(ruta: str) -> tuple[str, int] | None:
+    """``(nombre visible, puerto)`` de la definicion instalada (``instalador/producto.json``), o ``None``."""
+    try:
+        with open(ruta, encoding="utf-8-sig") as archivo:
+            datos = json.load(archivo)
+        return str(datos["nombre"]), int(datos.get("puerto") or 8000)
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def acceso_directo_de_windows(nombre: str, programdata: str | None) -> str | None:
+    """El acceso directo del producto en el menu Inicio comun, el que crea ``preparar_nodo.ps1``."""
+    if not programdata:
+        return None
+    return os.path.join(programdata, "Microsoft", "Windows", "Start Menu", "Programs", f"{nombre}.lnk")
+
+
+def etiqueta_otras_cajas(url_lan: str) -> str:
+    """La linea del menu de la bandeja: al hacer clic, la copia."""
+    return f"Otras cajas: {url_lan} (copiar)"

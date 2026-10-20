@@ -154,6 +154,17 @@ de `postgres.clave` sólo con `NT AUTHORITY\SYSTEM` y `BUILTIN\Administradores`,
 ps_vm 'Get-Content C:\ProgramData\LibraEdge\app\config.json; (Get-Acl "C:\Program Files\LibraEdge\nodo.env").Access | Select-Object IdentityReference, FileSystemRights; (Get-Acl C:\ProgramData\LibraEdge\postgres.clave).Access | Select-Object IdentityReference; Get-Content C:\ProgramData\LibraEdge\producto.txt'
 ```
 
+**V8b. El acceso directo «VentaLibra» y cómo se entra (ADR-013).** Lo que el CI no ve: con el asistente (no
+`/VERYSILENT`), la página final dice «En este local se entra siempre por la copia local…» con la IP de la VM; en el
+escritorio y en el menú Inicio está «VentaLibra» con la marca naranja; al abrirlo, Edge muestra **una ventana sin barra
+de direcciones** con el título y el ícono del producto (anotar si la primera vez Edge pide su configuración inicial);
+en la bandeja, el clic abre lo mismo y «Otras cajas: http://<IP>:8000 (copiar)» deja la dirección en el portapapeles.
+La bandeja nueva llega con el pin de LibraEdge del producto (ADR-013): con una versión anterior no tiene esas líneas.
+
+```bash
+ps_vm '$s = New-Object -ComObject WScript.Shell; foreach ($c in "CommonDesktopDirectory","CommonPrograms") { $l = $s.CreateShortcut((Join-Path ([Environment]::GetFolderPath($c)) "VentaLibra.lnk")); "$($l.TargetPath) $($l.Arguments) [$($l.IconLocation)]" }; Get-Content "C:\Program Files\LibraEdge\instalador\acceso.txt"'
+```
+
 **V9. El producto desde «otra caja».** Desde el WSL, con el puerto reenviado o la VM en red puente:
 `curl -s http://<ip-de-la-vm>:8000/health` tiene que devolver un objeto JSON. Si la red de la VM quedó como
 **Pública**, la regla de firewall no aplica (sólo Privado y Dominio): `ps_vm 'Get-NetConnectionProfile'`.
@@ -188,7 +199,8 @@ ps_vm 'Start-ScheduledTask -TaskName LibraEdgeRespaldo; Start-Sleep 60; (Get-Sch
 ps_vm '& "C:\Program Files\LibraEdge\instalador\respaldo.ps1" -RaizPostgres "C:\Program Files\LibraEdge\postgres" -ArchivoClave C:\ProgramData\LibraEdge\postgres.clave -Bases ventalibra -BaseNodo ventalibra; "codigo=$LASTEXITCODE"'
 ```
 
-**V14. Desinstalar.** Esperado: sin servicios `LibraEdge*`, sin `nodo.env`, sin la regla de firewall, y los datos
+**V14. Desinstalar.** Esperado: sin servicios `LibraEdge*`, sin `nodo.env`, sin la regla de firewall, sin los accesos
+directos «VentaLibra» del escritorio y del menú Inicio, y los datos
 (`datos`, `postgres.clave`, `app`) **intactos**.
 
 ```bash

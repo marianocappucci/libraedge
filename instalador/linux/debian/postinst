@@ -8,10 +8,21 @@
 #   `sudo libraedge-nodo-instalar <carga>` o `sudo dpkg --configure -a`.
 # - Actualizacion de un nodo ya configurado: migra y rearranca con el nodo.env
 #   que ya esta (no vuelve a pedir la carga; conserva SECRET_KEY y los datos).
+# - Siempre: fija el acceso directo del producto en el dock (dock.sh, ADR-013),
+#   tambien cuando lo dispara el trigger sobre /usr/share/glib-2.0/schemas.
 set -e
+dock() {
+    # El acceso directo del producto, fijado en el dock de todos los usuarios (ADR-013). Nunca hace fallar.
+    /opt/libraedge-nodo/instalador/dock.sh agregar libraedge-nodo-@PRODUCTO@.desktop || true
+}
 case "$1" in
+    triggered)
+        # Cambiaron los esquemas del sistema (los favoritos por defecto de ubuntu-settings): se rehace el del dock.
+        dock
+        ;;
     configure)
         systemctl daemon-reload || true
+        dock
         if [ -n "${LIBRAEDGE_CARGA:-}" ]; then
             /opt/libraedge-nodo/instalador/instalar.sh "$LIBRAEDGE_CARGA"
         elif [ -s /etc/libraedge-nodo/nodo.env ]; then

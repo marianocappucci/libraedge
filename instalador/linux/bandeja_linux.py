@@ -14,6 +14,10 @@ corre con el **python3 del sistema** y su ``python3-gi`` (que el paquete recomie
 En GNOME (Ubuntu 22.04, 24.04 y 26.04) el area de notificacion es la extension ``ubuntu-appindicators@ubuntu.com``
 (paquete ``gnome-shell-extension-appindicator``; en 26.04, ``gnome-shell-ubuntu-extensions``), que la sesion
 «ubuntu» trae habilitada para todos los usuarios.
+«Abrir <Producto>» (ADR-013) corre ``abrir_producto.sh``, el mismo lanzamiento que el acceso directo del menu de
+aplicaciones: la copia local en modo aplicacion. Otra linea del menu dice la direccion para las otras cajas del local,
+con la IP de esta PC (se la pregunta al ayudante del instalador, ``acceso --json``), y al hacer clic la copia.
+
 Arranca al iniciar sesion desde ``/etc/xdg/autostart/libraedge-nodo-bandeja.desktop``; si nadie inicia sesion no
 hay icono, y esta bien: no hay a quien mostrarselo.
 
@@ -31,6 +35,10 @@ import sys
 RAIZ_NODO = "/opt/libraedge-nodo"
 PYTHON_DEL_NODO = RAIZ_NODO + "/python/bin/python3"
 DEFINICION = RAIZ_NODO + "/instalador/producto.json"
+AYUDANTE = RAIZ_NODO + "/instalador/libraedge_instalador.py"
+ABRIR_PRODUCTO = RAIZ_NODO + "/bandeja/abrir_producto.sh"
+#: Cada cuantos refrescos se vuelve a preguntar la IP (cambia poco: DHCP, otro cable).
+REFRESCOS_POR_IP = 6
 ESTADO = "/var/lib/libraedge-nodo/estado/estado.json"
 #: Cada cuanto se relee el estado. No es cada cuanto sincroniza el nodo (``INTERVALO``): son dos relojes.
 REFRESCO = 10
@@ -93,6 +101,35 @@ def producto(ruta: str = DEFINICION) -> tuple[str, int]:
         return "LibraEdge", 8000
 
 
+def url_local(puerto: int) -> str:
+    """La misma que abre el acceso directo del menu (``libraedge-nodo-<producto>.desktop``)."""
+    return f"http://localhost:{puerto}/"
+
+
+def otras_cajas(puerto: int, python: str = PYTHON_DEL_NODO, ayudante: str = AYUDANTE,
+                definicion: str = DEFINICION, correr=subprocess.run) -> str:
+    """La direccion para las otras cajas del local, con la IP de esta PC. La decide el ayudante del instalador (la
+    misma que muestra al terminar de instalar); si no contesta, la direccion con la IP a completar."""
+    comando = [python, "-I", "-B", ayudante, "acceso", "--definicion", definicion, "--json"]
+    try:
+        resultado = correr(comando, capture_output=True, text=True, timeout=30)
+        url = json.loads(resultado.stdout)["url_lan"]
+        if isinstance(url, str) and url:
+            return url
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        pass
+    return f"http://<IP de esta PC>:{puerto}"
+
+
+def etiqueta_otras_cajas(url_lan: str) -> str:
+    """La linea del menu (como en Windows, ``libraedge/bandeja.py``): al hacer clic, la copia."""
+    return f"Otras cajas: {url_lan} (copiar)"
+
+
+def abrir_producto(puerto: int, abrir=subprocess.Popen) -> None:
+    abrir([ABRIR_PRODUCTO, url_local(puerto)])
+
+
 def _carpeta_de_la_sesion() -> str:
     return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/libraedge-{os.getuid()}", "libraedge-bandeja")
 
@@ -114,13 +151,14 @@ def _cargar_gtk():
     import gi
 
     gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
     for nombre in ("AyatanaAppIndicator3", "AppIndicator3"):
         try:
             gi.require_version(nombre, "0.1")
             modulo = __import__("gi.repository", fromlist=[nombre])
-            from gi.repository import GLib, Gtk
+            from gi.repository import Gdk, GLib, Gtk
 
-            return Gtk, GLib, getattr(modulo, nombre)
+            return Gtk, Gdk, GLib, getattr(modulo, nombre)
         except (ValueError, ImportError):
             continue
     raise ImportError("no esta AyatanaAppIndicator3 (gir1.2-ayatanaappindicator3-0.1)")
@@ -138,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     if candado is None:
         return 0  # ya hay una abierta en esta sesion
     try:
-        gtk, glib, indicador_mod = _cargar_gtk()
+        gtk, gdk, glib, indicador_mod = _cargar_gtk()
     except (ImportError, ValueError) as exc:
         print(f"La bandeja de LibraEdge necesita python3-gi y gir1.2-ayatanaappindicator3-0.1: {exc}",
               file=sys.stderr)
@@ -157,10 +195,19 @@ def main(argv: list[str] | None = None) -> int:
     item_detalle = gtk.MenuItem(label="")
     item_detalle.set_sensitive(False)
     abrir = gtk.MenuItem(label=f"Abrir {nombre}")
-    abrir.connect("activate", lambda _: subprocess.Popen(["xdg-open", f"http://127.0.0.1:{puerto}"]))
+    abrir.connect("activate", lambda _: abrir_producto(puerto))
+    direccion = {"url": otras_cajas(puerto), "refrescos": 0}
+    item_otras = gtk.MenuItem(label=etiqueta_otras_cajas(direccion["url"]))
+
+    def copiar(_) -> None:
+        portapapeles = gtk.Clipboard.get(gdk.SELECTION_CLIPBOARD)
+        portapapeles.set_text(direccion["url"], -1)
+        portapapeles.store()
+
+    item_otras.connect("activate", copiar)
     cerrar = gtk.MenuItem(label="Ocultar el icono")
     cerrar.connect("activate", lambda _: gtk.main_quit())
-    for item in (item_titulo, item_detalle, gtk.SeparatorMenuItem(), abrir, cerrar):
+    for item in (item_titulo, item_detalle, gtk.SeparatorMenuItem(), abrir, item_otras, cerrar):
         menu.append(item)
     menu.show_all()
     indicador.set_menu(menu)
@@ -175,6 +222,10 @@ def main(argv: list[str] | None = None) -> int:
         item_titulo.set_label(titulo)
         item_detalle.set_label(detalle)
         item_detalle.set_visible(bool(detalle))
+        direccion["refrescos"] += 1
+        if direccion["refrescos"] >= REFRESCOS_POR_IP:
+            direccion["url"], direccion["refrescos"] = otras_cajas(puerto), 0
+            item_otras.set_label(etiqueta_otras_cajas(direccion["url"]))
         return True  # que GLib lo siga llamando
 
     refrescar()
