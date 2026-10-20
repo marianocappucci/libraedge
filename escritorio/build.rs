@@ -1,0 +1,68 @@
+//! El producto se elige al compilar (ADR-015): `LIBRAEDGE_PRODUCTO=contalibra cargo build --release`, o
+//! `python escritorio/armar.py contalibra`. Lo propio del producto sale de la MISMA definicion que usa el
+//! instalador (`instalador/productos/<producto>.json`): nombre, puerto y ruta de salud; el icono, de
+//! `instalador/iconos/<producto>.{ico,png}`; la marca de las pantallas propias, de `instalador/marca/<producto>.svg`.
+//!
+//! La configuracion de Tauri del producto (nombre, identificador, version, iconos) se arma aca y se le pasa a
+//! `tauri_build` y a `generate_context!` por `TAURI_CONFIG`, que los dos fusionan con `tauri.conf.json`.
+
+use std::{env, fs, path::PathBuf};
+
+fn main() {
+    println!("cargo:rerun-if-env-changed=LIBRAEDGE_PRODUCTO");
+    println!("cargo:rerun-if-env-changed=LIBRAEDGE_VERSION");
+    let manifiesto = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let instalador = manifiesto.join("..").join("instalador");
+    // Sin LIBRAEDGE_PRODUCTO (cargo check / cargo test a mano) se compila ContaLibra.
+    let producto = env::var("LIBRAEDGE_PRODUCTO").unwrap_or_else(|_| "contalibra".into());
+    assert!(
+        !producto.is_empty() && producto.chars().all(|c| c.is_ascii_lowercase()),
+        "LIBRAEDGE_PRODUCTO tiene que ser el nombre de un productos/<producto>.json"
+    );
+    let ruta_def = instalador.join("productos").join(format!("{producto}.json"));
+    println!("cargo:rerun-if-changed={}", ruta_def.display());
+    let definicion: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&ruta_def).unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", ruta_def.display())),
+    )
+    .expect("la definicion del producto no es JSON");
+    let texto = |clave: &str| definicion[clave].as_str().unwrap_or_else(|| panic!("falta {clave}")).to_string();
+    let nombre = texto("nombre");
+    let salud = texto("salud");
+    let puerto = definicion["puerto"].as_u64().expect("falta puerto");
+    let version = env::var("LIBRAEDGE_VERSION").unwrap_or_else(|_| "0.0.0".into());
+
+    let icono = |ext: &str| {
+        let ruta = instalador.join("iconos").join(format!("{producto}.{ext}"));
+        assert!(ruta.is_file(), "falta {}", ruta.display());
+        println!("cargo:rerun-if-changed={}", ruta.display());
+        ruta.to_string_lossy().replace('\\', "/")
+    };
+    let marca = instalador.join("marca").join(format!("{producto}.svg"));
+    println!("cargo:rerun-if-changed={}", marca.display());
+    let salida = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::copy(&marca, salida.join("marca.svg")).expect("falta la marca del producto");
+
+    let config = serde_json::json!({
+        "productName": nombre,
+        "version": version,
+        // Un identificador por producto: separa la sesion del navegador embebido (WebView2 la guarda en
+        // %LOCALAPPDATA%\<identificador>), las preferencias y la instancia unica.
+        "identifier": format!("ar.com.librasuite.{producto}"),
+        "bundle": { "icon": [icono("png"), icono("ico")] },
+    });
+    env::set_var("TAURI_CONFIG", config.to_string());
+    // generate_context! (en el rustc del crate) lee la misma variable.
+    println!("cargo:rustc-env=TAURI_CONFIG={config}");
+    println!("cargo:rustc-env=LIBRAEDGE_PRODUCTO={producto}");
+    println!("cargo:rustc-env=LIBRAEDGE_NOMBRE={nombre}");
+    println!("cargo:rustc-env=LIBRAEDGE_PUERTO={puerto}");
+    println!("cargo:rustc-env=LIBRAEDGE_SALUD={salud}");
+    println!("cargo:rustc-env=LIBRAEDGE_VERSION={version}");
+
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+        "estado",
+        "vincular",
+        "alternar_pantalla_completa",
+    ])))
+    .expect("tauri_build");
+}

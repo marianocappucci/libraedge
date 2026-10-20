@@ -26,6 +26,19 @@
 ; chico; con la variable LIBRAEDGE_CODIGO no queda en ningun lado.
 ; Con el archivo de carga (soporte):
 ;     libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CARGA=C:\ruta\carga-nodo.json /LOG=C:\ruta\inno.log
+; Sin vincular (ADR-015): copia todo y deja el acceso directo de la app, que
+; muestra "Vincular con el sistema" y configura el nodo con permiso de
+; administrador (UAC). En el asistente, dejando vacios el codigo y el archivo.
+;     libraedge-nodo-ventalibra-0.14.0.exe /VERYSILENT /SUPPRESSMSGBOXES /SINVINCULAR
+;
+; La app de escritorio (ADR-015) va en {app}\escritorio\<Producto>.exe: la
+; compila escritorio/armar.py y la deja el CI en paquete\escritorio\<producto>.exe
+; (armar_paquete.sh no la arma). Sin ella el instalador se compila igual y el
+; acceso directo abre Edge en modo aplicacion, como antes.
+;
+; Firma de codigo (todavia sin certificado): ISCC /DFirmar "/Sfirma=signtool sign ... $f"
+; firma el instalador y el desinstalador (la app la firma escritorio/armar.py con
+; LIBRAEDGE_FIRMA_CMD). Ver el README, seccion "Firma de codigo".
 ;
 ; Codigos de salida: 0 bien; 1 no arranco (falta el codigo o la carga, u otro
 ; producto ya instalado); 20 los archivos se copiaron pero la configuracion del
@@ -85,6 +98,10 @@ CloseApplications=force
 ; y el de "Agregar o quitar programas", que Windows lee del archivo instalado.
 SetupIconFile=libraedge.ico
 UninstallDisplayIcon={app}\libraedge.ico
+#ifdef Firmar
+SignTool=firma
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -102,6 +119,8 @@ Source: "libraedge.ico";                 DestDir: "{app}";              Flags: i
 ; La marca del producto, para su acceso directo (ADR-013; lo crea preparar_nodo.ps1).
 Source: "iconos\{#Producto}.ico";        DestDir: "{app}"; DestName: "producto.ico"; Flags: ignoreversion
 Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
+; La version de escritorio del producto (ADR-015): el acceso directo "<Producto>" la abre.
+Source: "paquete\escritorio\{#Producto}.exe"; DestDir: "{app}\escritorio"; DestName: "{#NombreProducto}.exe"; Flags: ignoreversion skipifsourcedoesntexist
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
 Source: "comun.ps1";             DestDir: "{app}\instalador"; Flags: ignoreversion
@@ -117,7 +136,13 @@ Source: "verificar_nodo.ps1";    DestDir: "{app}\instalador"; Flags: ignoreversi
 Name: "{commonappdata}\LibraEdge\datos"; Permissions: system-full admins-full; Flags: uninsneveruninstall
 Name: "{app}\logs"
 
+[Run]
+; Al terminar el asistente, abrir la app (con el nodo sin vincular, muestra "Vincular con el sistema").
+Filename: "{app}\escritorio\{#NombreProducto}.exe"; Description: "Abrir {#NombreProducto}"; Flags: postinstall nowait skipifsilent skipifdoesntexist runasoriginaluser
+
 [UninstallRun]
+; La app abierta en cualquier sesion tiene tomado su .exe: se cierra antes de borrar.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ""{#NombreProducto}.exe"""; Flags: runhidden; RunOnceId: "CerrarApp"
 ; Se detienen y se quitan los servicios, en orden inverso al de creacion.
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "stop LibraEdgeNodo confirm";       Flags: runhidden; RunOnceId: "PararNodo"
 Filename: "{app}\herramientas\nssm.exe"; Parameters: "remove LibraEdgeNodo confirm";     Flags: runhidden; RunOnceId: "QuitarNodo"
@@ -144,6 +169,8 @@ Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
 Type: files; Name: "{commondesktop}\{#NombreProducto}.lnk"
 Type: files; Name: "{commonprograms}\{#NombreProducto}.lnk"
 Type: files; Name: "{commonstartup}\{#NombreProducto}.lnk"
+; El respaldo del navegador (ADR-015), en el menu Inicio.
+Type: files; Name: "{commonprograms}\{#NombreProducto} (navegador).lnk"
 Type: filesandordirs; Name: "{app}\logs"
 ; Los __pycache__ los genera Python al importar: sin esto la carpeta queda.
 Type: filesandordirs; Name: "{app}\app"
@@ -179,6 +206,7 @@ var
   PaginaVinculo: TInputQueryWizardPage;
   PaginaCarga: TInputFileWizardPage;
   vCarga, vDireccion, vCodigo: String;
+  vSinVincular: Boolean;
   CodigoDeSalida: Integer;
   ServiciosParados: Boolean;
 
@@ -248,6 +276,7 @@ begin
   vCodigo := Trim(ExpandConstant('{param:CODIGO|}'));
   if vCodigo = '' then
     vCodigo := Trim(GetEnv('LIBRAEDGE_CODIGO'));
+  vSinVincular := WizardSilent and (Pos('/SINVINCULAR', Uppercase(GetCmdTail)) > 0);
 
   { Un nodo por PC: los servicios, el puerto de PostgreSQL y la carpeta de
     datos son unos solos. }
@@ -269,7 +298,17 @@ begin
     de tocar el disco. El codigo no se loguea. }
   if WizardSilent then
   begin
-    if (vCodigo <> '') or (vDireccion <> '') then
+    if vSinVincular then
+    begin
+      if (vCodigo <> '') or (vDireccion <> '') or (vCarga <> '') then
+      begin
+        Log('/SINVINCULAR va sin codigo, direccion ni carga.');
+        SuppressibleMsgBox('Instalacion desatendida: /SINVINCULAR va sin codigo, direccion ni carga.',
+          mbError, MB_OK, IDOK);
+        Result := False;
+      end;
+    end
+    else if (vCodigo <> '') or (vDireccion <> '') then
     begin
       if (CodigoNormalizado(vCodigo) = '') or (not DireccionValida(vDireccion)) or (vCarga <> '') then
       begin
@@ -284,7 +323,7 @@ begin
     begin
       Log('Instalacion desatendida sin codigo ni carga, o con un archivo de carga que no existe.');
       SuppressibleMsgBox('Instalacion desatendida: falta /DIRECCION= con LIBRAEDGE_CODIGO (o /CODIGO=), ' +
-        'o /CARGA=<ruta de carga-nodo.json>.', mbError, MB_OK, IDOK);
+        '/CARGA=<ruta de carga-nodo.json> o /SINVINCULAR.', mbError, MB_OK, IDOK);
       Result := False;
     end;
   end;
@@ -298,7 +337,8 @@ begin
     'En el sistema, entre a Configuracion > Sucursal sin internet y de de alta el nodo de esta sucursal ' +
     '(o pida otro codigo): ahi aparecen la direccion del sistema y un codigo de vinculacion. ' +
     'El codigo vale 15 minutos y una sola vez.' + #13#10#13#10 +
-    'Si soporte le dio un archivo de carga, deje los dos campos vacios y eligalo en la pagina siguiente.');
+    'Si soporte le dio un archivo de carga, deje los dos campos vacios y eligalo en la pagina siguiente. ' +
+    'Sin codigo ni archivo, se instala sin vincular y se vincula despues desde {#NombreProducto}.');
   PaginaVinculo.Add('Direccion del sistema (por ejemplo sistema.contalibra.com.ar):', False);
   PaginaVinculo.Add('Codigo de vinculacion (por ejemplo K7Q4-M2XP):', False);
   PaginaVinculo.Values[0] := vDireccion;
@@ -344,7 +384,18 @@ begin
   else if CurPageID = PaginaCarga.ID then
   begin
     vCarga := Trim(PaginaCarga.Values[0]);
-    if (vCarga = '') or (not FileExists(vCarga)) then
+    vSinVincular := False;
+    if vCarga = '' then
+    begin
+      { Sin codigo ni archivo: se instala sin vincular y se vincula desde la app (ADR-015). }
+      if SuppressibleMsgBox('No se escribio un codigo ni se eligio un archivo de carga. Instalar sin vincular? ' +
+        'Despues, al abrir {#NombreProducto}, se piden la direccion y el codigo (y la clave de un administrador).',
+        mbConfirmation, MB_YESNO, IDNO) = IDYES then
+        vSinVincular := True
+      else
+        Result := False;
+    end
+    else if not FileExists(vCarga) then
     begin
       SuppressibleMsgBox('Elegir el archivo de carga del nodo (carga-nodo.json).', mbError, MB_OK, IDOK);
       Result := False;
@@ -375,7 +426,8 @@ begin
     vuelve sola en el proximo inicio de sesion. }
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $_.Path -like ''' +
-    ExpandConstant('{app}') + '\python\*'' } | Stop-Process -Force"',
+    ExpandConstant('{app}') + '\python\*'' -or $_.Path -like ''' +
+    ExpandConstant('{app}') + '\escritorio\*'' } | Stop-Process -Force"',
     '', SW_HIDE, ewWaitUntilTerminated, Codigo);
 end;
 
@@ -427,7 +479,12 @@ begin
     WizardForm.StatusLabel.Caption := 'Preparando la base local y el nodo (puede tardar unos minutos)...';
     Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\instalador\instalar.ps1') +
       '" -RaizNodo "' + ExpandConstant('{app}') + '" -Datos "' + ExpandConstant('{commonappdata}\LibraEdge') + '"';
-    if vCodigo <> '' then
+    if vSinVincular then
+    begin
+      Parametros := Parametros + ' -SinVincular';
+      Log('Sin vincular: el nodo se vincula despues desde la app.');
+    end
+    else if vCodigo <> '' then
     begin
       { El codigo, por el entorno que hereda PowerShell (nunca en Parametros:
         el transcript anota la linea de comandos). }

@@ -4,7 +4,9 @@
 #     instalador/linux/armar_deb.sh <producto> <repo del producto> [opciones]
 #     instalador/linux/armar_deb.sh ventalibra ~/proyectos/ventalibra --frontend-dist DIR --version 0.12.0
 #
-# Opciones: --frontend-dist DIR | --sin-frontend, --version X.Y.Z (0.0.0), --salida DIR (instalador/salida).
+# Opciones: --frontend-dist DIR | --sin-frontend, --version X.Y.Z (0.0.0), --salida DIR (instalador/salida),
+#           --escritorio DIR (la app de escritorio, ADR-015: la carpeta donde escritorio/armar.py dejo
+#           libraedge-nodo-<producto>; sin esto el acceso directo abre el navegador, como antes).
 # Deja salida/libraedge-nodo-<producto>_<version>_amd64.deb.
 #
 # Es el armar_paquete.sh de Windows para Linux, y NO pide sudo: corre en el WSL o
@@ -22,10 +24,10 @@
 set -euo pipefail
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
-uso() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+uso() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ $# -ge 2 ] || uso
 producto="$1"; repo="$(cd "$2" && pwd)"; shift 2
-frontend_dist=""; sin_frontend=0; version="0.0.0"
+frontend_dist=""; sin_frontend=0; version="0.0.0"; escritorio=""
 linux="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 instalador="$(dirname "$linux")"
 salida="$instalador/salida"
@@ -34,6 +36,7 @@ while [ $# -gt 0 ]; do
         --frontend-dist) frontend_dist="$(cd "$2" && pwd)"; shift 2 ;;
         --sin-frontend) sin_frontend=1; shift ;;
         --version) version="$2"; shift 2 ;;
+        --escritorio) escritorio="$(cd "$2" && pwd)"; shift 2 ;;
         --salida) mkdir -p "$2"; salida="$(cd "$2" && pwd)"; shift 2 ;;
         *) uso ;;
     esac
@@ -44,6 +47,11 @@ definicion="$instalador/productos/$producto.json"
 [ -f "$definicion" ] || { echo "No hay definicion para '$producto' ($definicion)." >&2; exit 2; }
 [ -f "$repo/uv.lock" ] || { echo "$repo no parece el repo del producto (falta uv.lock)." >&2; exit 2; }
 ayudante="$instalador/../libraedge/instalador.py"
+app=""
+if [ -n "$escritorio" ]; then
+    app="$escritorio/libraedge-nodo-$producto"
+    [ -f "$app" ] || { echo "No esta la app de escritorio de $producto en $escritorio (escritorio/armar.py)." >&2; exit 2; }
+fi
 
 # Lo que hace falta de la definicion, validada por el mismo ayudante que la lee al instalar.
 plan="$(python3 "$ayudante" plan --definicion "$definicion")"
@@ -129,10 +137,29 @@ cp "$instalador/libraedge.ico" "$opt/libraedge.ico"
 ln -s /opt/libraedge-nodo/instalador/instalar.sh "$raiz/usr/sbin/libraedge-nodo-instalar"
 ln -s /opt/libraedge-nodo/instalador/verificar_nodo.sh "$raiz/usr/sbin/libraedge-nodo-verificar"
 
+# La app de escritorio (ADR-015): con el nombre del .desktop, asi GNOME agrupa la ventana con el favorito del dock
+# (en Wayland el app_id es el nombre del programa). Y la accion de polkit con la que vincula el nodo desde la app.
+if [ -n "$app" ]; then
+    install -d "$opt/escritorio" "$raiz/usr/share/polkit-1/actions"
+    install -m 755 "$app" "$opt/escritorio/libraedge-nodo-$producto"
+    install -m 644 "$linux/ar.com.librasuite.libraedge-nodo.policy" \
+        "$raiz/usr/share/polkit-1/actions/ar.com.librasuite.libraedge-nodo.policy"
+    exec_acceso="/opt/libraedge-nodo/escritorio/libraedge-nodo-$producto"
+    # WebKitGTK 4.1 y GTK 3: los mismos nombres en 22.04, 24.04 y 26.04 (desde 24.04 GTK es libgtk-3-0t64, que
+    # provee libgtk-3-0). pkexec (policykit-1 en 22.04) para vincular desde la app.
+    depende_app=", libwebkit2gtk-4.1-0, libgtk-3-0"
+    recomienda_app=", pkexec | policykit-1"
+else
+    echo "AVISO: sin la app de escritorio (--escritorio): el acceso directo abre la copia local en el navegador."
+    exec_acceso="/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:$puerto/"
+    depende_app=""
+    recomienda_app=""
+fi
+
 reemplazar() {  # reemplazar ORIGEN DESTINO MODO
     sed -e "s|@PRODUCTO@|$producto|g" -e "s|@NOMBRE@|$nombre|g" -e "s|@PUERTO@|$puerto|g" \
         -e "s|@ASGI@|$asgi|g" -e "s|@BASES@|$bases|g" -e "s|@BASE_NODO@|$base_nodo|g" \
-        -e "s|@OTROS@|$otros|g" "$1" > "$2"
+        -e "s|@OTROS@|$otros|g" -e "s|@EXEC@|$exec_acceso|g" "$1" > "$2"
     chmod "$3" "$2"
     if grep -q '@[A-Z_]*@' "$2"; then echo "Quedo un @VARIABLE@ sin reemplazar en $2" >&2; exit 1; fi
 }
@@ -158,15 +185,16 @@ Maintainer: Mariano Cappucci <noreply@librasuite.com.ar>
 Section: misc
 Priority: optional
 Installed-Size: $tamano
-Depends: postgresql-16, postgresql-client-16, postgresql-common, systemd, adduser, util-linux, procps
-Recommends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gnome-shell-extension-appindicator | gnome-shell-ubuntu-extensions, xdg-utils
+Depends: postgresql-16, postgresql-client-16, postgresql-common, systemd, adduser, util-linux, procps$depende_app
+Recommends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gnome-shell-extension-appindicator | gnome-shell-ubuntu-extensions, xdg-utils$recomienda_app
 Homepage: https://github.com/marianocappucci/libraedge
 Description: Nodo LibraEdge de $nombre (sucursal sin internet)
  La instancia local de $nombre para una sucursal: el producto con su propio
  Python 3.12, PostgreSQL 16 (PGDG) en un cluster propio en 127.0.0.1:55432,
- el proceso que sincroniza con el central, el respaldo verificado cada hora
- y el icono de bandeja. Se configura con la direccion y el codigo que
- muestra el central: sudo libraedge-nodo-instalar --codigo C --direccion D
+ el proceso que sincroniza con el central, el respaldo verificado cada hora,
+ el icono de bandeja y la version de escritorio de $nombre. Se configura con
+ la direccion y el codigo que muestra el central, desde la app o con:
+ sudo libraedge-nodo-instalar --codigo C --direccion D
  Revision del producto: $(cat "$opt/producto/REVISION").
 EOF
 

@@ -38,6 +38,8 @@ case "$1" in
   Nodo LibraEdge de @NOMBRE@ instalado, SIN CONFIGURAR.
   Configurarlo con la direccion y el codigo que muestra el sistema
   (Configuracion > «Sucursal sin internet», al dar de alta el nodo):
+  abrir @NOMBRE@ desde el menu de aplicaciones (o el dock) y escribirlos
+  en «Vincular con el sistema», o en una terminal:
 
       sudo libraedge-nodo-instalar --codigo <codigo> --direccion <direccion>
 

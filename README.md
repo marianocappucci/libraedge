@@ -165,6 +165,16 @@ app.include_router(create_canje_router(aprovisionamiento, get_connection, ip_del
 (8 símbolos sin caracteres confusos, se guarda el hash), límite de canjes fallidos por IP (10) y global (60) en 15
 minutos, y devuelve la carga con `Cache-Control: no-store`. El secreto sólo viaja en esa respuesta o en el adjunto.
 
+## La versión de escritorio (ADR-015)
+
+[`escritorio/`](escritorio) es la app de escritorio de cada producto («ContaLibra», «VentaLibra», «RestoLibra»),
+en Tauri 2: una ventana propia sobre la copia local del nodo, con el nombre y el ícono del producto, que espera y
+vuelve sola si el producto no responde, vincula el nodo con la dirección y el código (pidiendo permiso de
+administrador: pkexec en Ubuntu, UAC en Windows), recuerda la pantalla completa (F11), conserva la sesión y abre los
+enlaces externos en el navegador. Un solo código; el producto se elige al compilar
+(`python escritorio/armar.py <producto>`). Va dentro de los instaladores: el acceso directo «<Producto>» y el favorito
+del dock la abren. Cómo se usa y qué se prueba: [`instalador/README.md`](instalador/README.md).
+
 ## Estado
 
 Contratos propios desacoplados de LibraCommerce (`e0b69e0`) y verificados sin ninguna referencia cruzada (`tests/test_imports.py`). Persistencia propia (`libraedge.db.schema`/`libraedge.db.repository.NodeRepository`) para identidad de nodo y outbox — LibraCommerce ya no mantiene copia propia de estas tablas. Consumido como dependencia Git versionada por LibraCommerce (extra `offline`/`offline-server`), instalación en entorno limpio verificada.

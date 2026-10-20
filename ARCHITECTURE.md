@@ -90,6 +90,10 @@ se puede cambiar el cómo se transmite sin tocar qué se transmite.
 Paquete `libraedge` (build `hatchling`) con el console script `libraedge-nodo`,
 versión pineada al tag (`v0.6.10` al 2026-09).
 
+Los instaladores del nodo (`instalador/`, ADR-010/012) se publican en el Release de
+cada tag, con la app de escritorio de cada producto adentro (`escritorio/`, Tauri 2,
+ADR-015): un binario por producto, compilado en el CI para Windows y Ubuntu 22.04.
+
 ## Referencias
 
 - `README.md` — forma del nodo y decisiones de agosto de 2026.

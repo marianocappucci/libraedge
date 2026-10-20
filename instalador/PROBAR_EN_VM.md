@@ -214,6 +214,31 @@ instalación termina con 0, el nodo aparece «al día» en la pantalla del centr
 no quedó. Con un código mal tipeado, el asistente avisa y no avanza; con uno vencido, termina con 20 y dice que se pida
 otro.
 
+**V16. La app sin vincular (ADR-015).** En una VM recién restaurada (sin el nodo), ejecutar el instalador **sin
+argumentos**, dejar vacíos el código y el archivo y aceptar «Instalar sin vincular». Esperado: termina con 0, el
+asistente ofrece «Abrir VentaLibra» y la app abre «Vincular con el sistema» con la marca del producto (no la ventana
+de Edge). Escribir la dirección y un código de un `dev.` del producto: aparece UAC con el nombre y el ícono de VentaLibra
+(«Editor desconocido» mientras no haya firma), «Vinculando…», y al terminar la app carga el producto sola y aparece la
+bandeja. Con un código vencido: el error en la pantalla (sin el código) y se puede reintentar. Con un usuario estándar
+(no administrador), UAC pide la clave de un administrador.
+
+```bash
+ps_vm '$p = Start-Process C:\e7\instalador\salida\libraedge-nodo-ventalibra-0.10.0.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SINVINCULAR","/LOG=C:\e7\inno-sin-vincular.log" -Wait -PassThru; "codigo=$($p.ExitCode)"; Test-Path "C:\Program Files\LibraEdge\nodo.env"; (New-Object -ComObject WScript.Shell).CreateShortcut("C:\Users\Public\Desktop\VentaLibra.lnk").TargetPath'
+```
+
+**V17. La ventana (ADR-015).** Con el nodo configurado, abrir «VentaLibra» del escritorio. Esperado: la ventana propia
+con el título y el ícono del producto (también en la barra de tareas y en Alt+Tab), maximizada la primera vez; F11
+alterna la pantalla completa y al cerrar y abrir sigue igual; cerrar y abrir **no** pide volver a loguearse; cambiar
+tamaño y posición se recuerda; un enlace externo (una ayuda, ARCA) se abre en Edge/el navegador por defecto y no en la
+app; exportar un reporte deja el archivo en Descargas; imprimir un comprobante abre el diálogo de impresión;
+`Restart-Service LibraEdgeProducto` con la app abierta muestra «Conectando con VentaLibra…» y vuelve sola a la misma
+pantalla; abrir el acceso directo con la app abierta la trae al frente. «VentaLibra (navegador)» del menú Inicio abre
+Edge en modo aplicación.
+
+**V18. Reiniciar con la app abierta y en el inicio de sesión.** Copiar el acceso directo al inicio común (README,
+«Abrirlo al iniciar sesión»), reiniciar. Esperado: la app arranca antes que el servicio, muestra la espera y entra sola
+cuando el producto responde, sin error del navegador.
+
 ## 4. Traer los logs
 
 ```bash

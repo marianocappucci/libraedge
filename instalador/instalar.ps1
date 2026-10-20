@@ -10,6 +10,14 @@
 # o, con el archivo de carga (soporte):
 #     ... instalar.ps1 -RaizNodo "C:\Program Files\LibraEdge" -Carga C:\ruta\carga-nodo.json
 #
+# Desde la app de escritorio (ADR-015, "Vincular con el sistema"): la app se
+# relanza elevada (UAC) y corre esto con -Direccion y -ArchivoCodigo, un archivo
+# del perfil del usuario con el codigo (UAC no pasa el entorno). Se lee con el
+# ayudante (--archivo-codigo) y se borra apenas se canjea.
+#
+# -SinVincular (el instalador con /SINVINCULAR, o sin codigo ni archivo en el
+# asistente): solo deja los accesos directos, para vincular despues desde la app.
+#
 # El codigo de vinculacion (ADR-014) llega en la variable LIBRAEDGE_CODIGO del
 # proceso (el .iss la pone antes de llamar a este script) y NUNCA como
 # argumento: el transcript anota la linea de comandos. Se canjea por la carga
@@ -25,6 +33,8 @@ param(
     [Parameter(Mandatory = $true)][string]$RaizNodo,
     [string]$Carga = "",
     [string]$Direccion = "",
+    [string]$ArchivoCodigo = "",
+    [switch]$SinVincular,
     [string]$Datos = (Join-Path $env:ProgramData "LibraEdge"),
     [int]$IntervaloSegundos = 60
 )
@@ -40,6 +50,33 @@ if ($PSVersionTable.PSEdition -eq "Desktop") {
 $logs = Join-Path $RaizNodo "logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 Start-Transcript -Path (Join-Path $logs "instalacion.log") -Append | Out-Null
+
+# --- Sin vincular (ADR-015): los accesos directos y nada mas ----------------------
+# El nodo se vincula despues desde la app ("Vincular con el sistema"), que vuelve a
+# correr este script elevado con -Direccion y -ArchivoCodigo. No toca servicios.
+if ($SinVincular) {
+    try {
+        if ($Carga -or $Direccion) { throw "-SinVincular va sin codigo ni carga." }
+        . (Join-Path $PSScriptRoot "comun.ps1")
+        $plan = Leer-Plan -Python (Join-Path $RaizNodo "python\python.exe") `
+            -Ayudante (Join-Path $RaizNodo "instalador\libraedge_instalador.py") `
+            -Definicion (Join-Path $RaizNodo "instalador\producto.json")
+        Write-Host "== Nodo LibraEdge de $($plan.nombre), sin vincular"
+        Crear-AccesosDelProducto -RaizNodo $RaizNodo -Plan $plan
+        $texto = "Falta vincular esta PC con el sistema: abrir el acceso directo `"$($plan.nombre)`" y escribir " +
+            "la direccion y el codigo que muestra Sucursal sin internet."
+        Escribir-SinBom -Ruta (Join-Path $RaizNodo "instalador\acceso.txt") -Texto $texto
+        Write-Host $texto
+        Write-Host "== Listo (sin vincular)."
+        $salida = 0
+    } catch {
+        Write-Host "ERROR: $($_.Exception.Message)"
+        $salida = 1
+    } finally {
+        Stop-Transcript | Out-Null
+    }
+    exit $salida
+}
 
 # Hasta crear o tocar la base, un error deja la PC como estaba: el .iss paro los
 # servicios para copiar archivos y aca se vuelven a arrancar (una reinstalacion
@@ -72,13 +109,19 @@ try {
     # el ayudante de LIBRAEDGE_CODIGO; despues se saca del entorno.
     if ($Direccion) {
         if ($Carga) { throw "O el codigo o el archivo de carga, no los dos." }
-        if (-not $env:LIBRAEDGE_CODIGO) { throw "Falta el codigo de vinculacion (LIBRAEDGE_CODIGO)." }
+        if ($ArchivoCodigo) {
+            if (-not (Test-Path $ArchivoCodigo -PathType Leaf)) { throw "No esta el archivo del codigo." }
+        } elseif (-not $env:LIBRAEDGE_CODIGO) {
+            throw "Falta el codigo de vinculacion (LIBRAEDGE_CODIGO)."
+        }
         $canjeada = Join-Path $Datos "carga-nodo.json"
         Proteger-Archivo -Ruta $canjeada
         Write-Host "Canjeando el codigo de vinculacion en $Direccion..."
-        $codigoCanje = Invocar -Programa $python -Argumentos @($ayudante, "canjear", "--definicion", $definicion,
-            "--direccion", $Direccion, "--salida", $canjeada)
+        $argsCanje = @($ayudante, "canjear", "--definicion", $definicion, "--direccion", $Direccion, "--salida", $canjeada)
+        if ($ArchivoCodigo) { $argsCanje += @("--archivo-codigo", $ArchivoCodigo) }
+        $codigoCanje = Invocar -Programa $python -Argumentos $argsCanje
         Remove-Item Env:LIBRAEDGE_CODIGO -ErrorAction SilentlyContinue
+        if ($ArchivoCodigo) { Remove-Item $ArchivoCodigo -Force -ErrorAction SilentlyContinue }
         if ($codigoCanje -ne 0) {
             Remove-Item $canjeada -Force -ErrorAction SilentlyContinue
             $canjeada = ""

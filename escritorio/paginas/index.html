@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LibraEdge</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="tarjeta" aria-live="polite">
+    <div class="marca" id="marca" aria-hidden="true"></div>
+
+    <section id="inicio" hidden>
+      <p class="sub">Abriendo <span class="nombre"></span>…</p>
+    </section>
+
+    <section id="espera" hidden>
+      <div class="girando" aria-hidden="true"></div>
+      <h1>Conectando con <span class="nombre"></span>…</h1>
+      <p class="sub">El sistema de este local está arrancando. La pantalla vuelve sola apenas esté listo.</p>
+      <p class="ayuda" id="ayuda-espera" hidden>
+        Si tarda más de unos minutos, reiniciar la PC. Si sigue igual, avisar a soporte: el servicio
+        local de <span class="nombre"></span> no responde en <span class="url"></span>.
+      </p>
+    </section>
+
+    <section id="vincular" hidden>
+      <h1>Vincular con el sistema</h1>
+      <p class="sub">
+        En el sistema, en <strong>Configuración › Sucursal sin internet</strong>, dar de alta el nodo de esta
+        sucursal (o pedir otro código): ahí aparecen la dirección del sistema y un código de vinculación.
+        El código vale 15 minutos y una sola vez.
+      </p>
+      <form id="formulario" autocomplete="off" novalidate>
+        <label for="direccion">Dirección del sistema</label>
+        <input id="direccion" name="direccion" placeholder="sistema.contalibra.com.ar" spellcheck="false"
+               autocapitalize="off" required>
+        <label for="codigo">Código de vinculación</label>
+        <input id="codigo" name="codigo" placeholder="K7Q4-M2XP" spellcheck="false" autocapitalize="characters"
+               maxlength="12" class="codigo" required>
+        <button type="submit" id="boton">Vincular</button>
+        <p class="nota">Se va a pedir la clave de un administrador de esta PC.</p>
+      </form>
+      <div id="progreso" hidden>
+        <div class="girando" aria-hidden="true"></div>
+        <p class="sub" id="texto-progreso">Vinculando: se prepara la base local y el nodo. Puede tardar unos minutos.</p>
+      </div>
+      <pre id="error" class="error" role="alert" hidden></pre>
+    </section>
+
+    <footer><span class="nombre"></span> · versión de escritorio <span id="version"></span></footer>
+  </main>
+</body>
+</html>

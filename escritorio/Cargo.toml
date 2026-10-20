@@ -1,0 +1,46 @@
+# La app de escritorio del nodo (ADR-015): UNA por producto («ContaLibra», «VentaLibra», «RestoLibra»), con un
+# solo codigo fuente. El producto se elige al compilar (escritorio/armar.py), no en tiempo de ejecucion: nombre,
+# icono, identificador y binario son los del producto.
+[package]
+name = "libraedge-escritorio"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "La version de escritorio de los productos con LibraEdge: una ventana propia sobre la copia local"
+license = "UNLICENSED"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+serde_json = "1"
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-window-state = "2.5"
+tauri-plugin-single-instance = "2.5"
+tauri-plugin-opener = "2.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# La misma version que usa tauri (Cookie de tauri::webview es cookie::Cookie).
+cookie = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+# Sin la CLI de Tauri, el binario de produccion sirve las paginas embebidas solo con esta feature.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "unwind"
