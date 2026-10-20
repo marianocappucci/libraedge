@@ -387,7 +387,9 @@ jobs:
           sleep 5
           pgrep -f "^$app" > /dev/null || { echo "La app no sigue viva"; cat "$RUNNER_TEMP/app.log"; exit 1; }
           # El producto vio el pedido de la ventana (no solo el de salud).
-          sudo journalctl -u libraedge-producto --since "$desde" --no-pager | grep -E '"GET / HTTP/1\.1" (200|304)'
+          sudo journalctl -u libraedge-producto --since "$desde" --no-pager > "$RUNNER_TEMP/producto-app.log"
+          grep -E '"GET / HTTP/1\.1" [0-9]{3}' "$RUNNER_TEMP/producto-app.log" \
+            || { echo "El producto no registro el GET / de la app:"; tail -n 30 "$RUNNER_TEMP/producto-app.log"; exit 1; }
           # Se cae el producto: pantalla de espera propia; vuelve: la app recarga sola.
           sudo systemctl stop libraedge-producto
           esperar "^pantalla espera$" 60
@@ -841,8 +843,8 @@ jobs:
           [IO.File]::WriteAllText($entrada, "$($tercero.codigo)`n")
           $p = Start-Process $app -ArgumentList "--vincular", "--direccion", "localhost:8443" -RedirectStandardInput $entrada `
             -RedirectStandardOutput "$env:RUNNER_TEMP\app-vincular.log" -PassThru
-          Remove-Item $entrada
           if (-not $p.WaitForExit(900000)) { Stop-Process -Id $p.Id -Force; throw "Vincular desde la app no termino en 15 minutos" }
+          Remove-Item $entrada
           Get-Content "$env:RUNNER_TEMP\app-vincular.log"
           if ($p.ExitCode -ne 0) { Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 60; throw "Vincular desde la app salio con $($p.ExitCode)" }
           SecretoOk $alta.node_id
