@@ -367,6 +367,33 @@ jobs:
           $logs = @(Get-ChildItem "$env:RUNNER_TEMP\*.log").FullName + (Get-ChildItem "$env:ProgramFiles\LibraEdge\logs\*.log").FullName
           $n = (Select-String -Path $logs -SimpleMatch "prueba-prueba-prueba-prueba-prueba").Count
           if ($n -ne 0) { throw "El secreto de la carga aparece $n veces en los logs" }
+      - name: Desinstalar y reinstalar sobre los mismos datos (V14 y V10)
+        run: |
+          $env_ = "$env:ProgramFiles\LibraEdge\nodo.env"
+          $antes = (Select-String -Path $env_ -Pattern "^SECRET_KEY=").Line
+          New-Item -ItemType Directory -Force logs | Out-Null
+          Copy-Item "$env:ProgramFiles\LibraEdge\logs\*.log" logs -ErrorAction SilentlyContinue
+          Start-Process "$env:ProgramFiles\LibraEdge\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          Start-Sleep 10
+          if (Test-Path $env_) { throw "Desinstalar no borro nodo.env" }
+          if (@(Get-Service LibraEdge* -ErrorAction SilentlyContinue).Count -ne 0) { throw "Quedaron servicios" }
+          $cons = "$env:ProgramData\LibraEdge\conservado.env"
+          if (-not (Test-Path $cons)) { throw "No se guardo conservado.env" }
+          if (-not (Test-Path "$env:ProgramData\LibraEdge\datos")) { throw "Desinstalar borro los datos" }
+          $c = Get-Content $cons
+          if (($c | Where-Object { $_ -notmatch "^(SECRET_KEY|ADMIN_PASSWORD|[A-Z][A-Z0-9_]*_ADMIN_PASSWORD)=" }).Count -ne 0) { throw "conservado.env tiene algo mas que SECRET_KEY y la clave del admin" }
+          if ($c -notcontains $antes) { throw "conservado.env no tiene el SECRET_KEY" }
+          if ((Select-String -Path $cons -SimpleMatch "prueba-prueba-prueba-prueba-prueba").Count -ne 0) { throw "conservado.env tiene el secreto del nodo" }
+          $sids = @((Get-Acl $cons).Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique)
+          if (($sids -join ",") -ne "S-1-5-18,S-1-5-32-544") { throw "La ACL de conservado.env no es solo SYSTEM y Administradores: $($sids -join ',')" }
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CARGA=$env:RUNNER_TEMP\carga.json","/LOG=$env:RUNNER_TEMP\inno-reinstalar.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 60; throw "Reinstalar salio con $($p.ExitCode)" }
+          if ((Select-String -Path $env_ -Pattern "^SECRET_KEY=").Line -ne $antes) { throw "Reinstalar cambio el SECRET_KEY" }
+          if (Test-Path $cons) { throw "conservado.env no se borro al reinstalar" }
+          Start-Sleep 60
+          & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Logs
         if: always()
         run: |

@@ -162,6 +162,23 @@ def test_instalar_no_hereda_los_modulos_de_powershell_7():
     assert script.index("PSModulePath") < script.index("Start-Transcript")
 
 
+def test_desinstalar_conserva_secret_key_y_no_el_secreto_del_nodo():
+    """Igual que el postrm de Linux (ADR-012): sin el SECRET_KEY, lo cifrado en los datos que quedan no se lee."""
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    guardar = iss[iss.index("procedure GuardarConservado"):]
+    guardar = guardar[:guardar.index("\nend;\n\nprocedure CurUninstallStepChanged")]
+    # Primero el archivo vacio y la ACL por SID; recien despues el contenido.
+    vacio, acl = guardar.index("SaveStringToFile(Destino, ''"), guardar.index("icacls.exe")
+    assert vacio < acl < guardar.index("SaveStringsToFile")
+    assert "*S-1-5-18:F *S-1-5-32-544:F" in guardar and "/inheritance:r" in guardar
+    filtro = iss[iss.index("function EsVariableConservada"):]
+    filtro = filtro[:filtro.index("end;")]
+    assert "'SECRET_KEY'" in filtro and "_ADMIN_PASSWORD" in filtro and "NODE_SECRET" not in filtro
+    assert "if CurUninstallStep = usUninstall then" in iss
+    nodo = (CARPETA / "preparar_nodo.ps1").read_text(encoding="utf-8")
+    assert '"--previo", $conservado' in nodo and "Remove-Item $conservado" in nodo
+
+
 def test_los_textos_de_los_scripts_son_ascii():
     """Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI e ISCC un .iss tambien: un acento en un texto sale
     roto y un emoji puede cerrar la cadena (paso el 2026-08-30). En los comentarios no importa."""

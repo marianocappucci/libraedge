@@ -73,11 +73,21 @@ foreach ($servicio in @("LibraEdgeNodo", "LibraEdgeProducto")) {
 # por la linea de comandos (que Inno Setup y Start-Transcript registran).
 Proteger-Archivo -Ruta $archivoEnv
 Proteger-Carpeta -Ruta $dataDir
-$codigo = Invocar -Programa $python -Argumentos @(
-    $ayudante, "entorno", "--definicion", $definicion, "--carga", $Carga, "--clave-pg", $clavePg,
+# Despues de desinstalar, nodo.env ya no esta (tenia el secreto del nodo), pero
+# el desinstalador guardo SECRET_KEY y la clave del admin local en
+# conservado.env, al lado de los datos (igual que Linux, ADR-012).
+$conservado = Join-Path $Datos "conservado.env"
+$argumentos = @($ayudante, "entorno", "--definicion", $definicion, "--carga", $Carga, "--clave-pg", $clavePg,
     "--estado", $estado, "--data-dir", $dataDir, "--salida", $archivoEnv)
+$hayConservado = (Test-Path $conservado) -and ((Get-Item $conservado).Length -gt 0)
+if ($hayConservado) { $argumentos += @("--previo", $conservado) }
+$codigo = Invocar -Programa $python -Argumentos $argumentos
 if ($codigo -ne 0) { throw "No se pudo escribir $archivoEnv (codigo $codigo). El motivo esta arriba." }
 Test-ArchivoProtegido -Ruta $archivoEnv -Lanzar | Out-Null
+if ($hayConservado) {
+    Write-Host "Se recuperaron SECRET_KEY y la clave del admin local de la instalacion anterior."
+    Remove-Item $conservado -Force
+}
 
 # --- El config.json del emisor ------------------------------------------------
 # CUIT, razon social, condicion de IVA y el formato del ticket: la facturacion

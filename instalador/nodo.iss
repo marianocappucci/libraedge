@@ -137,7 +137,10 @@ Type: filesandordirs; Name: "{app}\instalador"
 Type: filesandordirs; Name: "{app}\python"
 ; Quedan a proposito, en {commonappdata}\LibraEdge: datos\ (el cluster),
 ; postgres.clave (sin ella esos datos no se abren), app\ (config.json),
-; respaldos\ y producto.txt (un nodo por PC).
+; respaldos\ y producto.txt (un nodo por PC). Y conservado.env: SECRET_KEY y la
+; clave del admin local, que guarda CurUninstallStepChanged antes de borrar
+; nodo.env (sin el SECRET_KEY, lo que libraauth cifro en esos datos no se lee al
+; reinstalar). El secreto del nodo no se conserva.
 
 [Code]
 { La carga del nodo es un ARCHIVO (carga-nodo.json) que emite el central con
@@ -315,6 +318,57 @@ begin
       SuppressibleMsgBox('La configuracion del nodo fallo. El detalle esta en ' + Registro +
         '. Se puede reintentar corriendo instalar.ps1 a mano (ver el README).', mbError, MB_OK, IDOK);
   end;
+end;
+
+{ Lo que se conserva de nodo.env al desinstalar (igual que el postrm de Linux,
+  ADR-012): SECRET_KEY y la clave del admin local, nunca el secreto del nodo.
+  El archivo se crea vacio, se le pone la ACL de SYSTEM y Administradores (por
+  SID) y recien despues se escribe: asi no hay un momento en que lo lea
+  cualquier usuario de la PC. Al reinstalar con la carga, preparar_nodo.ps1 se
+  lo pasa al ayudante (--previo) y lo borra. }
+function EsVariableConservada(const Nombre: String): Boolean;
+begin
+  Result := (Nombre = 'SECRET_KEY') or (Nombre = 'ADMIN_PASSWORD') or
+    ((Length(Nombre) > 15) and (Copy(Nombre, Length(Nombre) - 14, 15) = '_ADMIN_PASSWORD'));
+end;
+
+procedure GuardarConservado;
+var
+  Lineas, Conservadas: TArrayOfString;
+  I, N, Igual, Codigo: Integer;
+  Destino: String;
+begin
+  if not LoadStringsFromFile(ExpandConstant('{app}\nodo.env'), Lineas) then
+    exit;
+  N := 0;
+  for I := 0 to GetArrayLength(Lineas) - 1 do
+  begin
+    Igual := Pos('=', Lineas[I]);
+    if (Igual > 1) and EsVariableConservada(Copy(Lineas[I], 1, Igual - 1)) then
+    begin
+      SetArrayLength(Conservadas, N + 1);
+      Conservadas[N] := Lineas[I];
+      N := N + 1;
+    end;
+  end;
+  if N = 0 then
+    exit;
+  Destino := ExpandConstant('{commonappdata}\LibraEdge\conservado.env');
+  if not SaveStringToFile(Destino, '', False) then
+    exit;
+  if not Exec(ExpandConstant('{sys}\icacls.exe'), '"' + Destino + '" /inheritance:r /grant:r *S-1-5-18:F *S-1-5-32-544:F',
+              '', SW_HIDE, ewWaitUntilTerminated, Codigo) or (Codigo <> 0) then
+  begin
+    DeleteFile(Destino);
+    exit;
+  end;
+  SaveStringsToFile(Destino, Conservadas, False);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    GuardarConservado;
 end;
 
 function GetCustomSetupExitCode: Integer;
