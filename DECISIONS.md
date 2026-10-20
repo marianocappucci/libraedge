@@ -373,3 +373,9 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
   la prueba el CI: se prueba en una VM con Ubuntu Desktop (`instalador/README.md`, sección Linux). El `.deb` suelto depende de
   que la PC tenga el repositorio de PGDG en 22.04; `instalar-nodo.sh` lo agrega. El arreglo de permisos del `estado.json` llega a los nodos cuando los
   productos suban el pin de LibraEdge; mientras tanto lo cubre `libraedge-estado.path`.
+
+**Windows igualado (2026-10-20):** el desinstalador de Windows (`CurUninstallStepChanged`, `usUninstall`) guarda
+`SECRET_KEY` y la clave del admin local en `C:\ProgramData\LibraEdge\conservado.env` (creado vacío, ACL SYSTEM y
+Administradores por SID con `icacls`, recién después el contenido) antes de borrar `nodo.env`; `preparar_nodo.ps1` se lo
+pasa al ayudante con `--previo` y lo borra. El secreto del nodo no se conserva en ninguno de los dos sistemas. Antes,
+desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que quedaban era ilegible al reinstalar.
