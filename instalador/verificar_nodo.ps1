@@ -141,7 +141,11 @@ $desc = Join-Path $RaizNodo "instalador\libraedge_descubrimiento.py"
 if (-not (Test-Path $descubrimiento)) { Falla "descubrimiento.json: no esta en $Datos" }
 elseif ((Invocar -Programa $python -Argumentos @("-I", $desc, "buscar", "--producto", $plan.producto, "--a", "127.0.0.1", "--espera", "3")) -eq 0) {
     Bien "descubrimiento: contesta en UDP 47823 a las cajas de $($plan.nombre)"
-} else { Falla "descubrimiento: no contesta en UDP 47823 (las otras cajas no encuentran esta PC)" }
+} else {
+    Falla "descubrimiento: no contesta en UDP 47823 (las otras cajas no encuentran esta PC)"
+    $logDesc = Join-Path $Datos "descubrimiento\descubrimiento.log"
+    if (Test-Path $logDesc) { Get-Content $logDesc -Tail 20 | ForEach-Object { Write-Host "       $_" } }
+}
 
 # --- 8. El emisor y lo demas --------------------------------------------------------------------
 $config = Join-Path $env:DATA_DIR "config.json"

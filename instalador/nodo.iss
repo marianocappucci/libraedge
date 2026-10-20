@@ -169,6 +169,7 @@ Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
 ; Lo que contestaba a las cajas del local (ADR-017; sin secretos): sin nodo no se contesta.
 Type: files; Name: "{commonappdata}\LibraEdge\descubrimiento.json"
+Type: filesandordirs; Name: "{commonappdata}\LibraEdge\descubrimiento"
 Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
 ; Los accesos directos del producto (ADR-013), que tambien crea preparar_nodo.ps1:
 ; el del escritorio publico, el del menu Inicio y, si se activo a mano la opcion

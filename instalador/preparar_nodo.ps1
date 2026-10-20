@@ -205,6 +205,15 @@ if ($codigo -ne 0) {
     & $nssm set $servicioDesc Description "Contesta a las cajas del local que buscan esta PC (LibraEdge)" | Out-Null
     & $nssm set $servicioDesc Start SERVICE_AUTO_START | Out-Null
     & $nssm set $servicioDesc AppThrottle 15000 | Out-Null
+    # Su log, en una carpeta propia donde LocalService (S-1-5-19) puede escribir: en {app}\logs no puede.
+    $logsDesc = Join-Path $Datos "descubrimiento"
+    New-Item -ItemType Directory -Force -Path $logsDesc | Out-Null
+    & icacls.exe $logsDesc /grant "*S-1-5-19:(OI)(CI)M" | Out-Null
+    $logDesc = Join-Path $logsDesc "descubrimiento.log"
+    & $nssm set $servicioDesc AppStdout $logDesc | Out-Null
+    & $nssm set $servicioDesc AppStderr $logDesc | Out-Null
+    & $nssm set $servicioDesc AppRotateFiles 1 | Out-Null
+    & $nssm set $servicioDesc AppRotateBytes 1048576 | Out-Null
     # Una cuenta del sistema sin clave. Sin el "" de la clave: Windows PowerShell 5.1 descarta los argumentos vacios
     # a un programa nativo. Si NSSM no la acepta asi, sc.exe (que no pide clave para LocalService).
     & $nssm set $servicioDesc ObjectName "NT AUTHORITY\LocalService" | Out-Null
