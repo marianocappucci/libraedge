@@ -495,12 +495,25 @@ fn main() {
                 for host in ["localhost", "127.0.0.1"] {
                     remota = remota.remote(format!("http://{host}:{}/*", producto.puerto));
                 }
-                app.add_capability(remota.permission("allow-alternar-pantalla-completa"))?;
+                if let Err(e) = app.add_capability(remota.permission("allow-alternar-pantalla-completa")) {
+                    eprintln!("Sin F11 en la pagina del producto: {e}");
+                }
                 app.manage(compartido.clone());
                 compartido.anotar(&format!("inicio {PRODUCTO} {VERSION}"));
-                ventana_principal(app.handle(), compartido.clone(), prefs.pantalla_completa)?;
-                let handle = app.handle().clone();
-                std::thread::spawn(move || vigilar(handle, compartido));
+                // Un error aca adentro seria un panic dentro del bucle de eventos (en Linux, a traves de GTK: aborta
+                // sin respaldo). Si la ventana no se puede crear (WebView2 o WebKitGTK rotos), el navegador.
+                match ventana_principal(app.handle(), compartido.clone(), prefs.pantalla_completa) {
+                    Ok(_) => {
+                        let handle = app.handle().clone();
+                        std::thread::spawn(move || vigilar(handle, compartido));
+                    }
+                    Err(e) => {
+                        eprintln!("No se pudo abrir la ventana de {NOMBRE} ({e}); se abre en el navegador.");
+                        compartido.anotar("respaldo navegador");
+                        abrir_en_el_navegador(&compartido.producto.url());
+                        app.handle().exit(0);
+                    }
+                }
                 Ok(())
             })
             .run(tauri::generate_context!())

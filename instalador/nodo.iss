@@ -362,6 +362,9 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
+  { En silencio el asistente igual pasa por las paginas: /SINVINCULAR ya se valido en InitializeSetup. }
+  if WizardSilent and vSinVincular then
+    Exit;
   if CurPageID = PaginaVinculo.ID then
   begin
     vDireccion := Trim(PaginaVinculo.Values[0]);

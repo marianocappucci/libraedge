@@ -375,7 +375,8 @@ jobs:
           informe="$RUNNER_TEMP/informe.txt"
           esperar() {  # esperar <patron> <segundos> [<cuantas>]
             for _ in $(seq 1 "$2"); do
-              [ "$(grep -c -- "$1" "$informe" 2> /dev/null || true)" -ge "${3:-1}" ] && return 0
+              n="$(grep -c -- "$1" "$informe" 2> /dev/null)" || n=0
+              [ "$n" -ge "${3:-1}" ] && return 0
               sleep 1
             done
             echo "No aparecio '$1' en el informe:"; cat "$informe"; cat "$RUNNER_TEMP/app.log"; return 1
