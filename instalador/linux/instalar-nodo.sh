@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala el nodo LibraEdge de un producto en Ubuntu 22.04 o 24.04 (amd64), en un paso (ADR-012):
+# Instala el nodo LibraEdge de un producto en Ubuntu 22.04, 24.04 o 26.04 (amd64), en un paso (ADR-012):
 #
 #     curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh \
 #         | sudo bash -s <producto> /ruta/carga-nodo.json
@@ -7,7 +7,7 @@
 # <producto> es restolibra, ventalibra o contalibra. La carga es una RUTA: el
 # secreto del nodo no pasa nunca por la linea de comandos.
 #
-# Hace, en orden: controla el sistema (Ubuntu 22.04/24.04, amd64, root) y la
+# Hace, en orden: controla el sistema (Ubuntu 22.04/24.04/26.04, amd64, root) y la
 # carga; agrega el repositorio de PostgreSQL de PGDG de la forma oficial (el
 # script de postgresql-common: llave en un archivo y `signed-by`, sin apt-key);
 # baja el .deb del producto del Release y lo verifica contra SHA256SUMS.txt del
@@ -38,11 +38,11 @@ principal() {
     # --- El sistema y los argumentos -------------------------------------------------
     case " $PRODUCTOS " in *" $producto "*) ;; *) morir "Producto desconocido: '$producto' (es uno de: $PRODUCTOS)." ;; esac
     [ "$(id -u)" = 0 ] || morir "Correr como root: ... | sudo bash -s $producto $carga"
-    [ -r /etc/os-release ] || morir "No se puede leer /etc/os-release: este script es para Ubuntu 22.04 o 24.04."
+    [ -r /etc/os-release ] || morir "No se puede leer /etc/os-release: este script es para Ubuntu 22.04, 24.04 o 26.04."
     # shellcheck disable=SC1091
     . /etc/os-release
-    [ "${ID:-}" = ubuntu ] || morir "Este sistema es '${ID:-?}': el nodo se instala en Ubuntu 22.04 o 24.04."
-    case "${VERSION_ID:-}" in 22.04 | 24.04) ;; *) morir "Ubuntu ${VERSION_ID:-?} no esta soportado: 22.04 o 24.04." ;; esac
+    [ "${ID:-}" = ubuntu ] || morir "Este sistema es '${ID:-?}': el nodo se instala en Ubuntu 22.04, 24.04 o 26.04."
+    case "${VERSION_ID:-}" in 22.04 | 24.04 | 26.04) ;; *) morir "Ubuntu ${VERSION_ID:-?} no esta soportado: 22.04, 24.04 o 26.04." ;; esac
     [ "$(dpkg --print-architecture)" = amd64 ] || morir "La arquitectura es $(dpkg --print-architecture): el nodo es amd64."
     if [ ! -f "$carga" ] || [ ! -r "$carga" ]; then morir "No esta la carga del nodo (o no se puede leer): $carga"; fi
     carga="$(readlink -f "$carga")"

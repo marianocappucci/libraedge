@@ -18,7 +18,7 @@
 #
 # Linux (ADR-012): un .deb por producto (libraedge-nodo-<producto>_<version>_amd64.deb,
 # y el alias libraedge-nodo-<producto>_amd64.deb para releases/latest/download/),
-# armado en ubuntu-22.04 e instalado y verificado en ubuntu-22.04 y ubuntu-24.04
+# armado en ubuntu-22.04 e instalado y verificado en ubuntu-22.04, ubuntu-24.04 y ubuntu-26.04
 # (los runners tienen systemd y sudo): sin carga no configura, con la carga de
 # prueba configura y verificar_nodo.sh --sin-central da 0, el respaldo restaura,
 # reinstalar encima conserva SECRET_KEY, desinstalar conserva los datos y ningun
@@ -151,7 +151,7 @@ jobs:
       fail-fast: false
       matrix:
         producto: [restolibra, ventalibra, contalibra]
-        ubuntu: [ubuntu-22.04, ubuntu-24.04]
+        ubuntu: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     env:
       DEB: libraedge-nodo-${{ matrix.producto }}_amd64.deb
       PAQUETE: libraedge-nodo-${{ matrix.producto }}
@@ -171,15 +171,24 @@ jobs:
       - name: Con las recomendadas, apt resuelve la bandeja
         run: |
           sudo apt-get install -s "./deb/$DEB" > "$RUNNER_TEMP/simulado.txt"
-          for p in python3-gi gir1.2-ayatanaappindicator3-0.1 gnome-shell-extension-appindicator; do
+          # La extension viene en gnome-shell-extension-appindicator (22.04 y 24.04) o en
+          # gnome-shell-ubuntu-extensions (26.04): el .deb la recomienda como alternativa.
+          for p in python3-gi gir1.2-ayatanaappindicator3-0.1; do
             grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1 \
               || { echo "apt no instalaria $p"; exit 1; }
           done
+          # La que apt elija de la alternativa (o la que ya este instalada).
+          ext=""
+          for p in gnome-shell-extension-appindicator gnome-shell-ubuntu-extensions; do
+            if grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1; then ext=$p; break; fi
+          done
+          [ -n "$ext" ] || { echo "apt no instalaria la extension de la bandeja"; grep "^Inst" "$RUNNER_TEMP/simulado.txt"; exit 1; }
+          echo "extension en $ext" >> "$GITHUB_STEP_SUMMARY"
           # La extension, y que Ubuntu Desktop la trae habilitada para todos: el modo «ubuntu» de
           # GNOME Shell (gnome-shell-common, modes/ubuntu.json) la lista en enabledExtensions.
           mkdir -p _pkgs && cd _pkgs
-          apt-get download -q gnome-shell-extension-appindicator gnome-shell-common
-          dpkg-deb -c gnome-shell-extension-appindicator_*.deb | grep -o "extensions/ubuntu-appindicators@ubuntu.com/metadata.json"
+          apt-get download -q "$ext" gnome-shell-common
+          dpkg-deb -c "${ext}"_*.deb | grep -o "extensions/ubuntu-appindicators@ubuntu.com/metadata.json"
           dpkg-deb -x gnome-shell-common_*.deb x
           cat x/usr/share/gnome-shell/modes/ubuntu.json
           grep -q '"ubuntu-appindicators@ubuntu.com"' x/usr/share/gnome-shell/modes/ubuntu.json
@@ -423,7 +432,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ubuntu: [ubuntu-22.04, ubuntu-24.04]
+        ubuntu: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     env:
       PRODUCTO: ventalibra
       SECRETO_DE_PRUEBA: prueba-prueba-prueba-prueba-prueba
@@ -464,9 +473,11 @@ jobs:
           cat instalador/linux/instalar-nodo.sh \
             | sudo LIBRAEDGE_DEB_DIR="$PWD/_release" bash -s "$PRODUCTO" "$RUNNER_TEMP/carga.json" 2>&1 \
             | tee "$RUNNER_TEMP/instalar-nodo.log"
-          for p in python3-gi gir1.2-ayatanaappindicator3-0.1 gnome-shell-extension-appindicator; do
+          for p in python3-gi gir1.2-ayatanaappindicator3-0.1; do
             dpkg -s "$p" > /dev/null || { echo "no se instalo la recomendada $p"; exit 1; }
           done
+          dpkg -s gnome-shell-extension-appindicator > /dev/null 2>&1 || dpkg -s gnome-shell-ubuntu-extensions > /dev/null \
+            || { echo "no se instalo la extension de la bandeja"; exit 1; }
           apt-cache policy postgresql-16 | grep -m1 apt.postgresql.org
       - name: Verificar (--sin-central) y ningun secreto en la salida
         run: |

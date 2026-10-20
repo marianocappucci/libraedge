@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Arma el .deb del nodo de un producto para Ubuntu 22.04/24.04 amd64 (ADR-012).
+# Arma el .deb del nodo de un producto para Ubuntu 22.04/24.04/26.04 amd64 (ADR-012).
 #
 #     instalador/linux/armar_deb.sh <producto> <repo del producto> [opciones]
 #     instalador/linux/armar_deb.sh ventalibra ~/proyectos/ventalibra --frontend-dist DIR --version 0.12.0
@@ -11,7 +11,7 @@
 # en el CI. Del repo del producto se usa lo que tenga en HEAD (git archive); las
 # dependencias salen de su uv.lock (uv export --frozen) y se instalan con
 # --python-platform x86_64-manylinux_2_35 (la glibc de Ubuntu 22.04), asi el
-# mismo paquete corre en 22.04 y en 24.04.
+# mismo paquete corre en 22.04, 24.04 y 26.04 (glibc 2.43).
 #
 # El Python es propio (python-build-standalone, el que instala `uv python`):
 # 22.04 trae 3.10 y los productos piden 3.12.
@@ -151,7 +151,7 @@ Section: misc
 Priority: optional
 Installed-Size: $tamano
 Depends: postgresql-16, postgresql-client-16, postgresql-common, systemd, adduser, util-linux, procps
-Recommends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gnome-shell-extension-appindicator, xdg-utils
+Recommends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gnome-shell-extension-appindicator | gnome-shell-ubuntu-extensions, xdg-utils
 Homepage: https://github.com/marianocappucci/libraedge
 Description: Nodo LibraEdge de $nombre (sucursal sin internet)
  La instancia local de $nombre para una sucursal: el producto con su propio

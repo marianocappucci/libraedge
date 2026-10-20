@@ -11,8 +11,9 @@ corre con el **python3 del sistema** y su ``python3-gi`` (que el paquete recomie
 - el python3 del sistema es 3.10 en Ubuntu 22.04: este archivo es **3.10 y solo biblioteca estandar** (un test lo
   compila con esa gramatica), y ``gi`` se importa recien en ``main``.
 
-En GNOME (Ubuntu 22.04 y 24.04) el area de notificacion es la extension ``ubuntu-appindicators@ubuntu.com``
-(paquete ``gnome-shell-extension-appindicator``), que la sesion «ubuntu» trae habilitada para todos los usuarios.
+En GNOME (Ubuntu 22.04, 24.04 y 26.04) el area de notificacion es la extension ``ubuntu-appindicators@ubuntu.com``
+(paquete ``gnome-shell-extension-appindicator``; en 26.04, ``gnome-shell-ubuntu-extensions``), que la sesion
+«ubuntu» trae habilitada para todos los usuarios.
 Arranca al iniciar sesion desde ``/etc/xdg/autostart/libraedge-nodo-bandeja.desktop``; si nadie inicia sesion no
 hay icono, y esta bien: no hay a quien mostrarselo.
 
