@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn primero_se_valida_y_no_se_lanza_nada() {
-        let p = Producto { puerto: 8000, salud: "/health".into(), raiz: None };
+        let p = Producto { puerto: 8000, salud: "/health".into(), raiz: None, modo: crate::producto::Modo::Nodo };
         assert!(!vincular(&p, "a b", "K7Q4-M2XP").ok);
         assert!(!vincular(&p, "sistema.contalibra.com.ar", "K7Q4-M2X0").ok);
     }
