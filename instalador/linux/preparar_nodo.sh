@@ -57,6 +57,10 @@ if [ -n "$carga" ]; then
     [ ! -e "$DATA_DIR/config.json" ] || chown "$USUARIO:$USUARIO" "$DATA_DIR/config.json"
 else
     [ -s "$ARCHIVO_ENV" ] || morir "No hay $ARCHIVO_ENV ni carga: falta configurar el nodo con su carga."
+    # La actualizacion por apt no vuelve a armar el nodo.env: las variables fijas
+    # nuevas del nodo (LIBRAAUTH_COOKIE_SECURE, ADR-016) se agregan sin tocar lo demas.
+    ayudante completar-entorno --entorno "$ARCHIVO_ENV" \
+        || morir "No se pudo completar $ARCHIVO_ENV. El motivo esta arriba."
 fi
 [ "$(stat -c '%U:%G %a' "$ARCHIVO_ENV")" = "root:root 600" ] || morir "$ARCHIVO_ENV no quedo root:root 600."
 ayudante revisar-entorno --definicion "$DEFINICION" --entorno "$ARCHIVO_ENV" \

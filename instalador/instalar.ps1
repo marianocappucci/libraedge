@@ -62,6 +62,14 @@ if ($SinVincular) {
             -Ayudante (Join-Path $RaizNodo "instalador\libraedge_instalador.py") `
             -Definicion (Join-Path $RaizNodo "instalador\producto.json")
         Write-Host "== Nodo LibraEdge de $($plan.nombre), sin vincular"
+        # Si es una actualizacion de un nodo ya vinculado, el nodo.env no se vuelve a armar: se le agregan las
+        # variables fijas nuevas (LIBRAAUTH_COOKIE_SECURE, ADR-016) sin tocar lo demas ni su ACL.
+        $archivoEnv = Join-Path $RaizNodo "nodo.env"
+        if (Test-Path $archivoEnv) {
+            $codigo = Invocar -Programa (Join-Path $RaizNodo "python\python.exe") -Argumentos @(
+                (Join-Path $RaizNodo "instalador\libraedge_instalador.py"), "completar-entorno", "--entorno", $archivoEnv)
+            if ($codigo -ne 0) { throw "No se pudo completar $archivoEnv (codigo $codigo)." }
+        }
         Crear-AccesosDelProducto -RaizNodo $RaizNodo -Plan $plan
         $texto = "Falta vincular esta PC con el sistema: abrir el acceso directo `"$($plan.nombre)`" y escribir " +
             "la direccion y el codigo que muestra Sucursal sin internet."

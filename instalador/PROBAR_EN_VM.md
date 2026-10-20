@@ -239,6 +239,13 @@ Edge en modo aplicación.
 «Abrirlo al iniciar sesión»), reiniciar. Esperado: la app arranca antes que el servicio, muestra la espera y entra sola
 cuando el producto responde, sin error del navegador.
 
+**V19. Entrar por http, en la app y desde otra caja (ADR-016).** Con el nodo configurado y un producto con libraauth
+v0.53.0 o más: en la PC, entrar con un usuario en la app «VentaLibra» y navegar (no tiene que volver al login); desde
+otra máquina de la red, entrar por `http://<IP>:8000` (la de `acceso.txt`) con Chrome o Firefox. Esperado: las dos
+sesiones andan y en las herramientas del navegador la cookie de sesión **no** tiene la marca `Secure`. En Ubuntu, lo
+mismo con la app sobre WebKitGTK (es donde se vio el 401). Con un producto con libraauth anterior, la app de Windows
+entra (WebView2 exceptúa `localhost`) y la otra caja no: es lo esperado hasta que suba el pin.
+
 ## 4. Traer los logs
 
 ```bash

@@ -30,6 +30,7 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py entorno ... --previo /var/lib/libraedge-nodo/conservado.env   (Linux)
     python libraedge_instalador.py config-emisor --carga ... --config RUTA\\config.json
     python libraedge_instalador.py revisar-entorno --definicion ... --entorno nodo.env
+    python libraedge_instalador.py completar-entorno --entorno nodo.env   (sin carga: variables fijas, ADR-016)
     python libraedge_instalador.py ejecutar libracore-migrar upgrade --prefijo ventalibra
     python libraedge_instalador.py ejecutar --entorno /etc/libraedge-nodo/nodo.env --como libraedge \\
         libraedge-nodo sincronizar          (Linux, ADR-012)
@@ -79,6 +80,18 @@ VARIABLES_DE_LA_CARGA = (
     "LIBRAEDGE_PREFIJO",
     "LIBRAEDGE_TABLAS_ESPEJO",
 )
+
+#: Lo que el nodo fija en el entorno del producto, igual en todos los nodos y en Windows y Linux (ADR-016). No son
+#: secretos ni vienen de la carga:
+#:
+#: - ``LIBRAAUTH_COOKIE_SECURE=0``: el nodo sirve el producto por **http** en la LAN (``http://localhost:8000`` en la
+#:   PC y ``http://<IP>:8000`` desde las otras cajas). Con la cookie de sesion ``Secure`` (el default de libraauth,
+#:   ADR-026 de libraauth) el login da 200 y el pedido siguiente 401: WebKitGTK (la app de escritorio en Linux) no
+#:   guarda una cookie ``Secure`` que llega por http ni desde ``localhost``, y ningun navegador la guarda desde una IP.
+#:   Un producto con un libraauth anterior a v0.53.0 la ignora y queda como antes.
+VARIABLES_FIJAS_DEL_NODO: Mapping[str, str] = {
+    "LIBRAAUTH_COOKIE_SECURE": "0",
+}
 
 #: Las claves del ``config.json`` del central que el nodo necesita para facturar e imprimir el ticket como el
 #: central, y que el espejo no trae (no es una tabla). Lista cerrada: el ``config.json`` tambien guarda credenciales
@@ -476,7 +489,7 @@ def _variables_generadas(definicion: Definicion) -> tuple[str, ...]:
     variables = [*VARIABLES_DE_LA_CARGA, "LIBRAEDGE_DATABASE_URL", "LIBRAEDGE_ESTADO", "LIBRAEDGE_VERSION_ESQUEMA"]
     for base in definicion.bases:
         variables.extend(base.variables)
-    variables.extend(["DATA_DIR", "SECRET_KEY", *definicion.variables_de_admin, "TZ"])
+    variables.extend(["DATA_DIR", "SECRET_KEY", *definicion.variables_de_admin, "TZ", *VARIABLES_FIJAS_DEL_NODO])
     return tuple(dict.fromkeys(variables))
 
 
@@ -522,6 +535,7 @@ def armar_entorno(definicion: Definicion, carga: Carga, *, clave_pg: str, estado
     for variable in definicion.variables_de_admin:
         entorno[variable] = clave_admin
     entorno["TZ"] = "America/Argentina/Buenos_Aires"
+    entorno.update(VARIABLES_FIJAS_DEL_NODO)
     for nombre, valor in definicion.variables.items():
         _sin_saltos(nombre, valor)
         entorno[nombre] = valor
@@ -553,6 +567,23 @@ def leer_entorno(texto: str) -> dict[str, str]:
 def revisar_entorno(definicion: Definicion, entorno: Mapping[str, str]) -> list[str]:
     """Las variables que faltan (o estan vacias) en el ``nodo.env`` de un nodo instalado. Solo nombres."""
     return [nombre for nombre in _variables_generadas(definicion) if not (entorno.get(nombre) or "").strip()]
+
+
+def completar_entorno(texto: str) -> tuple[str, list[str]]:
+    """Agrega al ``nodo.env`` las :data:`VARIABLES_FIJAS_DEL_NODO` que no tenga, sin tocar lo demas.
+
+    Es para el nodo que se actualiza **sin** la carga (``apt`` en Linux, o el instalador de Windows sin vincular sobre
+    un nodo ya vinculado): ahi el ``nodo.env`` no se vuelve a armar y una variable fija nueva no llegaria nunca. Una
+    variable que ya esta, con cualquier valor, se respeta. Devuelve el texto nuevo y los nombres agregados."""
+    presentes = leer_entorno(texto)
+    faltan = [nombre for nombre in VARIABLES_FIJAS_DEL_NODO if nombre not in presentes]
+    if not faltan:
+        return texto, []
+    nuevo = texto.lstrip("\ufeff")
+    if nuevo and not nuevo.endswith("\n"):
+        nuevo += "\n"
+    nuevo += formatear_entorno({nombre: VARIABLES_FIJAS_DEL_NODO[nombre] for nombre in faltan})
+    return nuevo, faltan
 
 
 def escribir_en_archivo_protegido(ruta: str, contenido: str) -> None:
@@ -972,6 +1003,9 @@ def _parser() -> argparse.ArgumentParser:
     config.add_argument("--definicion", required=True)
     config.add_argument("--carga", required=True)
     config.add_argument("--config", required=True)
+    completar = sub.add_parser("completar-entorno",
+                               help="agrega a un nodo.env existente las variables fijas que le falten (ADR-016)")
+    completar.add_argument("--entorno", required=True)
     revisar = sub.add_parser("revisar-entorno", help="lista las variables que faltan en un nodo.env (sin valores)")
     revisar.add_argument("--definicion", required=True)
     revisar.add_argument("--entorno", required=True)
@@ -1008,6 +1042,15 @@ def main(argv: list[str] | None = None) -> int:
                 bajar_a_usuario(args.como)
             argumentos = args.argumentos[1:] if args.argumentos[:1] == ["--"] else args.argumentos
             return ejecutar(args.nombre, argumentos)
+        if args.comando == "completar-entorno":
+            if not os.path.isfile(args.entorno):
+                raise ErrorDeInstalacion(f"No esta el archivo de entorno: {args.entorno}")
+            texto, agregadas = completar_entorno(_leer_texto(args.entorno))
+            if agregadas:
+                escribir_en_archivo_protegido(args.entorno, texto)
+            detalle = f" ({', '.join(agregadas)})." if agregadas else "."
+            print(f"nodo.env: {len(agregadas)} variables agregadas{detalle}")
+            return 0
         if args.comando == "favoritos":
             print(favoritos_con(args.actual, args.agregar))
             return 0
