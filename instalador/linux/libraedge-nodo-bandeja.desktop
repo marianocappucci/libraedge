@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=LibraEdge - estado del nodo
+Comment=Muestra si el nodo de esta sucursal esta sincronizando con el central
+Exec=/usr/bin/python3 /opt/libraedge-nodo/bandeja/bandeja_linux.py
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

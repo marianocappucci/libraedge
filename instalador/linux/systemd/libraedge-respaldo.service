@@ -1,0 +1,19 @@
+# Respaldo verificado de las bases del nodo (respaldo.sh). Lo dispara
+# libraedge-respaldo.timer cada hora. Como postgres: entra por el socket con
+# peer y no necesita la clave. Una segunda copia en otro disco:
+# LIBRAEDGE_RESPALDO_SECUNDARIO=/media/pendrive en /etc/libraedge-nodo/respaldo.env
+[Unit]
+Description=Respaldo verificado del nodo LibraEdge
+After=postgresql@16-libraedge.service
+Requires=postgresql@16-libraedge.service
+ConditionPathExists=/etc/libraedge-nodo/nodo.env
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+EnvironmentFile=-/etc/libraedge-nodo/respaldo.env
+ExecStart=/opt/libraedge-nodo/instalador/respaldo.sh @BASES@ @BASE_NODO@
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle

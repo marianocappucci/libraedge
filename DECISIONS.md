@@ -295,3 +295,81 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
 - Consecuencias: el CLI sigue igual y es el camino para soporte. El `vigilar` del VPS (cron) sigue pendiente del primer
   nodo real. La revisión manual de operaciones sigue siendo sólo CLI.
 
+
+## ADR-012 — El instalador del nodo para Linux: un `.deb` por producto
+
+- Estado: aceptada
+- Fecha: 2026-10-19
+- Contexto: el instalador de Windows (ADR-010, v0.11.0) está probado y publicado. Decisión del humano: el nodo también
+  se instala en una PC con **Ubuntu 22.04 o 24.04 (amd64)**, con la misma lógica y otra capa de sistema operativo.
+- Qué ya existe (y se reusa):
+  - `libraedge/instalador.py` (ADR-010): definición del producto, carga, `nodo.env` (conserva `SECRET_KEY` y la clave
+    del admin), `config.json` del emisor, `revisar-entorno` y `ejecutar` de console scripts por sus entry points. Se
+    copia tal cual al paquete, como en Windows.
+  - `instalador/productos/*.json` (las cuatro cadenas de migraciones de `scripts/panel_admin.py` de cada producto) y
+    `instalador/carga-de-prueba.json`.
+  - El orden y las guardas de `instalar.ps1`, `preparar_postgres.ps1`, `preparar_nodo.ps1`, `respaldo.ps1` y
+    `verificar_nodo.ps1`, con lo que encontró la VM del 2026-10-19 (`plans.py` y los módulos sueltos de la raíz, base
+    de verificación del respaldo única por corrida, servicios que vuelven si falla antes de tocar la base).
+  - `armar_paquete.sh`: `uv export --frozen` del `uv.lock` del producto, `git archive` de `HEAD`, el frontend.
+  - `libraedge bandeja --una-vez` (desde v0.6) y `bandeja.py`, la decisión de qué mostrar.
+  - En la familia no había empaquetado Linux: las unidades de systemd que existen son las de los backoffices en el VPS
+    (`restolibra/admin/deploy/restolibra-admin.service`, root y `EnvironmentFile`), y los productos corren en Docker
+    (`python:3.12-slim`, `TZ` del contenedor). Se buscó `dpkg-deb`, `systemd`, `.service`, `python-build-standalone`,
+    `uv python install` y `appindicator` en libraedge, libracore, ventalibra, restolibra, contalibra y libra-web-kit.
+- Decisión:
+  1. **Un `.deb` por producto**, `libraedge-nodo-<producto>_<version>_amd64.deb`, armado con `dpkg-deb` por
+     `instalador/linux/armar_deb.sh` (sin sudo). Se instala con `apt install ./x.deb` y **se configura con la carga**:
+     `sudo libraedge-nodo-instalar /ruta/carga-nodo.json`, o `LIBRAEDGE_CARGA=/ruta` en el entorno de `apt`. Sin carga
+     el paquete queda instalado y sin configurar (el `postinst` sale con 0 y lo explica; el comando sale con 2); con
+     `LIBRAEDGE_CARGA` un fallo hace fallar el `postinst`. Actualizar con el nodo configurado migra y rearranca con el
+     `nodo.env` que ya está, sin pedir la carga. Un nodo por PC en el `preinst` (antes de desempaquetar), sin
+     `Conflicts:` (apt sacaría el otro nodo sin preguntar). **`remove` borra el `nodo.env`** (el secreto del nodo), como
+     Windows (decisión del humano, 2026-10-20), y antes guarda `SECRET_KEY` y la clave del admin local en
+     `/var/lib/libraedge-nodo/conservado.env` (root 600): reinstalar pide la carga y, con ella, configura sobre los
+     datos que estaban sin perder lo que libraauth cifró (`entorno --previo`). `purge` borra además el resto de
+     `/etc/libraedge-nodo`, el estado, los logs y la regla de ufw. **Los datos quedan siempre** (como en Windows).
+  2. **Python 3.12 propio** (python-build-standalone por `uv python install`) en `/opt/libraedge-nodo/python`, con las
+     dependencias del `uv.lock` del producto instaladas para `x86_64-manylinux_2_35` (la glibc de 22.04) y el producto
+     compilado a `.pyc`. Un `.pth` hace importable el producto desde cualquier directorio.
+  3. **PostgreSQL 16 de PGDG** (`postgresql-16` en `Depends`; en 22.04 hay que agregar el repositorio antes, con el
+     script oficial de `postgresql-common`) en un **clúster propio**, `pg_createcluster 16 libraedge`, en
+     `127.0.0.1:55432`, con la zona en el initdb, `--data-checksums` e ICU `en-US` como en Windows. La clave se genera en
+     `postgres.clave` (root 600) y se le pone al rol por la **entrada** de `psql`; crear bases, verificar y respaldar
+     usan el socket con autenticación peer como `postgres`, sin la clave.
+  4. **systemd**: `libraedge-producto` y `libraedge-nodo` como el usuario de sistema `libraedge` (no root), con
+     `EnvironmentFile=/etc/libraedge-nodo/nodo.env` (root 600, lo lee systemd), `Restart=always`, `RestartSec=15`;
+     `libraedge-respaldo.timer` cada hora (como `postgres`); regla de ufw para las redes privadas si ufw está activo.
+  5. **`ejecutar --entorno ARCHIVO --como USUARIO`** en el ayudante: carga el `nodo.env` dentro del proceso y recién
+     después baja de usuario. Las migraciones, la primera sincronización y `libraedge-nodo estado` corren así: el
+     entorno no pasa por `env VAR=...` (visible en `/proc/<pid>/cmdline`) ni por un `source` de bash (un `$(...)` en un
+     valor se ejecutaría como root).
+  6. **La bandeja de Linux** corre con el `python3` del sistema y `python3-gi` (AyatanaAppIndicator), no con el Python
+     propio: PyGObject no se instala con pip (se compila contra GTK y girepository del sistema). No importa libraedge
+     (22.04 trae 3.10): le pregunta al Python del nodo `libraedge-nodo bandeja --una-vez` y dibuja eso. Las
+     dependencias de escritorio van en `Recommends`. Autostart en `/etc/xdg/autostart/` y se abre al terminar de
+     instalar en las sesiones gráficas activas (`systemd-run --user`).
+  7. **`estado.json` queda 0644** (`escribir_estado`): lo lee la bandeja con el usuario de la sesión y no tiene
+     secretos; `mkstemp` lo dejaba 0600. Hasta que los productos suban el pin de LibraEdge, `libraedge-estado.path` lo
+     corrige cada vez que cambia (como `libraedge`, no como root).
+  8. **El script de una línea**, `instalar-nodo.sh <producto> <carga>` (decisión del humano, 2026-10-20), se publica
+     en el Release al lado de los `.deb` y en `SHA256SUMS.txt`: `curl -fsSL .../releases/latest/download/instalar-nodo.sh
+     | sudo bash -s <producto> /ruta/carga-nodo.json`. Controla Ubuntu 22.04/24.04 amd64 y root, agrega PGDG con el
+     script oficial de `postgresql-common` (llave en archivo y `signed-by`, sin `apt-key`), baja el `.deb` del mismo
+     Release (`LIBRAEDGE_VERSION` para una versión fija), lo verifica contra `SHA256SUMS.txt` y lo instala con las
+     recomendadas y `LIBRAEDGE_CARGA`. Va entero en una función con la entrada en `/dev/null`: con `curl | bash`, apt no
+     se come el resto del script.
+  9. **CI**: `publicar-instalador.yml` arma el `.deb` de cada producto en `ubuntu-22.04` (con el frontend que ya armó el
+     job de Windows) y lo instala y verifica en `ubuntu-22.04` y `ubuntu-24.04`: sin carga no configura, una carga de
+     otro producto se rechaza sin crear el clúster, con la carga de prueba configura y `verificar_nodo.sh
+     --sin-central` da 0, el respaldo restaura, reinstalar (con y sin carga, con ufw activo) conserva `SECRET_KEY`,
+     ningún secreto (el de la carga ni la clave de PostgreSQL) aparece en los logs, `remove` borra el secreto y
+     conserva los datos, reinstalar sin carga la pide y con ella configura sobre los datos (mismo `SECRET_KEY`), y
+     `purge` deja los datos. `instalar-nodo.sh` se prueba en 22.04 y 24.04 sobre el `.deb` del job
+     (`LIBRAEDGE_DEB_DIR`): guardas, una suma que no coincide no instala, y `curl | sudo bash -s` con las recomendadas
+     configura y verifica. El job `publicar` sube también los `.deb` (con versión y con el alias `libraedge-nodo-<producto>_amd64.deb`)
+     y los suma a `SHA256SUMS.txt`, junto con `instalar-nodo.sh`.
+- Consecuencias: un producto nuevo se suma igual que en Windows (su `.json`). La bandeja en una sesión gráfica real no
+  la prueba el CI: se prueba en una VM con Ubuntu Desktop (`instalador/README.md`, sección Linux). El `.deb` suelto depende de
+  que la PC tenga el repositorio de PGDG en 22.04; `instalar-nodo.sh` lo agrega. El arreglo de permisos del `estado.json` llega a los nodos cuando los
+  productos suban el pin de LibraEdge; mientras tanto lo cubre `libraedge-estado.path`.

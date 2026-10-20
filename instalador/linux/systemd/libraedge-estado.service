@@ -1,0 +1,9 @@
+[Unit]
+Description=Estado del nodo LibraEdge legible para la bandeja
+
+[Service]
+Type=oneshot
+# Como el dueno del archivo, no como root: el directorio es suyo y un enlace
+# simbolico puesto ahi no tiene que poder cambiar permisos de otra cosa.
+User=libraedge
+ExecStart=/usr/bin/find /var/lib/libraedge-nodo/estado -maxdepth 1 -name estado.json -type f ! -perm 0644 -exec chmod 0644 {} +

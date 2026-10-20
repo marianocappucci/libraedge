@@ -78,11 +78,17 @@ def escribir_estado(ruta: str, estado: EstadoNodo) -> None:
     tocaria un JSON partido justo cuando el nodo esta sincronizando, que es
     cuando mas se lo mira. `os.replace()` es atomico dentro del mismo sistema de
     archivos, asi que el lector ve la version vieja entera o la nueva entera.
+
+    Queda legible para todos (0644): lo lee la bandeja, que corre con el usuario
+    de la sesion y no con el del servicio, y no tiene secretos. `mkstemp` lo crea
+    0600 y en Linux eso dejaba la bandeja sin estado (ADR-012).
     """
     carpeta = os.path.dirname(os.path.abspath(ruta)) or "."
     os.makedirs(carpeta, exist_ok=True)
     descriptor, temporal = tempfile.mkstemp(dir=carpeta, prefix=".estado-", suffix=".tmp")
     try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o644)
         with os.fdopen(descriptor, "w", encoding="utf-8") as archivo:
             archivo.write(estado.como_json())
         os.replace(temporal, ruta)

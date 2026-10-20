@@ -1,4 +1,4 @@
-# Instalador del nodo LibraEdge (Windows)
+# Instalador del nodo LibraEdge (Windows y Linux)
 
 **Un solo instalador para todos los productos** (ADR-010, E7 de la fase 1): se compila por producto con
 `ISCC /DProducto=<producto> nodo.iss` y lo propio de cada uno vive en `productos/<producto>.json`. Hoy hay
@@ -179,6 +179,124 @@ conexión con el central» en aviso (carga de prueba o local sin internet).
 | `carga-de-prueba.json` | una carga ficticia para la VM |
 | `nodo.env.ejemplo` | las variables del nodo, explicadas |
 | `PROBAR_EN_VM.md` | los pasos para probarlo en una VM Windows 10 limpia |
+| `linux/` | el `.deb` para Ubuntu 22.04/24.04 (ADR-012): ver la sección de abajo |
+
+## Linux: Ubuntu 22.04 y 24.04 (ADR-012)
+
+Un **`.deb` por producto**, `libraedge-nodo-<producto>_<version>_amd64.deb` (y el alias sin versión
+`libraedge-nodo-<producto>_amd64.deb` para `releases/latest/download/`). Es el mismo instalador con otra capa de
+sistema operativo: la definición del producto, la carga, el `nodo.env`, el emisor, las cuatro cadenas de migraciones,
+la primera sincronización y la verificación son **las mismas**, por el mismo `libraedge/instalador.py`.
+
+### Instalar
+
+**En un paso**, con el script que se publica en el Release al lado de los `.deb` (y en `SHA256SUMS.txt`):
+
+```bash
+curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh \
+    | sudo bash -s ventalibra /ruta/carga-nodo.json
+sudo libraedge-nodo-verificar
+```
+
+`instalar-nodo.sh <producto> <carga>` controla que sea Ubuntu 22.04 o 24.04 amd64 y que corra como root, agrega el
+repositorio de PGDG de la forma oficial (el script de `postgresql-common`: llave en un archivo y `signed-by`, sin
+`apt-key`), baja `libraedge-nodo-<producto>_amd64.deb` del mismo Release, lo verifica contra su `SHA256SUMS.txt` y lo
+instala **con las recomendadas** (la bandeja) y `LIBRAEDGE_CARGA`. Ante cualquier falla sale con un código distinto de 0.
+La carga es una ruta: el secreto no pasa por los argumentos. Una versión fija: `sudo LIBRAEDGE_VERSION=0.12.0 bash -s
+...`. En el CI se prueba con `LIBRAEDGE_DEB_DIR` (un directorio con el `.deb` y `SHA256SUMS.txt`) en vez de bajar.
+
+**A mano**, en tres pasos:
+
+```bash
+# 1. PostgreSQL 16 de PGDG (en 22.04 es obligatorio: Ubuntu trae la 14).
+sudo apt install -y postgresql-common
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+
+# 2. El paquete, con la carga del nodo (la emite el central: «Sucursal sin internet»).
+sudo LIBRAEDGE_CARGA=/ruta/carga-nodo.json apt install ./libraedge-nodo-ventalibra_0.12.0_amd64.deb
+#    o en dos pasos:
+sudo apt install ./libraedge-nodo-ventalibra_0.12.0_amd64.deb      # instala SIN configurar (sale con 0 y lo explica)
+sudo libraedge-nodo-instalar /ruta/carga-nodo.json                  # configura (0 bien; 2 falta la carga o no sirve)
+
+# 3. Verificar.
+sudo libraedge-nodo-verificar            # --sin-central con la carga de prueba o sin internet
+```
+
+- **Actualizar** es instalar el `.deb` nuevo encima: el `prerm` para el producto y el nodo, el `postinst` corre
+  `libraedge-nodo-instalar` **sin carga** con el `nodo.env` que ya está (migra y rearranca). Se conservan `SECRET_KEY`,
+  la clave del admin local y los datos. Con `LIBRAEDGE_CARGA` se reescribe el `nodo.env` (otra carga) conservando lo
+  mismo.
+- **Si la configuración falla antes de tocar la base** (carga de otro producto, incompleta), los servicios que estaban
+  habilitados se vuelven a arrancar. Con `LIBRAEDGE_CARGA`, un fallo hace fallar el `postinst` (apt sale con error); se
+  reintenta con `sudo libraedge-nodo-instalar <carga>` o `sudo dpkg --configure -a`.
+- **Un nodo por PC:** el `preinst` corta antes de desempaquetar si la PC tiene el nodo de otro producto
+  (`/var/lib/libraedge-nodo/producto.txt` o el paquete de otro producto instalado). No se usa `Conflicts:` a propósito:
+  apt sacaría el otro nodo sin preguntar.
+- **`apt remove`** para y deshabilita los servicios y el clúster y **borra `nodo.env`**, que tiene el secreto del nodo
+  (como en Windows: no queda en el disco de una PC que se da de baja). Antes guarda `SECRET_KEY` y la clave del admin
+  local en `/var/lib/libraedge-nodo/conservado.env` (root 600; no el secreto del nodo): sin `SECRET_KEY` no se lee lo
+  que libraauth cifró en la base. **Reinstalar después pide la carga** y, con ella, configura sobre los datos que
+  estaban (mismo clúster, mismo `SECRET_KEY`; `conservado.env` se borra). **`apt purge`** borra además el resto de
+  `/etc/libraedge-nodo`, el estado, los logs y la regla de ufw. **Los datos quedan siempre**: el clúster
+  `16/libraedge`, `postgres.clave`, `conservado.env`, `app/config.json`, los respaldos y `producto.txt`. Se borran a mano, después de confirmar que el outbox no tiene nada sin subir:
+  `sudo pg_dropcluster --stop 16 libraedge && sudo rm -rf /var/lib/libraedge-nodo`.
+
+### Qué instala
+
+| Dónde | Qué |
+|---|---|
+| `/opt/libraedge-nodo/python/` | **Python 3.12 propio** (python-build-standalone, el de `uv python install`) con el producto y sus dependencias del `uv.lock`. Ubuntu 22.04 trae 3.10. |
+| `/opt/libraedge-nodo/producto/` | `app/`, `migrations/`, `alembic.ini`, los módulos sueltos de la raíz (`plans.py`), `frontend/dist`; compilado a `.pyc` |
+| `/opt/libraedge-nodo/instalador/` | los scripts, `producto.json` y `libraedge_instalador.py` |
+| `/etc/libraedge-nodo/nodo.env` | el entorno (`root:root 600`; lo lee systemd, no el usuario del servicio) |
+| `/var/lib/libraedge-nodo/` | `postgres.clave` (`root 600`), `app/` (`DATA_DIR`, del usuario `libraedge`, 700), `estado/estado.json` (lo lee la bandeja), `respaldos/` (de `postgres`, 700), `producto.txt` |
+| `/var/lib/postgresql/16/libraedge/` | el clúster propio del nodo (`pg_createcluster`), en `127.0.0.1:55432`, zona `America/Argentina/Buenos_Aires` puesta en el initdb, `data_checksums`, ICU `en-US` como en Windows |
+| `/var/log/libraedge-nodo/instalacion.log` | la salida de `libraedge-nodo-instalar` (sin secretos); los servicios, en `journalctl -u 'libraedge-*'` |
+
+Servicios: `postgresql@16-libraedge`, `libraedge-producto` (uvicorn en el puerto de la definición) y `libraedge-nodo`
+(`libraedge correr`), con arranque automático, como el usuario de sistema `libraedge`; `libraedge-respaldo.timer`
+(cada hora, `respaldo.sh` como `postgres` por el socket con peer: verifica restaurando en una base única por corrida);
+`libraedge-estado.path` (deja el `estado.json` legible para la bandeja con versiones de LibraEdge anteriores a ADR-012).
+Si **ufw** está activo, abre el puerto del producto para 10/8, 172.16/12 y 192.168/16; si no, no toca nada. Una segunda
+copia del respaldo en otro disco: `LIBRAEDGE_RESPALDO_SECUNDARIO=/media/pendrive` en `/etc/libraedge-nodo/respaldo.env`.
+
+**Ningún secreto en una línea de comandos ni en un log:** la clave de PostgreSQL se genera en `postgres.clave` y se le
+pone al rol por la **entrada** de `psql`; las migraciones y la primera sincronización corren con
+`libraedge_instalador.py ejecutar --entorno nodo.env --como libraedge`, que carga el entorno **dentro** del proceso y
+recién después baja de usuario (ni `env VAR=...`, que se ve en `/proc/<pid>/cmdline`, ni `source`, que ejecutaría un
+`$(...)` de un valor como root).
+
+### La bandeja
+
+`pystray` necesita PyGObject (`gi`) en Linux, y PyGObject no se instala con pip en el Python propio (se compila contra
+GTK y girepository del sistema). Por eso la bandeja de Linux (`linux/bandeja_linux.py`) corre con el **`python3` del
+sistema y su `python3-gi`**, dibuja con AyatanaAppIndicator y **no importa libraedge**: cada 10 s le pregunta al Python
+del nodo `libraedge-nodo bandeja --una-vez` (la decisión sigue siendo la de `bandeja.py`) y pinta el resultado. Es 3.10
+y biblioteca estándar (un test lo compila con la gramática de 3.10). El paquete **recomienda** `python3-gi`,
+`gir1.2-ayatanaappindicator3-0.1` y `gnome-shell-extension-appindicator` (Recommends y no Depends: un servidor sin
+escritorio no los necesita). En Ubuntu Desktop la extensión `ubuntu-appindicators@ubuntu.com` viene instalada y la
+sesión «ubuntu» la trae habilitada para todos (el CI lo comprueba en los paquetes). Arranca al iniciar sesión por
+`/etc/xdg/autostart/libraedge-nodo-bandeja.desktop`, y al terminar de instalar se abre en las sesiones gráficas activas
+(`systemd-run --user` en la sesión de cada usuario).
+
+### Armar
+
+```bash
+instalador/linux/armar_deb.sh ventalibra ~/proyectos/_wt/ventalibra-main [--frontend-dist DIR | --sin-frontend] --version 0.12.0
+```
+
+Corre en el WSL **sin sudo** (necesita `uv`, `git` con acceso a la familia y `dpkg-deb`): baja el Python con
+`uv python install`, instala las dependencias del `uv.lock` del producto con `--python-platform x86_64-manylinux_2_35`
+(la glibc de 22.04: el mismo paquete corre en las dos) y deja `instalador/salida/*.deb`. En el CI
+(`publicar-instalador.yml`) se arma en `ubuntu-22.04` y se instala y verifica en `ubuntu-22.04` y `ubuntu-24.04`.
+
+### Lo que el CI no puede probar
+
+La bandeja en una sesión gráfica real (los runners no tienen escritorio). Para verla: una VM con Ubuntu Desktop 24.04
+(y otra con 22.04), instalar el `.deb` con la carga de prueba **con las recomendadas**, y mirar que aparezca el círculo
+al lado del reloj, que pase a ámbar al cortar la red (`sudo systemctl stop libraedge-nodo` lo pone rojo), que «Abrir
+<Producto>» abra el navegador y que vuelva al cerrar y abrir sesión. También: el producto desde otra PC de la red con ufw
+activo, y un corte de energía con el nodo cobrando.
 
 ## Historia: la versión de RestoLibra en una VM (2026-08)
 

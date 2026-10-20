@@ -1,0 +1,22 @@
+#!/bin/sh
+# preinst de libraedge-nodo-@PRODUCTO@ (ADR-012). Un nodo por PC: corta ANTES de
+# desempaquetar, sin tocar el nodo que ya esta.
+set -e
+case "$1" in
+    install|upgrade)
+        marca=/var/lib/libraedge-nodo/producto.txt
+        if [ -s "$marca" ] && [ "$(cat "$marca")" != "@PRODUCTO@" ]; then
+            echo "Esta PC ya tiene el nodo LibraEdge de $(cat "$marca"). Va uno solo por PC:" >&2
+            echo "desinstalarlo y retirar /var/lib/libraedge-nodo antes de instalar @NOMBRE@." >&2
+            exit 1
+        fi
+        otros="@OTROS@"
+        for otro in $otros; do
+            if dpkg-query -W -f='${Status}' "libraedge-nodo-$otro" 2> /dev/null | grep -q "ok installed"; then
+                echo "Esta PC ya tiene instalado libraedge-nodo-$otro. Va un nodo por PC." >&2
+                exit 1
+            fi
+        done
+        ;;
+esac
+exit 0

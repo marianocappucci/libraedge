@@ -25,9 +25,17 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py validar --definicion producto.json --carga carga-nodo.json
     python libraedge_instalador.py entorno --definicion ... --carga ... --clave-pg ARCHIVO \\
         --estado RUTA --data-dir RUTA --salida nodo.env
+    python libraedge_instalador.py entorno ... --previo /var/lib/libraedge-nodo/conservado.env   (Linux)
     python libraedge_instalador.py config-emisor --carga ... --config RUTA\\config.json
     python libraedge_instalador.py revisar-entorno --definicion ... --entorno nodo.env
     python libraedge_instalador.py ejecutar libracore-migrar upgrade --prefijo ventalibra
+    python libraedge_instalador.py ejecutar --entorno /etc/libraedge-nodo/nodo.env --como libraedge \\
+        libraedge-nodo sincronizar          (Linux, ADR-012)
+
+En Linux (``instalador/linux/``, ADR-012) lo usa ``instalar.sh`` igual que ``instalar.ps1`` en Windows; lo unico
+que agrega es que ``ejecutar`` cargue el ``nodo.env`` y baje al usuario del servicio **dentro** del proceso: asi
+el entorno, que tiene los secretos, no pasa por ``env VAR=...`` (se veria en ``/proc/<pid>/cmdline``) ni por un
+``source`` de bash (un ``$(...)`` en un valor se ejecutaria como root).
 """
 
 from __future__ import annotations
@@ -629,6 +637,41 @@ def escribir_carga(ruta: str, carga: Mapping) -> None:
 # ── correr un console script sin su .exe ────────────────────────────────────
 
 
+def cargar_entorno(ruta: str, destino: dict | None = None) -> int:
+    """Pone las variables del ``nodo.env`` en ``destino`` (``os.environ`` por omision). Devuelve cuantas.
+
+    Lo mismo que ``Cargar-EntornoEnProceso`` de ``comun.ps1``. No imprime valores."""
+    if not os.path.isfile(ruta):
+        raise ErrorDeInstalacion(f"No esta el archivo de entorno: {ruta}")
+    variables = leer_entorno(_leer_texto(ruta))
+    malos = [n for n in variables if not _VARIABLE.match(n)]
+    if malos:
+        raise ErrorDeInstalacion(f"{ruta} tiene nombres de variable no validos: {', '.join(malos)}.")
+    (os.environ if destino is None else destino).update(variables)
+    return len(variables)
+
+
+def bajar_a_usuario(usuario: str) -> None:
+    """Pasa este proceso al usuario del servicio (Linux): grupos, grupo, usuario y ``HOME``, en ese orden.
+
+    Las migraciones y la primera sincronizacion corren como el usuario de los servicios y no como root: lo que
+    escriban (``estado.json``, archivos de ``DATA_DIR``) queda de quien lo va a seguir escribiendo."""
+    if not hasattr(os, "setuid"):
+        raise ErrorDeInstalacion("--como solo existe en Linux: en Windows los servicios corren como SYSTEM.")
+    import pwd
+
+    try:
+        entrada = pwd.getpwnam(usuario)
+    except KeyError:
+        raise ErrorDeInstalacion(f"No existe el usuario {usuario!r}.") from None
+    if os.geteuid() != entrada.pw_uid:
+        os.initgroups(usuario, entrada.pw_gid)
+        os.setgid(entrada.pw_gid)
+        os.setuid(entrada.pw_uid)
+    os.environ["HOME"] = entrada.pw_dir
+    os.environ["USER"] = os.environ["LOGNAME"] = usuario
+
+
 def ejecutar(nombre: str, argumentos: list[str]) -> int:
     """Corre el console script ``nombre`` (``libracore-migrar``, ``alembic``...) en este mismo Python.
 
@@ -672,6 +715,8 @@ def _parser() -> argparse.ArgumentParser:
     entorno.add_argument("--estado", required=True, help="ruta del estado.json del proceso del nodo")
     entorno.add_argument("--data-dir", required=True, help="DATA_DIR del producto (config.json, logos...)")
     entorno.add_argument("--salida", required=True, help="el nodo.env")
+    entorno.add_argument("--previo", help="lo conservado de un nodo.env borrado al desinstalar (Linux): SECRET_KEY y"
+                         " la clave del admin local, si el nodo.env no los tiene")
     config = sub.add_parser("config-emisor", help="copia los datos del emisor de la carga al config.json")
     config.add_argument("--definicion", required=True)
     config.add_argument("--carga", required=True)
@@ -680,6 +725,8 @@ def _parser() -> argparse.ArgumentParser:
     revisar.add_argument("--definicion", required=True)
     revisar.add_argument("--entorno", required=True)
     correr = sub.add_parser("ejecutar", help="corre un console script del Python del nodo")
+    correr.add_argument("--entorno", help="nodo.env que se carga en el proceso antes de correr (Linux)")
+    correr.add_argument("--como", help="usuario al que se baja despues de leer --entorno (Linux, root)")
     correr.add_argument("nombre")
     correr.add_argument("argumentos", nargs=argparse.REMAINDER)
     return parser
@@ -697,7 +744,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.comando == "ejecutar":
-            return ejecutar(args.nombre, args.argumentos)
+            # El entorno se lee ANTES de bajar de usuario: el nodo.env es de root con permisos 600.
+            if args.entorno:
+                cargar_entorno(args.entorno)
+            if args.como:
+                bajar_a_usuario(args.como)
+            argumentos = args.argumentos[1:] if args.argumentos[:1] == ["--"] else args.argumentos
+            return ejecutar(args.nombre, argumentos)
         definicion = leer_definicion(args.definicion)
         if args.comando == "plan":
             print(json.dumps(definicion.plan(), ensure_ascii=False))
@@ -723,7 +776,9 @@ def main(argv: list[str] | None = None) -> int:
         clave_pg = _leer_texto(args.clave_pg).strip()
         if not clave_pg:
             raise ErrorDeInstalacion(f"El archivo de la clave de PostgreSQL esta vacio o no existe: {args.clave_pg}")
-        previo = leer_entorno(_leer_texto(args.salida))
+        # Lo del nodo.env actual manda; lo conservado al desinstalar (Linux, ADR-012) solo completa lo que falta.
+        previo = {**(leer_entorno(_leer_texto(args.previo)) if args.previo else {}),
+                  **{k: v for k, v in leer_entorno(_leer_texto(args.salida)).items() if v.strip()}}
         entorno = armar_entorno(definicion, carga, clave_pg=clave_pg, estado=args.estado, data_dir=args.data_dir,
                                 previo=previo)
         escribir_en_archivo_protegido(args.salida, formatear_entorno(entorno))

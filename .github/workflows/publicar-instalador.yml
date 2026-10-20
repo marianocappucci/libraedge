@@ -15,6 +15,14 @@
 # /CARGA tiene que salir con 1; con la carga de prueba (un central que no
 # existe), instalar con 0, verificar_nodo.ps1 -SinCentral con 0 y ningun
 # secreto en los logs. Si algo falla, no se publica nada.
+#
+# Linux (ADR-012): un .deb por producto (libraedge-nodo-<producto>_<version>_amd64.deb,
+# y el alias libraedge-nodo-<producto>_amd64.deb para releases/latest/download/),
+# armado en ubuntu-22.04 e instalado y verificado en ubuntu-22.04 y ubuntu-24.04
+# (los runners tienen systemd y sudo): sin carga no configura, con la carga de
+# prueba configura y verificar_nodo.sh --sin-central da 0, el respaldo restaura,
+# reinstalar encima conserva SECRET_KEY, desinstalar conserva los datos y ningun
+# secreto queda en los logs.
 name: Publicar instalador
 
 on:
@@ -83,6 +91,217 @@ jobs:
             instalador/paquete
             !instalador/paquete/.descargas
           retention-days: 3
+      # El frontend construido, para el .deb (asi no se construye dos veces).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ matrix.producto }}
+          path: instalador/paquete/${{ matrix.producto }}/producto/frontend/dist
+          retention-days: 3
+
+  deb:
+    name: deb ${{ matrix.producto }}
+    needs: paquete
+    # En 22.04: lo que se compile de fuente queda contra la glibc mas vieja que se soporta.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        producto: [restolibra, ventalibra, contalibra]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: marianocappucci/${{ matrix.producto }}
+          ref: ${{ env.REF_PRODUCTO }}
+          path: _producto
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-${{ matrix.producto }}
+          path: _frontend
+      - name: Armar el .deb
+        run: |
+          v=0.0.0
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
+          instalador/linux/armar_deb.sh ${{ matrix.producto }} _producto --frontend-dist _frontend --version "$v"
+      - name: Los scripts del paquete pasan shellcheck
+        run: |
+          mkdir -p _control && dpkg-deb -e instalador/salida/*.deb _control
+          shellcheck _control/preinst _control/postinst _control/prerm _control/postrm
+          dpkg-deb -I instalador/salida/*.deb
+      - name: Nombre fijo
+        run: |
+          mkdir -p publicar
+          cp instalador/salida/*.deb publicar/
+          cp instalador/salida/*.deb "publicar/libraedge-nodo-${{ matrix.producto }}_amd64.deb"
+          ls -l publicar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.producto }}
+          path: publicar
+          retention-days: 7
+
+  probar-deb:
+    name: probar deb ${{ matrix.producto }} en ${{ matrix.ubuntu }}
+    needs: deb
+    runs-on: ${{ matrix.ubuntu }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        producto: [restolibra, ventalibra, contalibra]
+        ubuntu: [ubuntu-22.04, ubuntu-24.04]
+    env:
+      DEB: libraedge-nodo-${{ matrix.producto }}_amd64.deb
+      PAQUETE: libraedge-nodo-${{ matrix.producto }}
+      SECRETO_DE_PRUEBA: prueba-prueba-prueba-prueba-prueba
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-${{ matrix.producto }}
+          path: deb
+      - name: PostgreSQL 16 de PGDG (apt.postgresql.org)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          apt-cache policy postgresql-16 | head -n 4
+      - name: Con las recomendadas, apt resuelve la bandeja
+        run: |
+          sudo apt-get install -s "./deb/$DEB" > "$RUNNER_TEMP/simulado.txt"
+          for p in python3-gi gir1.2-ayatanaappindicator3-0.1 gnome-shell-extension-appindicator; do
+            grep -q "^Inst $p " "$RUNNER_TEMP/simulado.txt" || dpkg -s "$p" > /dev/null 2>&1 \
+              || { echo "apt no instalaria $p"; exit 1; }
+          done
+          # La extension, y que Ubuntu Desktop la trae habilitada para todos: el modo «ubuntu» de
+          # GNOME Shell (gnome-shell-common, modes/ubuntu.json) la lista en enabledExtensions.
+          mkdir -p _pkgs && cd _pkgs
+          apt-get download -q gnome-shell-extension-appindicator gnome-shell-common
+          dpkg-deb -c gnome-shell-extension-appindicator_*.deb | grep -o "extensions/ubuntu-appindicators@ubuntu.com/metadata.json"
+          dpkg-deb -x gnome-shell-common_*.deb x
+          cat x/usr/share/gnome-shell/modes/ubuntu.json
+          grep -q '"ubuntu-appindicators@ubuntu.com"' x/usr/share/gnome-shell/modes/ubuntu.json
+      - name: Instalar sin carga no configura
+        run: |
+          sudo apt-get install -y -q --no-install-recommends "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-sin-carga.log"
+          test ! -e /etc/libraedge-nodo/nodo.env
+          if systemctl is-active --quiet libraedge-producto; then echo "el producto no tenia que arrancar"; exit 1; fi
+          set +e
+          sudo libraedge-nodo-instalar > "$RUNNER_TEMP/instalar-sin-carga.log" 2>&1
+          codigo=$?
+          set -e
+          cat "$RUNNER_TEMP/instalar-sin-carga.log"
+          [ "$codigo" -ne 0 ] || { echo "Sin carga tenia que salir con algo distinto de 0"; exit 1; }
+          test ! -e /etc/libraedge-nodo/nodo.env
+      - name: Una carga de otro producto se rechaza sin tocar nada
+        run: |
+          otro=$(for p in restolibra ventalibra contalibra; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
+          jq --arg p "$otro" '.producto = $p' instalador/carga-de-prueba.json > "$RUNNER_TEMP/carga-otra.json"
+          set +e
+          sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga-otra.json" > "$RUNNER_TEMP/instalar-otra.log" 2>&1
+          codigo=$?
+          set -e
+          cat "$RUNNER_TEMP/instalar-otra.log"
+          [ "$codigo" -ne 0 ] || { echo "Una carga de $otro tenia que rechazarse"; exit 1; }
+          if pg_lsclusters --no-header | grep -q " libraedge "; then echo "no tenia que crear el cluster"; exit 1; fi
+      - name: Configurar con la carga de prueba
+        run: |
+          jq --arg p "${{ matrix.producto }}" '.producto = $p' instalador/carga-de-prueba.json > "$RUNNER_TEMP/carga.json"
+          chmod 600 "$RUNNER_TEMP/carga.json"
+          sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga.json" 2>&1 | tee "$RUNNER_TEMP/instalar.log"
+          exit "${PIPESTATUS[0]}"
+      - name: Verificar (--sin-central)
+        run: |
+          sleep 75
+          if ! sudo libraedge-nodo-verificar --sin-central; then
+            sudo journalctl -u libraedge-producto -u libraedge-nodo -n 80 --no-pager
+            exit 1
+          fi
+      - name: El respaldo restaura
+        run: |
+          sudo systemctl start libraedge-respaldo.service
+          sudo journalctl -u libraedge-respaldo -n 30 --no-pager
+          sudo ls -l /var/lib/libraedge-nodo/respaldos
+      - name: Reinstalar encima conserva SECRET_KEY (con la carga, sin ella y con ufw activo)
+        run: |
+          huella() { sudo grep '^SECRET_KEY=' /etc/libraedge-nodo/nodo.env | sha256sum; }
+          antes="$(huella)"
+          sudo ufw --force enable
+          sudo LIBRAEDGE_CARGA="$RUNNER_TEMP/carga.json" apt-get install -y -q --reinstall --no-install-recommends \
+            "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-reinstalar.log"
+          [ "$(huella)" = "$antes" ] || { echo "Reinstalar con la carga cambio SECRET_KEY"; exit 1; }
+          sudo apt-get install -y -q --reinstall --no-install-recommends "./deb/$DEB" 2>&1 \
+            | tee "$RUNNER_TEMP/apt-actualizar.log"
+          [ "$(huella)" = "$antes" ] || { echo "Actualizar sin la carga cambio SECRET_KEY"; exit 1; }
+          echo "$antes" > "$RUNNER_TEMP/huella.txt"  # solo el hash, para despues de desinstalar
+          sudo ufw status | grep -E "^8000/tcp +ALLOW +192\.168\.0\.0/16"
+          sleep 30
+          sudo libraedge-nodo-verificar --sin-central
+      - name: Ningun secreto en los logs
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          sudo journalctl -u 'libraedge-*' -u 'postgresql@16-libraedge' --no-pager > "$RUNNER_TEMP/logs/journal.log"
+          sudo cp -r /var/log/libraedge-nodo /var/log/postgresql /var/log/apt/term.log /var/log/dpkg.log "$RUNNER_TEMP/logs/"
+          sudo chown -R "$(id -u)" "$RUNNER_TEMP/logs"
+          cp "$RUNNER_TEMP"/*.log "$RUNNER_TEMP/logs/"
+          # La clave de PostgreSQL se busca sin mostrarla.
+          clave_pg="$(sudo cat /var/lib/libraedge-nodo/postgres.clave)"
+          for secreto in "$SECRETO_DE_PRUEBA" "$clave_pg"; do
+            if grep -rqF -- "$secreto" "$RUNNER_TEMP/logs"; then
+              echo "Un secreto aparece en: $(grep -rlF -- "$secreto" "$RUNNER_TEMP/logs" | tr '\n' ' ')"
+              exit 1
+            fi
+          done
+          echo "Ni el secreto del nodo ni la clave de PostgreSQL aparecen en $(find "$RUNNER_TEMP/logs" -type f | wc -l) logs."
+      - name: Desinstalar borra el secreto y conserva los datos
+        run: |
+          sudo apt-get remove -y -q "$PAQUETE"
+          if systemctl is-active --quiet libraedge-producto; then echo "el producto sigue corriendo"; exit 1; fi
+          sudo test ! -e /etc/libraedge-nodo/nodo.env
+          if sudo grep -rqsF -- "$SECRETO_DE_PRUEBA" /etc/libraedge-nodo /var/lib/libraedge-nodo; then
+            echo "El secreto del nodo quedo en el disco despues de desinstalar"; exit 1
+          fi
+          sudo test -s /var/lib/libraedge-nodo/conservado.env
+          sudo stat -c '%U:%G %a' /var/lib/libraedge-nodo/conservado.env | grep -qx "root:root 600"
+          sudo test -s /var/lib/libraedge-nodo/postgres.clave
+          sudo test -s /var/lib/libraedge-nodo/app/config.json
+          pg_lsclusters --no-header | grep " libraedge "
+      - name: Reinstalar despues pide la carga y configura sobre los datos que estaban
+        run: |
+          sudo apt-get install -y -q --no-install-recommends "./deb/$DEB" 2>&1 | tee "$RUNNER_TEMP/apt-despues-de-remove.log"
+          grep -q "SIN CONFIGURAR" "$RUNNER_TEMP/apt-despues-de-remove.log"
+          sudo test ! -e /etc/libraedge-nodo/nodo.env
+          if systemctl is-active --quiet libraedge-producto; then echo "sin carga no tenia que arrancar"; exit 1; fi
+          set +e
+          sudo libraedge-nodo-instalar > "$RUNNER_TEMP/instalar-sin-carga-2.log" 2>&1
+          codigo=$?
+          set -e
+          [ "$codigo" -ne 0 ] || { echo "Sin carga tenia que salir con algo distinto de 0"; exit 1; }
+          sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga.json" 2>&1 | tee "$RUNNER_TEMP/instalar-sobre-los-datos.log"
+          grep -q "Se recuperaron SECRET_KEY" "$RUNNER_TEMP/instalar-sobre-los-datos.log"
+          grep -q "El cluster 16/libraedge ya existe" "$RUNNER_TEMP/instalar-sobre-los-datos.log"
+          huella="$(sudo grep '^SECRET_KEY=' /etc/libraedge-nodo/nodo.env | sha256sum)"
+          [ "$huella" = "$(cat "$RUNNER_TEMP/huella.txt")" ] || { echo "SECRET_KEY cambio al reinstalar"; exit 1; }
+          sudo test ! -e /var/lib/libraedge-nodo/conservado.env
+          sleep 30
+          sudo libraedge-nodo-verificar --sin-central
+      - name: purge borra la configuracion y deja los datos
+        run: |
+          sudo apt-get purge -y -q "$PAQUETE"
+          sudo test ! -e /etc/libraedge-nodo
+          if sudo grep -rqsF -- "$SECRETO_DE_PRUEBA" /var/lib/libraedge-nodo; then echo "quedo el secreto"; exit 1; fi
+          sudo test -s /var/lib/libraedge-nodo/postgres.clave
+          sudo test -s /var/lib/libraedge-nodo/app/config.json
+          pg_lsclusters --no-header | grep " libraedge "
+          test ! -e /opt/libraedge-nodo/python
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-deb-${{ matrix.producto }}-${{ matrix.ubuntu }}
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
 
   compilar:
     name: compilar y probar ${{ matrix.producto }}
@@ -169,9 +388,73 @@ jobs:
           path: publicar
           retention-days: 7
 
+  probar-instalar-nodo:
+    name: instalar-nodo.sh en ${{ matrix.ubuntu }}
+    needs: deb
+    runs-on: ${{ matrix.ubuntu }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: [ubuntu-22.04, ubuntu-24.04]
+    env:
+      PRODUCTO: ventalibra
+      SECRETO_DE_PRUEBA: prueba-prueba-prueba-prueba-prueba
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-ventalibra
+          path: _release
+      # El .deb del job y su SHA256SUMS.txt, como los publica el Release (LIBRAEDGE_DEB_DIR en vez de bajar).
+      - name: Un Release local
+        run: |
+          cd _release && sha256sum libraedge-nodo-*.deb > SHA256SUMS.txt && cat SHA256SUMS.txt
+          jq --arg p "$PRODUCTO" '.producto = $p' "$GITHUB_WORKSPACE/instalador/carga-de-prueba.json" > "$RUNNER_TEMP/carga.json"
+          chmod 600 "$RUNNER_TEMP/carga.json"
+      - name: Sin argumentos, sin root u otro sistema, sale con error
+        run: |
+          set +e
+          bash instalador/linux/instalar-nodo.sh; [ $? -eq 2 ] || exit 1
+          bash instalador/linux/instalar-nodo.sh "$PRODUCTO" "$RUNNER_TEMP/carga.json"; [ $? -ne 0 ] || exit 1
+          sudo bash instalador/linux/instalar-nodo.sh otroproducto "$RUNNER_TEMP/carga.json"; [ $? -ne 0 ] || exit 1
+          sudo bash instalador/linux/instalar-nodo.sh "$PRODUCTO" /no/esta.json; [ $? -ne 0 ] || exit 1
+          echo "Las guardas salen con error."
+      - name: Una suma que no coincide no instala
+        run: |
+          mkdir -p _malo && cp _release/libraedge-nodo-${PRODUCTO}_amd64.deb _malo/
+          echo "$(printf '0%.0s' $(seq 64))  libraedge-nodo-${PRODUCTO}_amd64.deb" > _malo/SHA256SUMS.txt
+          set +e
+          cat instalador/linux/instalar-nodo.sh | sudo LIBRAEDGE_DEB_DIR="$PWD/_malo" bash -s "$PRODUCTO" "$RUNNER_TEMP/carga.json" \
+            > "$RUNNER_TEMP/instalar-nodo-malo.log" 2>&1
+          codigo=$?
+          set -e
+          tail -n 5 "$RUNNER_TEMP/instalar-nodo-malo.log"
+          [ "$codigo" -ne 0 ] || { echo "Con la suma mala tenia que fallar"; exit 1; }
+          if dpkg -s "libraedge-nodo-$PRODUCTO" > /dev/null 2>&1; then echo "no tenia que instalar"; exit 1; fi
+      - name: curl | sudo bash -s (con las recomendadas)
+        run: |
+          cat instalador/linux/instalar-nodo.sh \
+            | sudo LIBRAEDGE_DEB_DIR="$PWD/_release" bash -s "$PRODUCTO" "$RUNNER_TEMP/carga.json" 2>&1 \
+            | tee "$RUNNER_TEMP/instalar-nodo.log"
+          for p in python3-gi gir1.2-ayatanaappindicator3-0.1 gnome-shell-extension-appindicator; do
+            dpkg -s "$p" > /dev/null || { echo "no se instalo la recomendada $p"; exit 1; }
+          done
+          apt-cache policy postgresql-16 | grep -m1 apt.postgresql.org
+      - name: Verificar (--sin-central) y ningun secreto en la salida
+        run: |
+          sleep 60
+          sudo libraedge-nodo-verificar --sin-central
+          clave_pg="$(sudo cat /var/lib/libraedge-nodo/postgres.clave)"
+          sudo cp -r /var/log/libraedge-nodo "$RUNNER_TEMP/" && sudo chown -R "$(id -u)" "$RUNNER_TEMP/libraedge-nodo"
+          for secreto in "$SECRETO_DE_PRUEBA" "$clave_pg"; do
+            if grep -rqF -- "$secreto" "$RUNNER_TEMP"/*.log "$RUNNER_TEMP/libraedge-nodo"; then echo "Un secreto aparece en los logs"; exit 1; fi
+          done
+          echo "Ningun secreto en la salida de instalar-nodo.sh."
+
   publicar:
     name: publicar en el Release
-    needs: compilar
+    needs: [compilar, probar-deb, probar-instalar-nodo]
     if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.publicar)
     runs-on: ubuntu-latest
     permissions:
@@ -182,15 +465,27 @@ jobs:
           pattern: instalador-*
           merge-multiple: true
           path: publicar
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: publicar
+      # El script de una linea (instalar-nodo.sh), al lado de los .deb y en SHA256SUMS.txt.
+      - uses: actions/checkout@v4
+        with:
+          path: _repo
+          sparse-checkout: instalador/linux/instalar-nodo.sh
+          sparse-checkout-cone-mode: false
+      - run: install -m 755 _repo/instalador/linux/instalar-nodo.sh publicar/instalar-nodo.sh
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           cd publicar
-          sha256sum libraedge-nodo-*.exe > SHA256SUMS.txt
+          sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits), uno por producto. Cada uno se instala con la carga del nodo (carga-nodo.json) que emite el central del producto. Antes de publicarse se probaron en un runner Windows: instalan en silencio y pasan verificar_nodo.ps1. Los productos entran desde ${REF_PRODUCTO}."
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "LibraEdge $TAG" --notes "Instaladores del nodo de LibraEdge para Windows 10/11 (64 bits, .exe) y Ubuntu 22.04/24.04 (amd64, .deb), uno por producto. Cada uno se instala con la carga del nodo (carga-nodo.json) que emite el central del producto; en Ubuntu, en un paso: curl -fsSL https://github.com/marianocappucci/libraedge/releases/latest/download/instalar-nodo.sh | sudo bash -s <producto> /ruta/carga-nodo.json. Antes de publicarse se probaron en runners Windows y Ubuntu: instalan en silencio y pasan verificar_nodo. Los productos entran desde ${REF_PRODUCTO}."
           fi
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe SHA256SUMS.txt
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt

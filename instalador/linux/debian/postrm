@@ -1,0 +1,42 @@
+#!/bin/sh
+# postrm de libraedge-nodo-@PRODUCTO@ (ADR-012).
+#
+# remove: se borra el nodo.env, que tiene el secreto del nodo (igual que en
+#   Windows: no queda en el disco de una PC que se da de baja). Antes se guardan
+#   SECRET_KEY y la clave del admin local en /var/lib/libraedge-nodo/conservado.env
+#   (root 600): sin SECRET_KEY no se lee lo que libraauth cifro en la base. Los
+#   DATOS QUEDAN: el cluster (16/libraedge), postgres.clave (sin ella no se
+#   abren), app/config.json, los respaldos y producto.txt (un nodo por PC).
+#   Reinstalar pide la carga y configura sobre esos datos.
+# purge: ademas, el resto de /etc/libraedge-nodo, el estado, los logs y la regla
+#   del firewall. Los datos siguen quedando. Borrarlos es a mano, despues de
+#   confirmar que el outbox no tiene nada sin subir:
+#       sudo pg_dropcluster --stop 16 libraedge && sudo rm -rf /var/lib/libraedge-nodo
+set -e
+env=/etc/libraedge-nodo/nodo.env
+conservado=/var/lib/libraedge-nodo/conservado.env
+case "$1" in
+    remove|purge)
+        if [ -f "$env" ]; then
+            ( umask 077
+              grep -E '^(SECRET_KEY|ADMIN_PASSWORD|[A-Z][A-Z0-9_]*_ADMIN_PASSWORD)=' "$env" > "$conservado.tmp" || true
+              if [ -s "$conservado.tmp" ]; then mv "$conservado.tmp" "$conservado"; else rm -f "$conservado.tmp"; fi )
+            rm -f "$env"
+        fi
+        ;;
+esac
+case "$1" in
+    remove)
+        systemctl daemon-reload 2> /dev/null || true
+        ;;
+    purge)
+        rm -rf /etc/libraedge-nodo /var/lib/libraedge-nodo/estado /var/log/libraedge-nodo
+        if command -v ufw > /dev/null 2>&1; then
+            for red in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+                ufw delete allow proto tcp from "$red" to any port @PUERTO@ > /dev/null 2>&1 || true
+            done
+        fi
+        systemctl daemon-reload 2> /dev/null || true
+        ;;
+esac
+exit 0

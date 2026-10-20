@@ -6,6 +6,7 @@ outbox, worker, transporte, receptor y espejo, y nadie los invocaba.
 
 import json
 import os
+import stat
 
 import pytest
 
@@ -217,6 +218,14 @@ def test_escribir_el_estado_no_deja_temporales(tmp_path):
     assert json.loads(open(ruta, encoding="utf-8").read())["pendientes"] == 7
     temporales = [n for n in os.listdir(tmp_path) if n.startswith(".estado-")]
     assert temporales == [], f"quedaron temporales sin limpiar: {temporales}"
+
+
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="permisos POSIX")
+def test_el_estado_queda_legible_para_la_bandeja(tmp_path):
+    """La bandeja corre con el usuario de la sesion, no con el del servicio: mkstemp lo dejaba 0600 (ADR-012)."""
+    ruta = str(tmp_path / "estado.json")
+    escribir_estado(ruta, EstadoNodo("node-1", True, 0, 0))
+    assert stat.S_IMODE(os.stat(ruta).st_mode) == 0o644
 
 
 def test_un_write_que_falla_no_destruye_el_estado_anterior(tmp_path, monkeypatch):

@@ -1,0 +1,13 @@
+# El estado.json lo lee la bandeja con el usuario de la sesion. libraedge >= la
+# version de ADR-012 ya lo escribe 0644; las anteriores (las que traen los
+# productos hasta que suban el pin) lo dejan 0600. Esto lo corrige cada vez que
+# cambia, y despues de subir el pin no hace nada.
+[Unit]
+Description=Estado del nodo LibraEdge legible para la bandeja
+
+[Path]
+PathChanged=/var/lib/libraedge-nodo/estado/estado.json
+Unit=libraedge-estado.service
+
+[Install]
+WantedBy=multi-user.target

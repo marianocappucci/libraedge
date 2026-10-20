@@ -1,0 +1,30 @@
+# @NOMBRE@ en el nodo LibraEdge (ADR-012). Lo genera armar_deb.sh desde
+# productos/<producto>.json: @ASGI@ en el puerto @PUERTO@.
+[Unit]
+Description=@NOMBRE@, la instancia local de esta sucursal (LibraEdge)
+Documentation=https://github.com/marianocappucci/libraedge/tree/main/instalador
+After=network-online.target postgresql@16-libraedge.service
+Wants=network-online.target
+Requires=postgresql@16-libraedge.service
+# Sin nodo.env el nodo no esta configurado (falta libraedge-nodo-instalar con la carga).
+ConditionPathExists=/etc/libraedge-nodo/nodo.env
+
+[Service]
+Type=simple
+User=libraedge
+Group=libraedge
+# root:root 600: lo lee systemd, no el usuario del servicio.
+EnvironmentFile=/etc/libraedge-nodo/nodo.env
+WorkingDirectory=/opt/libraedge-nodo/producto
+ExecStart=/opt/libraedge-nodo/python/bin/python3 -B -m uvicorn @ASGI@ --host 0.0.0.0 --port @PUERTO@
+Restart=always
+# El freno del reinicio: un arranque roto no gira dos veces por segundo.
+RestartSec=15
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

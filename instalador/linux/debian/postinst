@@ -1,0 +1,34 @@
+#!/bin/sh
+# postinst de libraedge-nodo-@PRODUCTO@ (ADR-012).
+#
+# - Primera instalacion SIN carga: deja los archivos y explica como configurar
+#   (sale con 0: el paquete queda instalado; el nodo, sin configurar).
+# - Con LIBRAEDGE_CARGA=/ruta/carga-nodo.json en el entorno: configura, y si la
+#   configuracion falla sale con error (apt lo informa) y se reintenta con
+#   `sudo libraedge-nodo-instalar <carga>` o `sudo dpkg --configure -a`.
+# - Actualizacion de un nodo ya configurado: migra y rearranca con el nodo.env
+#   que ya esta (no vuelve a pedir la carga; conserva SECRET_KEY y los datos).
+set -e
+case "$1" in
+    configure)
+        systemctl daemon-reload || true
+        if [ -n "${LIBRAEDGE_CARGA:-}" ]; then
+            /opt/libraedge-nodo/instalador/instalar.sh "$LIBRAEDGE_CARGA"
+        elif [ -s /etc/libraedge-nodo/nodo.env ]; then
+            /opt/libraedge-nodo/instalador/instalar.sh
+        else
+            cat <<'TEXTO'
+
+  Nodo LibraEdge de @NOMBRE@ instalado, SIN CONFIGURAR.
+  Configurarlo con la carga del nodo que emite el central (pantalla
+  «Sucursal sin internet»):
+
+      sudo libraedge-nodo-instalar /ruta/carga-nodo.json
+
+  Despues: sudo libraedge-nodo-verificar
+
+TEXTO
+        fi
+        ;;
+esac
+exit 0
