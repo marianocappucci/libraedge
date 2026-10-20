@@ -60,6 +60,15 @@ plan_campo() {
     ayudante plan --definicion "$DEFINICION" | py -c "import json, sys; p = json.load(sys.stdin); print($1)"
 }
 
+# Como se entra al producto en el local, con la IP de esta PC (ADR-013): en esta
+# PC se entra SIEMPRE por la copia local, aunque haya internet. Nunca falla.
+mostrar_acceso() {
+    echo
+    ayudante acceso --definicion "$DEFINICION" 2> /dev/null \
+        || echo "En esta PC se entra siempre por el acceso directo del producto (http://localhost:8000/)."
+    echo
+}
+
 # psql como el usuario postgres por el socket local (autenticacion peer): sin
 # clave, que es lo que deja crear bases y verificar sin tener la clave a mano.
 psql_pg() {

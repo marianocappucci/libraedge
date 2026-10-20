@@ -26,16 +26,34 @@
 > Para verlo sin Windows y sin ícono: `libraedge-nodo bandeja --una-vez`, que
 > imprime exactamente lo mismo que iría en el tooltip.
 
+**Abrir <Producto>** (ADR-013) abre el mismo acceso directo del menu Inicio que deja el instalador: el producto en
+modo aplicacion de Edge, desde la copia local. Es la accion por defecto (clic en el icono). Otra linea del menu dice
+la direccion para las otras cajas del local, con la IP de esta PC, y al hacer clic la copia.
+
 Depende de `pystray` y `Pillow`, que están en el extra `bandeja` — no en las
 dependencias normales: el nodo tiene que poder correr como servicio en una PC sin
 sesión gráfica, y ahí un import de GUI sobra.
 """
 
+import os
+import subprocess
+import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timezone
 
-from libraedge.bandeja import Severidad, resumen_para_la_bandeja
+from libraedge.bandeja import (
+    Severidad,
+    acceso_directo_de_windows,
+    etiqueta_otras_cajas,
+    producto_del_nodo,
+    resumen_para_la_bandeja,
+)
+from libraedge.instalador import ip_de_la_lan, url_de_la_lan, url_local
 from libraedge.nodo import leer_estado
+
+#: Sin ventana de consola para `clip.exe` (la bandeja corre con pythonw).
+_SIN_VENTANA = 0x08000000
 
 #: Los tres colores, en el orden en que se miran de reojo. Verde/ámbar/rojo y no
 #: una paleta: es un ícono de 16 píxeles al lado del reloj.
@@ -54,6 +72,38 @@ def _icono(severidad: Severidad):
     dibujo = ImageDraw.Draw(imagen)
     dibujo.ellipse((6, 6, 58, 58), fill=_COLORES[severidad] + (255,))
     return imagen
+
+
+def definicion_instalada() -> str:
+    """El Python embebido esta en ``<RaizNodo>\\python``: la definicion del producto, en
+    ``<RaizNodo>\\instalador\\producto.json``. Sin argumentos nuevos: el acceso directo de la bandeja lo crea el
+    instalador y la bandeja es la de la version de LibraEdge que pinee el producto."""
+    return os.path.join(os.path.dirname(sys.prefix), "instalador", "producto.json")
+
+
+def abrir_producto(acceso: str | None, url: str, *, existe: Callable[[str], bool] = os.path.exists,
+                   abrir_archivo: Callable[[str], object] | None = None,
+                   navegador: Callable[[str], object] | None = None) -> str:
+    """Abre el producto como el acceso directo del instalador; si no esta, la URL local en el navegador.
+
+    Devuelve que uso (``"acceso"`` o ``"navegador"``)."""
+    if acceso and existe(acceso):
+        (abrir_archivo or os.startfile)(acceso)  # type: ignore[attr-defined]  # solo existe en Windows
+        return "acceso"
+    if navegador is None:
+        import webbrowser
+
+        navegador = webbrowser.open
+    navegador(url)
+    return "navegador"
+
+
+def copiar(texto: str, correr: Callable[..., object] = subprocess.run) -> None:
+    """Al portapapeles con ``clip.exe``, sin dependencias. Un fallo no tumba la bandeja."""
+    try:
+        correr(["clip"], input=texto, text=True, check=False, creationflags=_SIN_VENTANA)
+    except OSError:
+        pass
 
 
 def correr(ruta_estado: str, intervalo_segundos: int = 60,
@@ -77,13 +127,24 @@ def correr(ruta_estado: str, intervalo_segundos: int = 60,
             leer_estado(ruta_estado), datetime.now(UTC), intervalo_segundos
         )
 
+    producto = producto_del_nodo(definicion_instalada())
+    items = [pystray.MenuItem(lambda _: _resumen().titulo, None, enabled=False)]
+    if producto:
+        nombre, puerto = producto
+        acceso = acceso_directo_de_windows(nombre, os.environ.get("ProgramData"))
+
+        def _otras_cajas() -> str:
+            return url_de_la_lan(ip_de_la_lan(), puerto)
+
+        items += [
+            pystray.MenuItem(f"Abrir {nombre}", lambda: abrir_producto(acceso, url_local(puerto)), default=True),
+            pystray.MenuItem(lambda _: etiqueta_otras_cajas(_otras_cajas()), lambda: copiar(_otras_cajas())),
+        ]
+    items.append(pystray.MenuItem("Salir", lambda: icono.stop()))
+
     inicial = _resumen()
     icono = pystray.Icon(
-        "libraedge", _icono(inicial.severidad), inicial.texto,
-        menu=pystray.Menu(
-            pystray.MenuItem(lambda _: _resumen().titulo, None, enabled=False),
-            pystray.MenuItem("Salir", lambda: icono.stop()),
-        ),
+        "libraedge", _icono(inicial.severidad), inicial.texto, menu=pystray.Menu(*items),
     )
 
     def _refrescar(_):
@@ -93,6 +154,8 @@ def correr(ruta_estado: str, intervalo_segundos: int = 60,
             icono.icon = _icono(actual.severidad)
             # El tooltip es lo que el operador lee: ahí va el detalle completo.
             icono.title = actual.texto
+            # Los textos del menu (el estado, la IP de las otras cajas) se evaluan al rearmarlo.
+            icono.update_menu()
             time.sleep(refresco_segundos)
 
     icono.run(setup=_refrescar)

@@ -230,6 +230,60 @@ if ((Invocar -Programa $python -Argumentos @("-c", "import pystray")) -ne 0) {
     Write-Warning "Falta pystray en el paquete: el icono de la bandeja no va a aparecer."
 }
 
+# --- El acceso directo del producto (ADR-013) ------------------------------------
+# En esta PC se entra SIEMPRE por la copia local, aunque haya internet: el nodo
+# sincroniza por detras. Quien entra por la nube desde el local se queda sin
+# sistema cuando se corta internet (VM, 2026-10-20). El acceso directo abre
+# http://localhost:<puerto>/ en modo aplicacion de Edge (una ventana sin barra
+# de direcciones, con el titulo y el icono de la pagina); sin Edge, la URL en el
+# navegador por defecto (explorer.exe la abre con el). Va en el escritorio
+# publico y en el menu Inicio comun, con el icono de la marca del producto; el
+# desinstalador los borra ([UninstallDelete] del .iss, con el mismo nombre).
+function Buscar-Edge {
+    # Edge viene con Windows 10 y 11. Primero el registro (App Paths), despues
+    # las rutas conocidas.
+    foreach ($clave in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+                         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe")) {
+        $valor = (Get-ItemProperty -Path $clave -ErrorAction SilentlyContinue).'(default)'
+        if ($valor -and (Test-Path $valor)) { return $valor }
+    }
+    foreach ($ruta in @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+                        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe")) {
+        if ($ruta -and (Test-Path $ruta)) { return $ruta }
+    }
+    return $null
+}
+
+$urlLocal = "http://localhost:$($plan.puerto)/"
+$edge = Buscar-Edge
+$iconoProducto = Join-Path $RaizNodo "producto.ico"
+foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
+    $rutaAcceso = Join-Path ([Environment]::GetFolderPath($carpeta)) "$($plan.nombre).lnk"
+    $lnk = $shell.CreateShortcut($rutaAcceso)
+    if ($edge) {
+        $lnk.TargetPath = $edge
+        $lnk.Arguments = "--app=$urlLocal"
+    } else {
+        $lnk.TargetPath = Join-Path $env:SystemRoot "explorer.exe"
+        $lnk.Arguments = $urlLocal
+    }
+    if (Test-Path $iconoProducto) { $lnk.IconLocation = "$iconoProducto,0" }
+    $lnk.Description = "Abre $($plan.nombre) desde la copia de este local"
+    $lnk.Save()
+    Write-Host "Acceso directo: $rutaAcceso -> $($lnk.TargetPath) $($lnk.Arguments)"
+}
+if (-not $edge) { Write-Warning "No se encontro Edge: el acceso directo abre $urlLocal en el navegador por defecto." }
+
+# --- Como se entra, con la IP de esta PC (ADR-013) ----------------------------------
+# Lo muestra la pagina final del asistente (nodo.iss lee acceso.txt) y queda en
+# el log. La IP la elige el ayudante: la privada de la ruta por defecto.
+$textoAcceso = Leer-Salida -Programa $python -Argumentos @($ayudante, "acceso", "--definicion", $definicion)
 Write-Host ""
-Write-Host "Instalado. $($plan.nombre) escucha en http://<esta-pc>:$($plan.puerto)"
+Write-Host "Instalado."
+if ($textoAcceso.Codigo -eq 0 -and $textoAcceso.Texto) {
+    Escribir-SinBom -Ruta (Join-Path $RaizNodo "instalador\acceso.txt") -Texto $textoAcceso.Texto
+    Write-Host $textoAcceso.Texto
+} else {
+    Write-Host "En esta PC: el acceso directo `"$($plan.nombre)`" ($urlLocal); desde las otras cajas: http://<IP de esta PC>:$($plan.puerto)"
+}
 Write-Host "Verificar con: powershell -ExecutionPolicy Bypass -File `"$RaizNodo\instalador\verificar_nodo.ps1`""

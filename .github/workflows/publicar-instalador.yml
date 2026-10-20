@@ -221,6 +221,28 @@ jobs:
           chmod 600 "$RUNNER_TEMP/carga.json"
           sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga.json" 2>&1 | tee "$RUNNER_TEMP/instalar.log"
           exit "${PIPESTATUS[0]}"
+      - name: El acceso directo del producto y como se entra (ADR-013)
+        run: |
+          sudo apt-get install -y -q desktop-file-utils > /dev/null
+          nombre="$(jq -r .nombre "instalador/productos/${{ matrix.producto }}.json")"
+          puerto="$(jq -r .puerto "instalador/productos/${{ matrix.producto }}.json")"
+          desktop="/usr/share/applications/$PAQUETE.desktop"
+          cat "$desktop"
+          desktop-file-validate "$desktop"
+          grep -qx "Name=$nombre" "$desktop"
+          grep -qx "Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:$puerto/" "$desktop"
+          icono="$(sed -n 's/^Icon=//p' "$desktop")"
+          grep -q "<title>$nombre</title>" "$icono"
+          # El lanzador, con un navegador falso adelante en el PATH (el runner trae Chrome de verdad).
+          mkdir -p "$RUNNER_TEMP/falso"
+          printf '#!/bin/sh\necho "$@" > "%s/abierto.txt"\n' "$RUNNER_TEMP" > "$RUNNER_TEMP/falso/google-chrome"
+          chmod +x "$RUNNER_TEMP/falso/google-chrome"
+          PATH="$RUNNER_TEMP/falso:$PATH" /opt/libraedge-nodo/bandeja/abrir_producto.sh "http://localhost:$puerto/"
+          grep -qx -- "--app=http://localhost:$puerto/" "$RUNNER_TEMP/abierto.txt"
+          # El final de la instalacion dice como se entra, con la IP privada de esta PC.
+          grep -q "se entra siempre por la copia local" "$RUNNER_TEMP/instalar.log"
+          grep -q "con el acceso directo \"$nombre\" (o http://localhost:$puerto/)" "$RUNNER_TEMP/instalar.log"
+          grep -Eq "desde las otras cajas, con http://(10|172|192)\.[0-9.]+:$puerto\$" "$RUNNER_TEMP/instalar.log"
       - name: Verificar (--sin-central)
         run: |
           sleep 75
@@ -266,7 +288,11 @@ jobs:
           echo "Ni el secreto del nodo ni la clave de PostgreSQL aparecen en $(find "$RUNNER_TEMP/logs" -type f | wc -l) logs."
       - name: Desinstalar borra el secreto y conserva los datos
         run: |
+          # La opcion de abrir el producto al iniciar sesion (README, apagada): remove tambien la borra.
+          sudo cp "/usr/share/applications/$PAQUETE.desktop" /etc/xdg/autostart/
           sudo apt-get remove -y -q "$PAQUETE"
+          test ! -e "/usr/share/applications/$PAQUETE.desktop"
+          test ! -e "/etc/xdg/autostart/$PAQUETE.desktop"
           if systemctl is-active --quiet libraedge-producto; then echo "el producto sigue corriendo"; exit 1; fi
           sudo test ! -e /etc/libraedge-nodo/nodo.env
           if sudo grep -rqsF -- "$SECRETO_DE_PRUEBA" /etc/libraedge-nodo /var/lib/libraedge-nodo; then
@@ -363,6 +389,28 @@ jobs:
             Get-Content "$env:RUNNER_TEMP\inno.log" -Tail 40
             throw "La instalacion salio con $($p.ExitCode)"
           }
+      - name: Los accesos directos del producto y como se entra (ADR-013)
+        run: |
+          $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
+          $esperado = "--app=http://localhost:$($definicion.puerto)/"
+          $icono = "$env:ProgramFiles\LibraEdge\producto.ico"
+          if (-not (Test-Path $icono)) { throw "No se instalo $icono" }
+          $shell = New-Object -ComObject WScript.Shell
+          foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
+            $ruta = Join-Path ([Environment]::GetFolderPath($carpeta)) "$($definicion.nombre).lnk"
+            if (-not (Test-Path $ruta)) { throw "Falta el acceso directo $ruta" }
+            $lnk = $shell.CreateShortcut($ruta)
+            Write-Host "$ruta -> $($lnk.TargetPath) $($lnk.Arguments) [$($lnk.IconLocation)]"
+            if ((Split-Path $lnk.TargetPath -Leaf) -ne "msedge.exe" -or -not (Test-Path $lnk.TargetPath)) { throw "El destino no es Edge: $($lnk.TargetPath)" }
+            if ($lnk.Arguments -ne $esperado) { throw "Argumentos '$($lnk.Arguments)'; se esperaba '$esperado'" }
+            if ($lnk.IconLocation -ne "$icono,0") { throw "Icono '$($lnk.IconLocation)'; se esperaba '$icono,0'" }
+          }
+          $acceso = Get-Content "$env:ProgramFiles\LibraEdge\instalador\acceso.txt" -Raw
+          Write-Host $acceso
+          if ($acceso -notmatch "se entra siempre por la copia local") { throw "acceso.txt no dice como se entra" }
+          if ($acceso -notmatch "desde las otras cajas, con http://(10|172|192)\.[0-9.]+:$($definicion.puerto)") { throw "acceso.txt no tiene la IP de la red local" }
+          if ((Select-String -Path "$env:RUNNER_TEMP\inno.log" -SimpleMatch "se entra siempre por la copia local").Count -eq 0) { throw "El log de Inno no dice como se entra" }
+          if ((Select-String -Path "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -SimpleMatch "desde las otras cajas, con http://").Count -eq 0) { throw "instalacion.log no dice como se entra" }
       - name: Verificar (V6)
         run: |
           Start-Sleep 90
@@ -385,6 +433,11 @@ jobs:
           Start-Process "$env:ProgramFiles\LibraEdge\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
           Start-Sleep 10
           if (Test-Path $env_) { throw "Desinstalar no borro nodo.env" }
+          $nombre = (Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json).nombre
+          foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
+            $ruta = Join-Path ([Environment]::GetFolderPath($carpeta)) "$nombre.lnk"
+            if (Test-Path $ruta) { throw "Desinstalar no borro el acceso directo $ruta" }
+          }
           if (@(Get-Service LibraEdge* -ErrorAction SilentlyContinue).Count -ne 0) { throw "Quedaron servicios" }
           $cons = "$env:ProgramData\LibraEdge\conservado.env"
           if (-not (Test-Path $cons)) { throw "No se guardo conservado.env" }
@@ -478,6 +531,9 @@ jobs:
           done
           dpkg -s gnome-shell-extension-appindicator > /dev/null 2>&1 || dpkg -s gnome-shell-ubuntu-extensions > /dev/null \
             || { echo "no se instalo la extension de la bandeja"; exit 1; }
+          # Al final repite como se entra, con la IP de esta PC (ADR-013).
+          tail -n 12 "$RUNNER_TEMP/instalar-nodo.log" | grep -q "se entra siempre por la copia local"
+          tail -n 12 "$RUNNER_TEMP/instalar-nodo.log" | grep -Eq "desde las otras cajas, con http://(10|172|192)\.[0-9.]+:8000$"
           apt-cache policy postgresql-16 | grep -m1 apt.postgresql.org
       - name: Verificar (--sin-central) y ningun secreto en la salida
         run: |

@@ -60,8 +60,8 @@ trabajo="$instalador/paquete-linux/$producto"
 raiz="$trabajo/raiz"
 opt="$raiz/opt/libraedge-nodo"
 rm -rf "$trabajo"
-mkdir -p "$opt/instalador" "$opt/producto" "$opt/bandeja" "$raiz/DEBIAN" "$raiz/usr/lib/systemd/system" \
-    "$raiz/usr/sbin" "$raiz/etc/xdg/autostart" "$salida"
+mkdir -p "$opt/instalador" "$opt/producto" "$opt/bandeja" "$opt/marca" "$raiz/DEBIAN" "$raiz/usr/lib/systemd/system" \
+    "$raiz/usr/sbin" "$raiz/etc/xdg/autostart" "$raiz/usr/share/applications" "$salida"
 
 # --- El Python propio ---------------------------------------------------------------
 tmp_py="$(mktemp -d "$trabajo/.python-XXXXXX")"
@@ -121,6 +121,9 @@ done
 chmod 644 "$opt/instalador/comun.sh"
 install -m 644 "$linux/bandeja_linux.py" "$opt/bandeja/bandeja_linux.py"
 install -m 755 "$linux/abrir_bandeja.sh" "$opt/bandeja/abrir_bandeja.sh"
+# El acceso directo del producto (ADR-013): abre la copia local en modo aplicacion, con la marca del producto.
+install -m 755 "$linux/abrir_producto.sh" "$opt/bandeja/abrir_producto.sh"
+install -m 644 "$instalador/marca/$producto.svg" "$opt/marca/$producto.svg"
 install -m 644 "$linux/libraedge-nodo-bandeja.desktop" "$raiz/etc/xdg/autostart/libraedge-nodo-bandeja.desktop"
 cp "$instalador/libraedge.ico" "$opt/libraedge.ico"
 ln -s /opt/libraedge-nodo/instalador/instalar.sh "$raiz/usr/sbin/libraedge-nodo-instalar"
@@ -139,6 +142,7 @@ done
 for script in preinst postinst prerm postrm; do
     reemplazar "$linux/debian/$script" "$raiz/DEBIAN/$script" 755
 done
+reemplazar "$linux/libraedge-nodo-producto.desktop" "$raiz/usr/share/applications/libraedge-nodo-$producto.desktop" 644
 
 # --- El control ------------------------------------------------------------------------------
 tamano="$(du -sk --exclude=DEBIAN "$raiz" | cut -f1)"

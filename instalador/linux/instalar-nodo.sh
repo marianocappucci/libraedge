@@ -90,6 +90,10 @@ principal() {
     LIBRAEDGE_CARGA="$carga" apt-get install -y -q "$trabajo/$deb" || morir "La instalacion del nodo fallo (arriba el motivo)."
     [ -s /etc/libraedge-nodo/nodo.env ] || morir "El paquete se instalo pero el nodo no quedo configurado."
 
+    # Como se entra (ADR-013), con la IP de esta PC: el postinst ya lo dijo, pero arriba de mucha salida de apt.
+    echo
+    /opt/libraedge-nodo/python/bin/python3 -I -B /opt/libraedge-nodo/instalador/libraedge_instalador.py acceso \
+        --definicion /opt/libraedge-nodo/instalador/producto.json || true
     echo
     echo "Listo. Verificar con: sudo libraedge-nodo-verificar"
     echo "La carga ($carga) tiene el secreto del nodo: borrarla de esta PC y de donde se haya copiado."

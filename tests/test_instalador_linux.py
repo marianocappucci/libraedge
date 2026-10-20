@@ -142,8 +142,8 @@ def test_ejecutar_lee_el_entorno_antes_de_bajar_de_usuario(tmp_path, monkeypatch
 
 def test_estan_los_scripts_del_nodo_en_linux():
     assert [s.name for s in SCRIPTS] == [
-        "abrir_bandeja.sh", "armar_deb.sh", "comun.sh", "instalar-nodo.sh", "instalar.sh", "preparar_nodo.sh",
-        "preparar_postgres.sh", "respaldo.sh", "verificar_nodo.sh"]
+        "abrir_bandeja.sh", "abrir_producto.sh", "armar_deb.sh", "comun.sh", "instalar-nodo.sh", "instalar.sh",
+        "preparar_nodo.sh", "preparar_postgres.sh", "respaldo.sh", "verificar_nodo.sh"]
     assert [d.name for d in DEBIAN] == ["postinst", "postrm", "preinst", "prerm"]
 
 
@@ -151,7 +151,7 @@ def test_armar_deb_copia_todos_los_scripts_y_las_unidades():
     armar = _texto(LINUX / "armar_deb.sh")
     copiados = re.search(r"for script in ([^;]+); do", armar).group(1).split()
     # instalar-nodo.sh no va en el paquete: va en el Release, al lado de los .deb.
-    sueltos = ("armar_deb.sh", "abrir_bandeja.sh", "instalar-nodo.sh")
+    sueltos = ("armar_deb.sh", "abrir_bandeja.sh", "abrir_producto.sh", "instalar-nodo.sh")
     assert sorted(copiados) == sorted(s.name for s in SCRIPTS if s.name not in sueltos)
     assert '"$linux"/systemd/*' in armar and "for script in preinst postinst prerm postrm" in armar
     assert '"$ayudante" "$opt/instalador/libraedge_instalador.py"' in armar
@@ -167,7 +167,7 @@ def test_cada_script_es_bash_estricto(script):
     texto = _texto(script)
     assert texto.startswith("#!/usr/bin/env bash\n")
     assert re.search(r"^set -[eu]+o pipefail$|^set -uo pipefail$|^set -u$", texto, re.M), script.name
-    if script.name not in ("armar_deb.sh", "abrir_bandeja.sh", "instalar-nodo.sh"):
+    if script.name not in ("armar_deb.sh", "abrir_bandeja.sh", "abrir_producto.sh", "instalar-nodo.sh"):
         assert '/comun.sh"' in texto
 
 
@@ -444,3 +444,103 @@ def test_el_release_publica_el_script_y_su_suma():
     assert "sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt" in workflow
     assert "libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
     assert "probar-instalar-nodo" in workflow and "LIBRAEDGE_DEB_DIR" in workflow
+
+
+# ── el acceso directo del producto y como se entra (ADR-013) ────────────────
+
+
+def test_el_acceso_directo_del_menu_abre_la_copia_local():
+    desktop = _texto(LINUX / "libraedge-nodo-producto.desktop")
+    lineas = desktop.splitlines()
+    assert lineas[0] == "[Desktop Entry]"
+    for linea in ("Type=Application", "Name=@NOMBRE@", "Terminal=false",
+                  "Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:@PUERTO@/",
+                  "Icon=/opt/libraedge-nodo/marca/@PRODUCTO@.svg", "Categories=Office;Finance;"):
+        assert linea in lineas
+    # Se ve en el menu de aplicaciones (no como el autostart de la bandeja).
+    assert "NoDisplay=true" not in desktop
+    armar = _texto(LINUX / "armar_deb.sh")
+    assert ('reemplazar "$linux/libraedge-nodo-producto.desktop" '
+            '"$raiz/usr/share/applications/libraedge-nodo-$producto.desktop" 644') in armar
+    assert 'install -m 755 "$linux/abrir_producto.sh" "$opt/bandeja/abrir_producto.sh"' in armar
+    assert 'install -m 644 "$instalador/marca/$producto.svg" "$opt/marca/$producto.svg"' in armar
+    for producto in PRODUCTOS:
+        assert (RAIZ / "instalador" / "marca" / f"{producto}.svg").is_file()
+
+
+def test_remove_borra_la_copia_opcional_del_autostart():
+    postrm = _texto(LINUX / "debian" / "postrm")
+    borrado = postrm[postrm.index("remove|purge)"):postrm.index("esac")]
+    assert "rm -f /etc/xdg/autostart/libraedge-nodo-@PRODUCTO@.desktop" in borrado
+
+
+def _navegadores_falsos(carpeta: Path, nombres: list[str]) -> Path:
+    carpeta.mkdir()
+    for nombre in nombres:
+        falso = carpeta / nombre
+        falso.write_text(f'#!/bin/sh\necho "{nombre} $*" > "{carpeta}/abierto.txt"\n', encoding="utf-8")
+        falso.chmod(0o755)
+    return carpeta
+
+
+@pytest.mark.parametrize("hay, esperado", [
+    (["google-chrome", "chromium", "xdg-open"], "google-chrome --app=http://localhost:8100/"),
+    (["chromium-browser", "microsoft-edge", "xdg-open"], "chromium-browser --app=http://localhost:8100/"),
+    (["microsoft-edge", "xdg-open"], "microsoft-edge --app=http://localhost:8100/"),
+    # Ubuntu trae Firefox, que no tiene modo aplicacion: la URL en el navegador por defecto.
+    (["firefox", "xdg-open"], "xdg-open http://localhost:8100/"),
+])
+def test_abrir_producto_en_modo_aplicacion_o_en_el_navegador(tmp_path, hay, esperado):
+    bash = shutil.which("bash")
+    carpeta = _navegadores_falsos(tmp_path / "bin", hay)
+    resultado = subprocess.run([bash, str(LINUX / "abrir_producto.sh"), "http://localhost:8100/"],
+                               env={"PATH": str(carpeta)}, capture_output=True, text=True, timeout=30)
+    assert resultado.returncode == 0, resultado.stderr
+    assert (carpeta / "abierto.txt").read_text(encoding="utf-8").strip() == esperado
+
+
+def test_al_terminar_de_instalar_dice_como_se_entra():
+    comun = _texto(LINUX / "comun.sh")
+    assert 'ayudante acceso --definicion "$DEFINICION"' in comun
+    instalar = _texto(LINUX / "instalar.sh")
+    assert instalar.index("mostrar_acceso") < instalar.index('registrar "== Listo."')
+    script = _texto(LINUX / "instalar-nodo.sh")
+    assert "libraedge_instalador.py acceso" in script
+    assert script.index("libraedge_instalador.py acceso") < script.index('echo "Listo. Verificar con')
+
+
+def test_la_bandeja_abre_con_el_mismo_lanzador():
+    bandeja = _bandeja()
+    abiertos = []
+    bandeja.abrir_producto(8000, abrir=abiertos.append)
+    assert abiertos == [["/opt/libraedge-nodo/bandeja/abrir_producto.sh", "http://localhost:8000/"]]
+    desktop = _texto(LINUX / "libraedge-nodo-producto.desktop")
+    assert f"Exec={bandeja.ABRIR_PRODUCTO} http://localhost:@PUERTO@/" in desktop
+
+
+def test_la_bandeja_pregunta_la_direccion_de_las_otras_cajas():
+    bandeja = _bandeja()
+    vistos = []
+
+    class Resultado:
+        stdout = json.dumps({"url_lan": "http://192.168.1.20:8000"})
+
+    def correr(comando, **opciones):
+        vistos.append(comando)
+        return Resultado()
+
+    assert bandeja.otras_cajas(8000, correr=correr) == "http://192.168.1.20:8000"
+    assert vistos[0] == ["/opt/libraedge-nodo/python/bin/python3", "-I", "-B",
+                         "/opt/libraedge-nodo/instalador/libraedge_instalador.py", "acceso", "--definicion",
+                         "/opt/libraedge-nodo/instalador/producto.json", "--json"]
+    assert bandeja.etiqueta_otras_cajas("http://192.168.1.20:8000") == "Otras cajas: http://192.168.1.20:8000 (copiar)"
+
+    class Roto:
+        stdout = "Traceback..."
+
+    assert bandeja.otras_cajas(8000, correr=lambda *_, **__: Roto()) == "http://<IP de esta PC>:8000"
+
+    def falla(*_, **__):
+        raise FileNotFoundError("python3")
+
+    assert bandeja.otras_cajas(8000, correr=falla) == "http://<IP de esta PC>:8000"

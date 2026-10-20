@@ -1,9 +1,13 @@
-"""Arma instalador/libraedge.ico desde las dos marcas de libra-ui (ADR-078 del kit).
+"""Arma los iconos de Windows desde las marcas de libra-ui (`marcas/*.svg`, ADR-078 del kit).
 
     python instalador/armar_icono.py <ruta a chrome o chromium>
 
-De 16 a 32 px va la PC sola (`marca/libraedge-favicon.svg`): a ese tamano la marca completa se
-empasta. De 40 en adelante, la marca completa (`marca/libraedge.svg`).
+- `libraedge.ico`: el del instalador y de "Agregar o quitar programas".
+- `iconos/<producto>.ico`, uno por `productos/<producto>.json`: el del acceso directo que abre el producto en modo
+  aplicacion (ADR-013). En Linux el `.desktop` usa el SVG de la marca tal cual (`marca/<producto>.svg`).
+
+De 16 a 32 px va la version chica (`marca/<marca>-favicon.svg`): a ese tamano la marca completa se
+empasta. De 40 en adelante, la marca completa (`marca/<marca>.svg`).
 
 De 16 a 48 cada entrada es un BMP de 32 bits (BGRA, con la mascara AND), y de 64 en adelante un PNG.
 Explorer lee los dos, pero hay lectores viejos (System.Drawing.Icon, medido en la VM Windows 10 el
@@ -12,7 +16,8 @@ el formato que lee cualquiera, y los grandes en PNG para que el archivo no pese 
 
 Chrome rasteriza el SVG para no sumar una dependencia de imagenes solo para esto, y el PNG se
 decodifica con la biblioteca estandar; el `.ico` se commitea, asi que el instalador no necesita
-nada. Si cambia la marca en libra-ui, se copian los dos SVG a `marca/` y se vuelve a correr.
+nada. Si cambia una marca en libra-ui, se copian sus dos SVG a `marca/` y se vuelve a correr. Un
+producto nuevo: su `.json` en `productos/` y sus dos SVG en `marca/`.
 """
 
 import pathlib
@@ -121,20 +126,35 @@ def ico(pngs: dict[int, bytes]) -> bytes:
     return cabecera + entradas + datos
 
 
-def main() -> None:
-    chrome = sys.argv[1]
+def productos() -> list[str]:
+    return sorted(ruta.stem for ruta in (AQUI / "productos").glob("*.json"))
+
+
+def destinos() -> dict[str, pathlib.Path]:
+    """La marca de la que sale cada icono, y adonde va."""
+    return {"libraedge": AQUI / "libraedge.ico", **{p: AQUI / "iconos" / f"{p}.ico" for p in productos()}}
+
+
+def armar(chrome: str, marca: str, destino: pathlib.Path) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         pngs = {
             lado: rasterizar(
                 chrome,
-                AQUI / "marca" / ("libraedge-favicon.svg" if lado in CHICOS else "libraedge.svg"),
+                AQUI / "marca" / (f"{marca}-favicon.svg" if lado in CHICOS else f"{marca}.svg"),
                 lado,
                 pathlib.Path(tmp) / f"{lado}.png",
             )
             for lado in TAMANOS
         }
-    (AQUI / "libraedge.ico").write_bytes(ico(pngs))
-    print(f"libraedge.ico: {len(pngs)} tamaños")
+    destino.parent.mkdir(exist_ok=True)
+    destino.write_bytes(ico(pngs))
+    return len(pngs)
+
+
+def main() -> None:
+    chrome = sys.argv[1]
+    for marca, destino in destinos().items():
+        print(f"{destino.relative_to(AQUI)}: {armar(chrome, marca, destino)} tamaños")
 
 
 if __name__ == "__main__":

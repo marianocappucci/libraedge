@@ -379,3 +379,67 @@ wiki (entidad `libraedge` y el análisis `nodo-libraedge-espejo-local`).
 Administradores por SID con `icacls`, recién después el contenido) antes de borrar `nodo.env`; `preparar_nodo.ps1` se lo
 pasa al ayudante con `--previo` y lo borra. El secreto del nodo no se conserva en ninguno de los dos sistemas. Antes,
 desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que quedaban era ilegible al reinstalar.
+
+## ADR-013 — En el local se entra siempre por la copia local: el acceso directo «<Producto>»
+
+- Estado: aceptada
+- Fecha: 2026-10-20
+- Contexto: el humano, probando un nodo de ContaLibra en una VM, entró desde la PC del local a la versión en la nube
+  (`demo.contalibra.com.ar`); al cortar internet esa pestaña dejó de andar y tuvo que abrir `localhost:8000` y volver a
+  loguearse. Nadie sabe que **en la PC con LibraEdge se entra siempre por la copia local, aunque haya internet** (el
+  nodo sincroniza por detrás). Decisión del humano: hacerlo obvio, sin una app aparte.
+- Qué ya existe (se miró antes):
+  - Windows: `preparar_nodo.ps1` crea con `WScript.Shell` el acceso directo de la bandeja en el inicio común
+    («LibraEdge - estado del nodo»), y el `.iss` lo borra en `[UninstallDelete]` (lo crea un script, no `[Icons]`). La
+    bandeja de Windows (`bandeja_windows.py`) **no tenía «Abrir»**: sólo el estado y «Salir».
+  - Linux: la bandeja tenía «Abrir <Producto>» con `xdg-open http://127.0.0.1:<puerto>` (otro host que `localhost`: otra
+    sesión del navegador). El único `.desktop` era el autostart de la bandeja (`NoDisplay=true`); el `postrm` no tenía
+    nada de escritorio.
+  - Íconos: `armar_icono.py` armaba sólo `libraedge.ico` desde `marca/libraedge*.svg` (ADR-078 de libra-ui), con Chrome
+    y el `.ico` commiteado. Las marcas de los productos están en libra-ui (`marcas/<producto>.svg` y `-favicon.svg`,
+    las mismas que usan las webs).
+  - Ningún mensaje del instalador decía cómo entrar: «escucha en http://<esta-pc>:<puerto>». La pantalla del central
+    (`SucursalSinInternet` de libra-ui) tampoco.
+- Decisión:
+  1. **El acceso directo «<Producto>»** abre `http://localhost:<puerto>/` en modo aplicación (ventana sin barra de
+     direcciones, con el título y el ícono de la página):
+     - Windows: en el escritorio público y en el menú Inicio comun, creado por `preparar_nodo.ps1` (junto al de la
+       bandeja), con destino `msedge.exe --app=http://localhost:<puerto>/`. Edge se busca en `App Paths` del registro y
+       después en las rutas conocidas; sin Edge, `explorer.exe <url>` (el navegador por defecto). Ícono:
+       `iconos/<producto>.ico`, instalado como `{app}\producto.ico`. El `.iss` los borra en `[UninstallDelete]` por
+       `{#NombreProducto}.lnk`, el mismo nombre que la definición.
+     - Ubuntu: `/usr/share/applications/libraedge-nodo-<producto>.desktop` (lo quita dpkg) con
+       `Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:<puerto>/` e
+       `Icon=/opt/libraedge-nodo/marca/<producto>.svg`. `abrir_producto.sh` usa Google Chrome, Chromium o Edge con
+       `--app=` y, si no hay ninguno (Ubuntu trae Firefox, sin modo aplicación), `xdg-open`. **No se deja ícono en el
+       escritorio de cada usuario**: GNOME lo muestra como no confiable hasta que el usuario lo habilita, y `/etc/skel`
+       sólo llega a los usuarios nuevos; el acceso está en el menú y se ancla al dock.
+  2. **«Abrir <Producto>» de la bandeja usa el mismo lanzamiento:** en Windows abre el `.lnk` del menú Inicio (si no
+     está, la URL en el navegador) y es la acción por defecto; en Linux corre `abrir_producto.sh`. Las dos suman
+     **«Otras cajas: http://<IP>:<puerto> (copiar)»**, que al hacer clic copia la dirección (`clip.exe`; el portapapeles
+     de GTK). La bandeja de Windows no recibe argumentos nuevos (lee `<RaizNodo>\instalador\producto.json` al lado de su
+     Python): corre con el LibraEdge pineado por el producto, que puede ser anterior.
+  3. **El final de la instalación dice cómo se entra, con la IP ya completa**, desde un solo lugar:
+     `libraedge_instalador.py acceso --definicion producto.json [--json]`. La IP es la privada (10/8, 172.16/12,
+     192.168/16, sin loopback ni link-local) de la ruta por defecto (un socket UDP conectado, que no manda nada); sin
+     ruta por defecto, la primera privada del nombre de la PC; sin ninguna, la dirección con la IP a completar. El texto
+     va sin acentos (Inno lo lee con la página de códigos del sistema). Windows: `preparar_nodo.ps1` lo escribe en
+     `instalador\acceso.txt` y en `logs\instalacion.log`; el `.iss` lo agrega a la página final (`CurPageChanged`,
+     `wpFinished`) y al log de Inno. Linux: `instalar.sh` (y por él el `postinst`) y `instalar-nodo.sh` al final.
+  4. **Íconos:** `armar_icono.py` arma `libraedge.ico` y un `iconos/<producto>.ico` por cada `productos/*.json`, desde
+     `marca/<marca>.svg` y `-favicon.svg` (copias de libra-ui). Se commitean; los tests miran los archivos.
+  5. **Abrir el producto al iniciar sesión: opción documentada, apagada** (`instalador/README.md`): copiar el acceso
+     directo al inicio común (Windows) o el `.desktop` a `/etc/xdg/autostart/` (Ubuntu). Desinstalar borra la copia en
+     los dos (`[UninstallDelete]` y `postrm`).
+  6. **La pantalla del central lo dice** (libra-ui ADR-084): la tarjeta del instalador y el alta del nodo.
+- CI (`publicar-instalador.yml`): en Windows, que estén los dos `.lnk` con destino `msedge.exe`, argumentos
+  `--app=http://localhost:<puerto>/` e ícono `producto.ico`, que `acceso.txt`, `instalacion.log` y el log de Inno digan
+  cómo se entra con una IP privada, y que desinstalar los borre. En Ubuntu 22.04/24.04/26.04, que el `.desktop` pase
+  `desktop-file-validate` con su `Exec` y su ícono, que `abrir_producto.sh` llame al navegador con `--app=` (con uno
+  falso adelante en el `PATH`), que la salida de `libraedge-nodo-instalar` y de `instalar-nodo.sh` diga cómo se entra
+  con una IP privada, y que `remove` borre el `.desktop` y la copia del autostart.
+- Consecuencias: lo que el CI no puede ver se prueba en una VM (`PROBAR_EN_VM.md`, V8b; README, sección Linux): cómo se
+  ve la ventana en modo aplicación, el ícono en el escritorio y en el dock, la página final del asistente, y si Edge pide
+  su configuración inicial la primera vez. En Windows, «Abrir» y «Otras cajas» de la bandeja llegan cuando los
+  productos suban el pin de LibraEdge; el acceso directo y el cartel final llegan con el instalador.
+

@@ -31,6 +31,8 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py ejecutar libracore-migrar upgrade --prefijo ventalibra
     python libraedge_instalador.py ejecutar --entorno /etc/libraedge-nodo/nodo.env --como libraedge \\
         libraedge-nodo sincronizar          (Linux, ADR-012)
+    python libraedge_instalador.py acceso --definicion producto.json     (ADR-013: como se entra, con la IP)
+    python libraedge_instalador.py acceso --definicion producto.json --json
 
 En Linux (``instalador/linux/``, ADR-012) lo usa ``instalar.sh`` igual que ``instalar.ps1`` en Windows; lo unico
 que agrega es que ``ejecutar`` cargue el ``nodo.env`` y baje al usuario del servicio **dentro** del proceso: asi
@@ -41,10 +43,12 @@ el entorno, que tiene los secretos, no pasa por ``env VAR=...`` (se veria en ``/
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
@@ -697,6 +701,81 @@ def ejecutar(nombre: str, argumentos: list[str]) -> int:
     return 1
 
 
+# ── como se entra al producto en el local (ADR-013) ────────────────────────
+#
+# En la PC con el nodo se entra SIEMPRE por la copia local, aunque haya internet: el nodo sincroniza por detras. Quien
+# entra por la nube desde el local se queda sin sistema cuando se corta internet (VM, 2026-10-20). El instalador lo
+# dice al terminar y la bandeja lo repite, con la IP de esta PC ya completa para las otras cajas del local.
+
+#: Una direccion publica cualquiera: conectar un socket UDP no manda nada, pero hace que el sistema elija la interfaz
+#: de la ruta por defecto, que es la de la red del local.
+_DESTINO_DE_PRUEBA = ("8.8.8.8", 80)
+
+
+def es_ip_de_la_lan(ip: str) -> bool:
+    """IPv4 privada (10/8, 172.16/12, 192.168/16), sin loopback ni link-local (169.254, una PC sin DHCP)."""
+    try:
+        direccion = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return (direccion.version == 4 and direccion.is_private and not direccion.is_loopback
+            and not direccion.is_link_local and not direccion.is_unspecified)
+
+
+def _ip_de_la_ruta_por_defecto() -> str | None:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(_DESTINO_DE_PRUEBA)
+        return sock.getsockname()[0]
+
+
+def _ips_del_nombre() -> list[str]:
+    return socket.gethostbyname_ex(socket.gethostname())[2]
+
+
+def ip_de_la_lan(ruta_por_defecto: Callable[[], str | None] = _ip_de_la_ruta_por_defecto,
+                 del_nombre: Callable[[], list[str]] = _ips_del_nombre) -> str | None:
+    """La IP privada de esta PC en la red del local, o ``None``.
+
+    Si hay varias, la de la ruta por defecto. Sin ruta por defecto (el local sin router hacia afuera), la primera
+    privada que resuelva el nombre de la PC. Nunca levanta: sin IP, el texto lo dice y el instalador sigue."""
+    for buscar in (lambda: [ruta_por_defecto()], del_nombre):
+        try:
+            candidatas = buscar()
+        except (OSError, UnicodeError):
+            continue
+        for ip in candidatas:
+            if ip and es_ip_de_la_lan(ip):
+                return ip
+    return None
+
+
+def url_local(puerto: int) -> str:
+    """Lo que abre el acceso directo del producto en esta PC."""
+    return f"http://localhost:{puerto}/"
+
+
+def url_de_la_lan(ip: str | None, puerto: int) -> str:
+    """La direccion para las otras cajas del local."""
+    return f"http://{ip}:{puerto}" if ip else f"http://<IP de esta PC>:{puerto}"
+
+
+def acceso(definicion: Definicion, ip: str | None) -> dict:
+    """Como se entra, en datos (``--json``: la bandeja) y en texto (``lineas``: el final de la instalacion).
+
+    El texto va sin acentos, como el resto de los mensajes del instalador: Inno Setup lo lee con la pagina de codigos
+    del sistema."""
+    otras = url_de_la_lan(ip, definicion.puerto)
+    lineas = [
+        "En este local se entra siempre por la copia local, aunque haya internet:",
+        f'  en esta PC, con el acceso directo "{definicion.nombre}" (o {url_local(definicion.puerto)});',
+        f"  desde las otras cajas, con {otras}"
+        + ("" if ip else " (no se encontro la IP de esta PC en la red del local)"),
+    ]
+    lineas.append("La direccion de la nube es para entrar desde afuera del local.")
+    return {"nombre": definicion.nombre, "puerto": definicion.puerto, "ip": ip,
+            "url_local": url_local(definicion.puerto), "url_lan": otras, "lineas": lineas}
+
+
 # ── la linea de comandos ────────────────────────────────────────────────────
 
 
@@ -724,6 +803,9 @@ def _parser() -> argparse.ArgumentParser:
     revisar = sub.add_parser("revisar-entorno", help="lista las variables que faltan en un nodo.env (sin valores)")
     revisar.add_argument("--definicion", required=True)
     revisar.add_argument("--entorno", required=True)
+    entrar = sub.add_parser("acceso", help="como se entra al producto en el local, con la IP de esta PC (ADR-013)")
+    entrar.add_argument("--definicion", required=True)
+    entrar.add_argument("--json", action="store_true", help="en JSON (la bandeja), en vez del texto")
     correr = sub.add_parser("ejecutar", help="corre un console script del Python del nodo")
     correr.add_argument("--entorno", help="nodo.env que se carga en el proceso antes de correr (Linux)")
     correr.add_argument("--como", help="usuario al que se baja despues de leer --entorno (Linux, root)")
@@ -754,6 +836,10 @@ def main(argv: list[str] | None = None) -> int:
         definicion = leer_definicion(args.definicion)
         if args.comando == "plan":
             print(json.dumps(definicion.plan(), ensure_ascii=False))
+            return 0
+        if args.comando == "acceso":
+            datos = acceso(definicion, ip_de_la_lan())
+            print(json.dumps(datos, ensure_ascii=False) if args.json else "\n".join(datos["lineas"]))
             return 0
         if args.comando == "revisar-entorno":
             faltan = revisar_entorno(definicion, leer_entorno(_leer_texto(args.entorno)))
