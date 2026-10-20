@@ -26,9 +26,11 @@ pub struct Producto {
 
 impl Producto {
     pub fn detectar() -> Self {
+        // En Linux se resuelven los enlaces; en Windows no: canonicalize devuelve `\\?\C:\...`, que PowerShell 5.1
+        // no acepta en `-File` (la vinculacion elevada fallaba sin abrir el transcript, CI 2026-10-20).
         let raiz = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.canonicalize().ok())
+            .map(|exe| if cfg!(windows) { exe } else { exe.canonicalize().unwrap_or(exe) })
             .and_then(|exe| exe.parent().and_then(Path::parent).map(Path::to_path_buf));
         let mut producto = Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz };
         if let Some(def) = producto.raiz.as_ref().map(|r| r.join("instalador").join("producto.json")) {
