@@ -15,7 +15,11 @@ BASE="https://$DIRECCION"
 levantar() {
     local producto="$1"
     mkdir -p "$CENTRAL_DIR"
-    nohup uv run --extra server --with trustme python tests/central_de_prueba.py --producto "$producto" \
+    # Un venv propio y el Python directo, no `uv run`: un `uv run` que queda vivo tiene tomado el candado de la cache de
+    # uv y el paso final de setup-uv (`uv cache prune`) espera 300 s y falla.
+    uv venv -q "$RUNNER_TEMP/central-venv"
+    uv pip install -q --python "$RUNNER_TEMP/central-venv/bin/python" ".[server]" trustme
+    nohup "$RUNNER_TEMP/central-venv/bin/python" tests/central_de_prueba.py --producto "$producto" \
         --dir "$CENTRAL_DIR" > "$RUNNER_TEMP/central.log" 2>&1 &
     for _ in $(seq 1 180); do
         [ -f "$CENTRAL_DIR/listo" ] && break

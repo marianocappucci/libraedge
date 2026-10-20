@@ -540,11 +540,16 @@ jobs:
           & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: astral-sh/setup-uv@v6
-      - name: Un central de prueba con https (ADR-014)
+      # En Windows el runner termina los procesos de un paso cuando el paso termina: el central de prueba se levanta en
+      # el MISMO paso que lo usa. Con su venv y su Python, no `uv run` (que dejaria tomada la cache de uv).
+      - name: Instalar con el codigo contra un central de prueba con https (V15, ADR-014)
         run: |
           $c = "$env:RUNNER_TEMP\central"
           New-Item -ItemType Directory -Force $c | Out-Null
-          Start-Process uv -ArgumentList "run", "--extra", "server", "--with", "trustme", "python", "tests/central_de_prueba.py",
+          uv venv -q "$env:RUNNER_TEMP\central-venv"
+          uv pip install -q --python "$env:RUNNER_TEMP\central-venv\Scripts\python.exe" ".[server]" trustme
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo armar el venv del central de prueba" }
+          Start-Process "$env:RUNNER_TEMP\central-venv\Scripts\python.exe" -ArgumentList "tests/central_de_prueba.py",
             "--producto", "${{ matrix.producto }}", "--dir", $c -WindowStyle Hidden `
             -RedirectStandardOutput "$env:RUNNER_TEMP\central.log" -RedirectStandardError "$env:RUNNER_TEMP\central-err.log"
           for ($i = 0; $i -lt 300 -and -not (Test-Path "$c\listo"); $i++) { Start-Sleep 1 }
@@ -552,8 +557,7 @@ jobs:
           # Su autoridad, en el almacen de la maquina: el Python embebido del nodo verifica contra ese almacen.
           certutil -addstore -f Root "$c\ca.pem"
           if ($LASTEXITCODE -ne 0) { throw "No se pudo instalar la autoridad de prueba" }
-      - name: Instalar con el codigo (V15, ADR-014)
-        run: |
+
           $base = "https://localhost:8443"
           $exe = (Get-ChildItem instalador\salida\*.exe).FullName
           $env_ = "$env:ProgramFiles\LibraEdge\nodo.env"
