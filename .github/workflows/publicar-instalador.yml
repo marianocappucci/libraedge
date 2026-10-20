@@ -31,6 +31,14 @@
 # prueba configura y verificar_nodo.sh --sin-central da 0, el respaldo restaura,
 # reinstalar encima conserva SECRET_KEY, desinstalar conserva los datos y ningun
 # secreto queda en los logs.
+#
+# La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de los tres productos
+# en Windows y en Ubuntu 22.04 (la glibc y el WebKitGTK 4.1 mas viejos que se soportan: el mismo binario anda en
+# 24.04 y 26.04), con la compilacion de Rust en cache. Va dentro del .exe y del .deb; se prueba que arranca y
+# carga el producto local (xvfb-run en Ubuntu; en Windows, un arranque cronometrado con el proceso vivo y el
+# "GET /" en el log del producto), que sin vincular muestra «Vincular con el sistema», que vincula con el central
+# de prueba (pkexec / UAC), que vuelve sola si el producto se reinicia, que el acceso directo y el .desktop
+# apuntan a ella y que desinstalar la saca.
 name: Publicar instalador
 
 on:
@@ -43,6 +51,7 @@ on:
     paths:
       - "instalador/**"
       - "libraedge/instalador.py"
+      - "escritorio/**"
       - "libraedge/pantalla_del_central.py"
       - "libraedge/vinculacion.py"
       - "tests/central_de_prueba.py"
@@ -70,6 +79,51 @@ env:
   REF_PRODUCTO: ${{ inputs.ref_producto || 'main' }}
 
 jobs:
+  escritorio:
+    name: app de escritorio en ${{ matrix.so }}
+    runs-on: ${{ matrix.so }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        so: [ubuntu-22.04, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: never
+      # Firma de codigo (ADR-015): con el secreto cargado, armar.py firma cada .exe. Hoy no hay certificado.
+      LIBRAEDGE_FIRMA_CMD: ${{ secrets.LIBRAEDGE_FIRMA_CMD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bibliotecas de WebKitGTK 4.1 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev build-essential pkg-config > /dev/null
+      - name: Rust estable
+        run: rustup toolchain install stable --profile minimal && rustup default stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: escritorio
+          key: ${{ matrix.so }}
+      - name: Pruebas de la app (cargo test)
+        if: runner.os == 'Linux'
+        working-directory: escritorio
+        run: cargo test --locked
+      - name: Compilar la app de los tres productos
+        run: |
+          v=0.0.0
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
+          python escritorio/armar.py --version "$v" --salida _escritorio restolibra ventalibra contalibra
+          ls -l _escritorio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: escritorio-${{ runner.os }}
+          path: _escritorio
+          retention-days: 7
+
   paquete:
     name: paquete ${{ matrix.producto }}
     runs-on: ubuntu-latest
@@ -112,7 +166,7 @@ jobs:
 
   deb:
     name: deb ${{ matrix.producto }}
-    needs: paquete
+    needs: [paquete, escritorio]
     # En 22.04: lo que se compile de fuente queda contra la glibc mas vieja que se soporta.
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -132,11 +186,18 @@ jobs:
         with:
           name: frontend-${{ matrix.producto }}
           path: _frontend
+      - uses: actions/download-artifact@v4
+        with:
+          name: escritorio-Linux
+          path: _escritorio
       - name: Armar el .deb
         run: |
           v=0.0.0
           if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
-          instalador/linux/armar_deb.sh ${{ matrix.producto }} _producto --frontend-dist _frontend --version "$v"
+          instalador/linux/armar_deb.sh ${{ matrix.producto }} _producto --frontend-dist _frontend --version "$v" \
+            --escritorio _escritorio
+          dpkg-deb -c instalador/salida/*.deb | grep -E "opt/libraedge-nodo/escritorio/libraedge-nodo-${{ matrix.producto }}$"
+          dpkg-deb -c instalador/salida/*.deb | grep -q "usr/share/polkit-1/actions/ar.com.librasuite.libraedge-nodo.policy"
       - name: Los scripts del paquete pasan shellcheck
         run: |
           mkdir -p _control && dpkg-deb -e instalador/salida/*.deb _control
@@ -226,6 +287,27 @@ jobs:
           cat "$RUNNER_TEMP/instalar-sin-carga.log"
           [ "$codigo" -ne 0 ] || { echo "Sin carga tenia que salir con algo distinto de 0"; exit 1; }
           test ! -e /etc/libraedge-nodo/nodo.env
+      - name: La app de escritorio sin vincular muestra «Vincular con el sistema» (ADR-015)
+        run: |
+          sudo apt-get install -y -q --no-install-recommends xvfb xauth xdotool dbus > /dev/null
+          app="/opt/libraedge-nodo/escritorio/$PAQUETE"
+          test -x "$app"
+          # Las bibliotecas las trajo el Depends del .deb (con --no-install-recommends).
+          if ldd "$app" | grep -q "not found"; then ldd "$app" | grep "not found"; exit 1; fi
+          "$app" --version | tee /dev/stderr | grep -q "producto ${{ matrix.producto }},"
+          informe="$RUNNER_TEMP/informe-sin-vincular.txt"
+          # En la misma pantalla virtual: arranca, muestra «vincular» y la ventana tiene el WM_CLASS del .desktop
+          # (StartupWMClass), que es lo que agrupa la ventana con el favorito del dock.
+          LIBRAEDGE_ESCRITORIO_INFORME="$informe" APP="$app" timeout 120 xvfb-run -a dbus-run-session -- bash -c '
+            "$APP" > "$RUNNER_TEMP/app-sin-vincular.log" 2>&1 &
+            for _ in $(seq 1 60); do grep -qx "pantalla vincular" "$LIBRAEDGE_ESCRITORIO_INFORME" 2> /dev/null && break; sleep 1; done
+            sleep 2
+            xdotool search --classname "^$(basename "$APP")\$" > "$RUNNER_TEMP/ventanas.txt" || true
+            kill $!' || true
+          cat "$informe" "$RUNNER_TEMP/app-sin-vincular.log" || true
+          grep -qx "pantalla vincular" "$informe" || { echo "La app no mostro «Vincular con el sistema»"; exit 1; }
+          if grep -q "^producto " "$informe"; then echo "sin vincular no tenia que cargar el producto"; exit 1; fi
+          [ -s "$RUNNER_TEMP/ventanas.txt" ] || { echo "No hay ventana con WM_CLASS $PAQUETE"; exit 1; }
       - name: El acceso directo queda fijado en el dock de todos los usuarios (ADR-013)
         run: |
           cat /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
@@ -263,14 +345,17 @@ jobs:
           cat "$desktop"
           desktop-file-validate "$desktop"
           grep -qx "Name=$nombre" "$desktop"
-          grep -qx "Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:$puerto/" "$desktop"
-          icono="$(sed -n 's/^Icon=//p' "$desktop")"
+          # La app de escritorio (ADR-015), con el WM_CLASS del binario; el navegador queda como accion de respaldo.
+          grep -qx "Exec=/opt/libraedge-nodo/escritorio/$PAQUETE" "$desktop"
+          grep -qx "StartupWMClass=$PAQUETE" "$desktop"
+          grep -qx "Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh --navegador http://localhost:$puerto/" "$desktop"
+          icono="$(sed -n 's/^Icon=//p' "$desktop" | head -n1)"
           grep -q "<title>$nombre</title>" "$icono"
-          # El lanzador, con un navegador falso adelante en el PATH (el runner trae Chrome de verdad).
+          # El respaldo, con un navegador falso adelante en el PATH (el runner trae Chrome de verdad).
           mkdir -p "$RUNNER_TEMP/falso"
           printf '#!/bin/sh\necho "$@" > "%s/abierto.txt"\n' "$RUNNER_TEMP" > "$RUNNER_TEMP/falso/google-chrome"
           chmod +x "$RUNNER_TEMP/falso/google-chrome"
-          PATH="$RUNNER_TEMP/falso:$PATH" /opt/libraedge-nodo/bandeja/abrir_producto.sh "http://localhost:$puerto/"
+          PATH="$RUNNER_TEMP/falso:$PATH" /opt/libraedge-nodo/bandeja/abrir_producto.sh --navegador "http://localhost:$puerto/"
           grep -qx -- "--app=http://localhost:$puerto/" "$RUNNER_TEMP/abierto.txt"
           # El final de la instalacion dice como se entra, con la IP privada de esta PC.
           grep -q "se entra siempre por la copia local" "$RUNNER_TEMP/instalar.log"
@@ -283,6 +368,37 @@ jobs:
             sudo journalctl -u libraedge-producto -u libraedge-nodo -n 80 --no-pager
             exit 1
           fi
+      - name: La app abre el producto local y vuelve sola si el producto se reinicia (ADR-015)
+        run: |
+          app="/opt/libraedge-nodo/escritorio/$PAQUETE"
+          puerto="$(jq -r .puerto "instalador/productos/${{ matrix.producto }}.json")"
+          informe="$RUNNER_TEMP/informe.txt"
+          esperar() {  # esperar <patron> <segundos> [<cuantas>]
+            for _ in $(seq 1 "$2"); do
+              n="$(grep -c -- "$1" "$informe" 2> /dev/null)" || n=0
+              [ "$n" -ge "${3:-1}" ] && return 0
+              sleep 1
+            done
+            echo "No aparecio '$1' en el informe:"; cat "$informe"; cat "$RUNNER_TEMP/app.log"; return 1
+          }
+          desde="$(date '+%Y-%m-%d %H:%M:%S')"
+          LIBRAEDGE_ESCRITORIO_INFORME="$informe" nohup xvfb-run -a dbus-run-session -- "$app" > "$RUNNER_TEMP/app.log" 2>&1 &
+          esperar "^producto http://localhost:$puerto/" 90
+          sleep 5
+          cat "$informe"
+          pgrep -f "^$app" > /dev/null || { echo "La app no sigue viva"; cat "$RUNNER_TEMP/app.log"; exit 1; }
+          # El producto vio el pedido de la ventana (no solo el de salud).
+          sudo journalctl -u libraedge-producto --since "$desde" --no-pager > "$RUNNER_TEMP/producto-app.log"
+          grep -E '"GET / HTTP/1\.1" [0-9]{3}' "$RUNNER_TEMP/producto-app.log" \
+            || { echo "El producto no registro el GET / de la app:"; tail -n 30 "$RUNNER_TEMP/producto-app.log"; exit 1; }
+          # Se cae el producto: pantalla de espera propia; vuelve: la app recarga sola.
+          sudo systemctl stop libraedge-producto
+          esperar "^pantalla espera$" 60
+          sleep 5
+          sudo systemctl start libraedge-producto
+          esperar "^producto http://localhost:$puerto/" 120 2
+          cat "$informe"
+          pkill -f "^$app" || true
       - name: El respaldo restaura
         run: |
           sudo systemctl start libraedge-respaldo.service
@@ -326,6 +442,9 @@ jobs:
           sudo apt-get remove -y -q "$PAQUETE"
           test ! -e "/usr/share/applications/$PAQUETE.desktop"
           test ! -e "/etc/xdg/autostart/$PAQUETE.desktop"
+          # La app de escritorio y su accion de polkit (ADR-015).
+          test ! -e /opt/libraedge-nodo/escritorio
+          test ! -e /usr/share/polkit-1/actions/ar.com.librasuite.libraedge-nodo.policy
           # El dock vuelve a los favoritos del sistema.
           test ! -e /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override
           for d in GNOME ubuntu:GNOME; do
@@ -408,6 +527,19 @@ jobs:
           [ "$r" = 2 ] || { echo "Con un codigo usado tenia que salir con 2 y salio con $r"; exit 1; }
           grep -q "no es válido o ya venció" "$RUNNER_TEMP/instalar-codigo-usado.log"
           [ "$(huella_del_secreto)" = "$antes" ]
+
+          # Desde la app (ADR-015): la misma funcion que «Vincular con el sistema», por pkexec y la accion de polkit,
+          # con el codigo por la entrada. Como root, polkit autoriza sin pedir clave (en una PC la pide el agente).
+          sudo apt-get install -y -q --no-install-recommends pkexec > /dev/null 2>&1 \
+            || sudo apt-get install -y -q --no-install-recommends policykit-1 > /dev/null
+          otro3="$(emitir "/$node_id/vinculacion")"
+          codigo3="$(jq -r .codigo <<< "$otro3")"; echo "::add-mask::$codigo3"; echo "$codigo3" >> "$RUNNER_TEMP/codigos.txt"
+          printf '%s\n' "$codigo3" | sudo "/opt/libraedge-nodo/escritorio/$PAQUETE" --vincular --direccion "$DIRECCION" \
+            2>&1 | tee "$RUNNER_TEMP/app-vincular.log"
+          [ "${PIPESTATUS[1]}" = 0 ]
+          secreto_ok "$node_id"
+          [ "$(huella_del_secreto)" != "$antes" ] || { echo "Vincular desde la app no cambio el secreto"; exit 1; }
+          sudo journalctl --since "-5min" --no-pager | grep -E "pkexec.*instalar\.sh" | tail -n 3
           sleep 30
           sudo libraedge-nodo-verificar --sin-central
       - name: Ni el codigo ni el secreto en los logs (ADR-014)
@@ -423,7 +555,7 @@ jobs:
 
   compilar:
     name: compilar y probar ${{ matrix.producto }}
-    needs: paquete
+    needs: [paquete, escritorio]
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
@@ -439,6 +571,23 @@ jobs:
         with:
           name: paquete-${{ matrix.producto }}
           path: instalador/paquete
+      # La app de escritorio (ADR-015): el .iss la toma de paquete\escritorio\<producto>.exe.
+      - uses: actions/download-artifact@v4
+        with:
+          name: escritorio-Windows
+          path: instalador/paquete/escritorio
+      # El runtime de WebView2 que usa la app (Windows 11 y Windows 10 con Edge al dia lo traen).
+      - name: WebView2
+        run: |
+          $id = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $pv = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id" -ErrorAction SilentlyContinue).pv
+          if (-not $pv -or $pv -eq "0.0.0.0") {
+            Write-Host "Instalando el runtime de WebView2..."
+            Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$env:RUNNER_TEMP\wv2.exe"
+            Start-Process "$env:RUNNER_TEMP\wv2.exe" -ArgumentList "/silent", "/install" -Wait
+            $pv = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id").pv
+          }
+          Write-Host "WebView2 $pv"
       - name: Version
         id: version
         run: |
@@ -459,6 +608,27 @@ jobs:
           $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:RUNNER_TEMP\inno-sin-carga.log" -Wait -PassThru
           if ($p.ExitCode -ne 1) { throw "Sin /CARGA tenia que salir con 1 y salio con $($p.ExitCode)" }
           if (Test-Path "$env:ProgramFiles\LibraEdge\nodo.env") { throw "Sin /CARGA no tenia que instalar nada" }
+      - name: Sin vincular, la app muestra «Vincular con el sistema» (V16, ADR-015)
+        run: |
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SINVINCULAR","/LOG=$env:RUNNER_TEMP\inno-sin-vincular.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 40; throw "Con /SINVINCULAR salio con $($p.ExitCode)" }
+          if (Test-Path "$env:ProgramFiles\LibraEdge\nodo.env") { throw "Sin vincular no tenia que configurar el nodo" }
+          if (Get-Service LibraEdgeProducto -ErrorAction SilentlyContinue) { throw "Sin vincular no tenia que registrar servicios" }
+          $nombre = (Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json).nombre
+          $app = "$env:ProgramFiles\LibraEdge\escritorio\$nombre.exe"
+          if (-not (Test-Path $app)) { throw "No se instalo la app: $app" }
+          $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "$nombre.lnk"))
+          if ($lnk.TargetPath -ne $app) { throw "El acceso directo apunta a '$($lnk.TargetPath)' y no a la app" }
+          $informe = "$env:RUNNER_TEMP\informe-sin-vincular.txt"
+          $env:LIBRAEDGE_ESCRITORIO_INFORME = $informe
+          $proc = Start-Process $app -PassThru
+          Remove-Item Env:LIBRAEDGE_ESCRITORIO_INFORME
+          for ($i = 0; $i -lt 60 -and -not ((Test-Path $informe) -and (Select-String -Path $informe -Pattern "^pantalla vincular$" -Quiet)); $i++) { Start-Sleep 1 }
+          if (Test-Path $informe) { Get-Content $informe }
+          if (-not (Select-String -Path $informe -Pattern "^pantalla vincular$" -Quiet)) { throw "La app no mostro Vincular con el sistema" }
+          if ($proc.HasExited) { throw "La app se cerro (codigo $($proc.ExitCode))" }
+          Stop-Process -Id $proc.Id -Force
       - name: Instalar en silencio (V5)
         run: |
           $c = Get-Content instalador\carga-de-prueba.json -Raw | ConvertFrom-Json
@@ -477,15 +647,24 @@ jobs:
           $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
           $esperado = "--app=http://localhost:$($definicion.puerto)/"
           $icono = "$env:ProgramFiles\LibraEdge\producto.ico"
+          $app = "$env:ProgramFiles\LibraEdge\escritorio\$($definicion.nombre).exe"
           if (-not (Test-Path $icono)) { throw "No se instalo $icono" }
           $shell = New-Object -ComObject WScript.Shell
-          foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
-            $ruta = Join-Path ([Environment]::GetFolderPath($carpeta)) "$($definicion.nombre).lnk"
-            if (-not (Test-Path $ruta)) { throw "Falta el acceso directo $ruta" }
-            $lnk = $shell.CreateShortcut($ruta)
-            Write-Host "$ruta -> $($lnk.TargetPath) $($lnk.Arguments) [$($lnk.IconLocation)]"
-            if ((Split-Path $lnk.TargetPath -Leaf) -ne "msedge.exe" -or -not (Test-Path $lnk.TargetPath)) { throw "El destino no es Edge: $($lnk.TargetPath)" }
-            if ($lnk.Arguments -ne $esperado) { throw "Argumentos '$($lnk.Arguments)'; se esperaba '$esperado'" }
+          # "<Producto>": la app de escritorio (ADR-015); "<Producto> (navegador)": Edge en modo aplicacion (ADR-013).
+          $accesos = @(
+            @{ Ruta = Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "$($definicion.nombre).lnk"; App = $true },
+            @{ Ruta = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "$($definicion.nombre).lnk"; App = $true },
+            @{ Ruta = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "$($definicion.nombre) (navegador).lnk"; App = $false })
+          foreach ($a in $accesos) {
+            if (-not (Test-Path $a.Ruta)) { throw "Falta el acceso directo $($a.Ruta)" }
+            $lnk = $shell.CreateShortcut($a.Ruta)
+            Write-Host "$($a.Ruta) -> $($lnk.TargetPath) $($lnk.Arguments) [$($lnk.IconLocation)]"
+            if ($a.App) {
+              if ($lnk.TargetPath -ne $app -or $lnk.Arguments) { throw "El destino no es la app: $($lnk.TargetPath) $($lnk.Arguments)" }
+            } else {
+              if ((Split-Path $lnk.TargetPath -Leaf) -ne "msedge.exe" -or -not (Test-Path $lnk.TargetPath)) { throw "El destino no es Edge: $($lnk.TargetPath)" }
+              if ($lnk.Arguments -ne $esperado) { throw "Argumentos '$($lnk.Arguments)'; se esperaba '$esperado'" }
+            }
             if ($lnk.IconLocation -ne "$icono,0") { throw "Icono '$($lnk.IconLocation)'; se esperaba '$icono,0'" }
           }
           $acceso = Get-Content "$env:ProgramFiles\LibraEdge\instalador\acceso.txt" -Raw
@@ -502,6 +681,41 @@ jobs:
             Get-Content "$env:ProgramFiles\LibraEdge\logs\LibraEdgeProducto.log" -Tail 60 -ErrorAction SilentlyContinue
             exit $LASTEXITCODE
           }
+      - name: La app abre el producto local y vuelve sola si el producto se reinicia (V17, ADR-015)
+        run: |
+          $definicion = Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json
+          $app = "$env:ProgramFiles\LibraEdge\escritorio\$($definicion.nombre).exe"
+          $log = "$env:ProgramFiles\LibraEdge\logs\LibraEdgeProducto.log"
+          $informe = "$env:RUNNER_TEMP\informe.txt"
+          function Esperar($patron, $segundos, $cuantas = 1) {
+            for ($i = 0; $i -lt $segundos; $i++) {
+              if ((Test-Path $informe) -and @(Select-String -Path $informe -Pattern $patron).Count -ge $cuantas) { return }
+              Start-Sleep 1
+            }
+            if (Test-Path $informe) { Get-Content $informe }
+            throw "No aparecio '$patron' en el informe"
+          }
+          $antes = @(Select-String -Path $log -SimpleMatch '"GET / HTTP/1.1"').Count
+          # El arranque cronometrado: el proceso tiene que seguir vivo y haber cargado http://localhost:<puerto>/.
+          $env:LIBRAEDGE_ESCRITORIO_INFORME = $informe
+          $reloj = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process $app -PassThru
+          Remove-Item Env:LIBRAEDGE_ESCRITORIO_INFORME
+          Esperar "^producto http://localhost:$($definicion.puerto)/" 90
+          Write-Host "Cargo el producto en $([int]$reloj.Elapsed.TotalSeconds) s."
+          Start-Sleep 5
+          if ($proc.HasExited) { throw "La app se cerro (codigo $($proc.ExitCode))" }
+          $despues = @(Select-String -Path $log -SimpleMatch '"GET / HTTP/1.1"').Count
+          if ($despues -le $antes) { Get-Content $log -Tail 20; throw "El producto no registro el GET / de la app" }
+          # Se cae el producto: pantalla de espera propia; vuelve: la app recarga sola.
+          Stop-Service LibraEdgeProducto
+          Esperar "^pantalla espera$" 60
+          Start-Sleep 5
+          Start-Service LibraEdgeProducto
+          Esperar "^producto http://localhost:$($definicion.puerto)/" 120 2
+          Get-Content $informe
+          if ($proc.HasExited) { throw "La app se cerro durante el reinicio" }
+          Stop-Process -Id $proc.Id -Force
       - name: Ningun secreto en los logs (V7)
         run: |
           $logs = @(Get-ChildItem "$env:RUNNER_TEMP\*.log").FullName + (Get-ChildItem "$env:ProgramFiles\LibraEdge\logs\*.log").FullName
@@ -521,6 +735,10 @@ jobs:
             $ruta = Join-Path ([Environment]::GetFolderPath($carpeta)) "$nombre.lnk"
             if (Test-Path $ruta) { throw "Desinstalar no borro el acceso directo $ruta" }
           }
+          # La app de escritorio y el respaldo del navegador (ADR-015).
+          if (Test-Path "$env:ProgramFiles\LibraEdge\escritorio") { throw "Desinstalar no saco la app de escritorio" }
+          $respaldo = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "$nombre (navegador).lnk"
+          if (Test-Path $respaldo) { throw "Desinstalar no borro $respaldo" }
           if (@(Get-Service LibraEdge* -ErrorAction SilentlyContinue).Count -ne 0) { throw "Quedaron servicios" }
           $cons = "$env:ProgramData\LibraEdge\conservado.env"
           if (-not (Test-Path $cons)) { throw "No se guardo conservado.env" }
@@ -613,12 +831,32 @@ jobs:
           if ($p.ExitCode -ne 20) { throw "Con un codigo usado tenia que salir con 20 y salio con $($p.ExitCode)" }
           if ((SecretoDelNodo) -ne $antes) { throw "Un codigo usado cambio el nodo.env" }
           if ((Select-String -Path "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -SimpleMatch "no es v").Count -eq 0) { throw "instalacion.log no dice por que" }
+
+          # Desde la app (ADR-015): la misma funcion que "Vincular con el sistema". La app se relanza elevada (UAC; en
+          # el runner no pide nada) y corre instalar.ps1 con el codigo en un archivo del perfil, que se borra.
+          $nombre = (Get-Content "instalador\productos\${{ matrix.producto }}.json" -Raw | ConvertFrom-Json).nombre
+          $app = "$env:ProgramFiles\LibraEdge\escritorio\$nombre.exe"
+          $antes = SecretoDelNodo
+          $tercero = Invoke-RestMethod -Method Post "$base/api/nodos-offline/$($alta.node_id)/vinculacion"
+          Write-Host "::add-mask::$($tercero.codigo)"
+          $tercero.codigo | Out-File -Append -Encoding ascii "$env:RUNNER_TEMP\codigos.txt"
+          $entrada = "$env:RUNNER_TEMP\entrada-app.txt"
+          [IO.File]::WriteAllText($entrada, "$($tercero.codigo)`n")
+          $p = Start-Process $app -ArgumentList "--vincular", "--direccion", "localhost:8443" -RedirectStandardInput $entrada `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\app-vincular.log" -PassThru
+          if (-not $p.WaitForExit(900000)) { Stop-Process -Id $p.Id -Force; throw "Vincular desde la app no termino en 15 minutos" }
+          Remove-Item $entrada
+          Get-Content "$env:RUNNER_TEMP\app-vincular.log"
+          if ($p.ExitCode -ne 0) { Get-Content "$env:ProgramFiles\LibraEdge\logs\instalacion.log" -Tail 60; throw "Vincular desde la app salio con $($p.ExitCode)" }
+          SecretoOk $alta.node_id
+          if ((SecretoDelNodo) -eq $antes) { throw "Vincular desde la app no cambio el secreto" }
+          if (Get-ChildItem $env:TEMP -Filter "libraedge-vinculo-*" -ErrorAction SilentlyContinue) { throw "Quedo el archivo del codigo" }
           Start-Sleep 60
           & "$env:ProgramFiles\LibraEdge\instalador\verificar_nodo.ps1" -SinCentral
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Ni el secreto ni los codigos en los logs (salvo el /LOG del /CODIGO=, que es el riesgo documentado).
           $logs = @(Get-ChildItem "$env:RUNNER_TEMP\*.log").FullName + (Get-ChildItem "$env:ProgramFiles\LibraEdge\logs\*.log").FullName
-          foreach ($buscado in @((SecretoDelNodo), $alta.codigo, $otro.codigo)) {
+          foreach ($buscado in @((SecretoDelNodo), $alta.codigo, $otro.codigo, $tercero.codigo)) {
             $n = (Select-String -Path $logs -SimpleMatch $buscado).Count
             if ($n -ne 0) { throw "Un secreto o un codigo aparece $n veces en los logs" }
           }

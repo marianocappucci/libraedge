@@ -5,6 +5,9 @@
 - `libraedge.ico`: el del instalador y de "Agregar o quitar programas".
 - `iconos/<producto>.ico`, uno por `productos/<producto>.json`: el del acceso directo que abre el producto en modo
   aplicacion (ADR-013). En Linux el `.desktop` usa el SVG de la marca tal cual (`marca/<producto>.svg`).
+- `iconos/<producto>.png` (256 px, la misma entrada PNG del `.ico`): el icono de la ventana de la app de
+  escritorio en Linux (ADR-015; Tauri lo pide en PNG RGBA). Sin Chrome a mano, sale del `.ico` con
+  `python instalador/armar_icono.py --png-desde-ico`.
 
 De 16 a 32 px va la version chica (`marca/<marca>-favicon.svg`): a ese tamano la marca completa se
 empasta. De 40 en adelante, la marca completa (`marca/<marca>.svg`).
@@ -126,6 +129,19 @@ def ico(pngs: dict[int, bytes]) -> bytes:
     return cabecera + entradas + datos
 
 
+def png_de_ico(datos: bytes, lado: int = 256) -> bytes:
+    """La entrada PNG de ese lado de un `.ico` armado por `ico()` (de 64 en adelante van en PNG)."""
+    _, tipo, cantidad = struct.unpack("<HHH", datos[:6])
+    assert tipo == 1, "no es un .ico"
+    for i in range(cantidad):
+        ancho, _, _, _, _, _, largo, desde = struct.unpack("<BBBBHHII", datos[6 + 16 * i : 22 + 16 * i])
+        if (ancho or 256) == lado:
+            png = datos[desde : desde + largo]
+            assert png[:8] == b"\x89PNG\r\n\x1a\n", f"la entrada de {lado} px no es PNG"
+            return png
+    raise ValueError(f"el .ico no tiene una entrada de {lado} px")
+
+
 def productos() -> list[str]:
     return sorted(ruta.stem for ruta in (AQUI / "productos").glob("*.json"))
 
@@ -148,10 +164,18 @@ def armar(chrome: str, marca: str, destino: pathlib.Path) -> int:
         }
     destino.parent.mkdir(exist_ok=True)
     destino.write_bytes(ico(pngs))
+    if marca != "libraedge":
+        destino.with_suffix(".png").write_bytes(pngs[256])
     return len(pngs)
 
 
 def main() -> None:
+    if sys.argv[1:] == ["--png-desde-ico"]:
+        for producto in productos():
+            ruta = AQUI / "iconos" / f"{producto}.ico"
+            ruta.with_suffix(".png").write_bytes(png_de_ico(ruta.read_bytes()))
+            print(f"{ruta.with_suffix('.png').relative_to(AQUI)}: 256 px")
+        return
     chrome = sys.argv[1]
     for marca, destino in destinos().items():
         print(f"{destino.relative_to(AQUI)}: {armar(chrome, marca, destino)} tamaños")

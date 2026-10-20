@@ -6,6 +6,8 @@
 #                                                           primera vez o reinstalar, con el codigo (ADR-014)
 #     sudo libraedge-nodo-instalar /ruta/carga-nodo.json    lo mismo con el archivo de carga (soporte)
 #     sudo libraedge-nodo-instalar                          actualizar/reparar con el nodo.env que ya esta
+#     ... --direccion D --codigo-entrada                    el codigo por la entrada estandar (una linea): asi lo
+#                                                           pasa la app de escritorio por pkexec (ADR-015)
 #
 # La direccion y el codigo los muestra el central (pantalla «Sucursal sin
 # internet», al dar de alta el nodo): el codigo vale 15 minutos y una sola vez, y
@@ -27,7 +29,7 @@ set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/comun.sh"
 
 [ "$(id -u)" = 0 ] || { echo "ERROR: correr como root (sudo libraedge-nodo-instalar ...)." >&2; exit 2; }
-uso="uso: libraedge-nodo-instalar [--codigo CODIGO --direccion DIRECCION | /ruta/carga-nodo.json]"
+uso="uso: libraedge-nodo-instalar [--codigo CODIGO | --codigo-entrada] --direccion DIRECCION | /ruta/carga-nodo.json"
 carga="${LIBRAEDGE_CARGA:-}"
 codigo_vinc="${LIBRAEDGE_CODIGO:-}"
 direccion="${LIBRAEDGE_DIRECCION:-}"
@@ -35,6 +37,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --codigo) [ $# -ge 2 ] || { echo "$uso" >&2; exit 2; }; codigo_vinc="$2"; shift 2 ;;
         --codigo=*) codigo_vinc="${1#--codigo=}"; shift ;;
+        # La app de escritorio lo manda por la entrada (pkexec limpia el entorno y la linea de comandos se ve en /proc).
+        --codigo-entrada) IFS= read -r codigo_vinc || true; shift ;;
         --direccion) [ $# -ge 2 ] || { echo "$uso" >&2; exit 2; }; direccion="$2"; shift 2 ;;
         --direccion=*) direccion="${1#--direccion=}"; shift ;;
         -h | --help) echo "$uso"; exit 0 ;;
@@ -56,6 +60,8 @@ exec > >(tee -a "$LOGS/instalacion.log") 2>&1
 echo
 # Ni el codigo ni el secreto en el log: la direccion y la ruta de la carga, si.
 registrar "== libraedge-nodo-instalar ${carga:+con la carga $carga}${direccion:+con el codigo de vinculacion de $direccion}"
+# pkexec deja el usuario que lo pidio: la app de escritorio de ese usuario (ADR-015).
+if [ -n "${PKEXEC_UID:-}" ]; then registrar "Pedido desde la app de escritorio (usuario $PKEXEC_UID)."; fi
 
 # Hasta tocar la base, un error deja la PC como estaba: los servicios que estaban
 # habilitados se vuelven a arrancar (una carga equivocada no deja el local sin

@@ -382,7 +382,8 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
 
 ## ADR-013 — En el local se entra siempre por la copia local: el acceso directo «<Producto>»
 
-- Estado: aceptada
+- Estado: aceptada; el destino del acceso directo (punto 1) y la espera del punto 8 los reemplaza ADR-015: abre la app
+  de escritorio y el navegador en modo aplicación queda de respaldo
 - Fecha: 2026-10-20
 - Contexto: el humano, probando un nodo de ContaLibra en una VM, entró desde la PC del local a la versión en la nube
   (`demo.contalibra.com.ar`); al cortar internet esa pestaña dejó de andar y tuvo que abrir `localhost:8000` y volver a
@@ -555,3 +556,145 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
 - Consecuencias: los productos montan `create_canje_router` **sin guarda** con su `ip_del_request`, sacan `offline` de su
   catálogo de adicionales, de la siembra de `modulos` y de `medir`, y dejan de pasar `guarda_offline_de_libracore`. La
   pantalla del kit (libra-ui ADR-085) muestra el código; las webs dejan de decir «se contrata por sucursal».
+
+## ADR-015 — La versión de escritorio: una app propia por producto (Tauri 2) en la PC principal
+
+- Estado: aceptada (parte A; la parte B, las cajas secundarias que encuentran la PC principal, va aparte)
+- Fecha: 2026-10-20
+- Contexto: decisiones del humano del 2026-10-20. Comercialmente LibraEdge es la **«versión de escritorio»** de cada
+  producto. Hasta ahora el acceso directo abría `http://localhost:<puerto>/` en Edge `--app` (Windows) o en Chrome,
+  Chromium o Firefox (Ubuntu) (ADR-013), con lo que eso trae: la ventana es del navegador (su error si el servicio se
+  reinicia, su perfil, sus pestañas para los enlaces externos), en Ubuntu sin modo aplicación salvo que haya Chrome, y la
+  vinculación (ADR-014) sólo en el instalador o en una terminal. Se pidió: **una app por producto** («ContaLibra»,
+  «VentaLibra», «RestoLibra»), con un solo código fuente en Tauri 2, sin firma de código por ahora, dentro de los
+  instaladores existentes, con ventana propia, vinculación desde la app, reconexión sola, pantalla completa opcional y la
+  sesión conservada.
+- Qué ya existe (se miró antes de diseñar):
+  - ADR-010 y ADR-012: los instaladores (`nodo.iss` + `instalar.ps1`; `.deb` + `instalar.sh`), con la definición del
+    producto (`instalador/productos/<producto>.json`: nombre, `app_id`, puerto, ruta de salud) que también usa la app.
+  - ADR-013: el acceso directo «<Producto>» (`preparar_nodo.ps1`; `libraedge-nodo-<producto>.desktop` y su favorito en
+    el dock, `dock.sh`), `abrir_producto.sh` (Chrome/Chromium/Edge `--app`, si no `xdg-open`), «Abrir <Producto>» de las
+    dos bandejas (Windows abre el `.lnk` del menú Inicio; Linux, `abrir_producto.sh`), los `.ico` por producto
+    (`armar_icono.py`) y las marcas SVG (`instalador/marca`, copias de libra-ui). El punto 8 decía «esperar a Tauri».
+  - ADR-014: el canje del código (`libraedge_instalador.py canjear`, que lee el código de `LIBRAEDGE_CODIGO` o de
+    `--archivo-codigo`, nunca de un argumento), y los configuradores que ya lo usan como root/Administrador
+    (`instalar.sh --codigo/--direccion`, `instalar.ps1 -Direccion` con el código en el entorno).
+  - En la familia no había app de escritorio: se buscó `tauri`, `electron`, `webview`, `pkexec`, `polkit` y `runas` en
+    libraedge, libracore, libra-ui y los productos; el único lanzador era `abrir_producto.sh`.
+- Decisión:
+  1. **Un solo código, un producto por compilación.** La app vive en `escritorio/` (crate `libraedge-escritorio`, Tauri
+     2.12). `build.rs` toma `LIBRAEDGE_PRODUCTO`, lee **la misma definición del instalador** (nombre, puerto, salud), la
+     marca (`instalador/marca/<producto>.svg`, para las pantallas propias) y los íconos (`instalador/iconos/<producto>.ico`
+     y `.png`, el PNG de 256 px es la entrada PNG del mismo `.ico`), y le pasa a Tauri nombre, versión, iconos e
+     identificador `ar.com.librasuite.<producto>` por `TAURI_CONFIG`. `escritorio/armar.py` compila los tres en el mismo
+     `target/` y verifica con `--version` que cada binario sea su producto. Binarios: Windows
+     `{app}\escritorio\<Producto>.exe` (el ícono del recurso es el del producto: UAC y el Explorador lo muestran);
+     Ubuntu `/opt/libraedge-nodo/escritorio/libraedge-nodo-<producto>`, **el mismo nombre que el `.desktop`**: en
+     Wayland el `app_id` de GTK es el nombre del programa y en X11 el `WM_CLASS` (más `StartupWMClass`), así GNOME
+     agrupa la ventana con el favorito del dock. El puerto y la salud se releen al arrancar de
+     `<raíz>/instalador/producto.json` (la raíz es la carpeta de arriba del ejecutable en los dos sistemas).
+  2. **Ventana propia** (`principal`, maximizada la primera vez) que carga `http://localhost:<puerto>/` (`localhost`, la
+     misma sesión que ADR-013); recuerda tamaño, posición y maximizado (`tauri-plugin-window-state`, sólo la principal);
+     instancia única (`tauri-plugin-single-instance`: el acceso directo con la app abierta la trae al frente); Ctrl +/-
+     para el zoom. El webview guarda su perfil por usuario y producto (WebView2: `%LOCALAPPDATA%\<identificador>`;
+     WebKitGTK: `~/.local/share/<identificador>`, con cookies persistentes en disco).
+  3. **Reconexión sola.** Un hilo pide `GET <salud>` a `127.0.0.1:<puerto>` (HTTP/1.0 a mano, plazo de 3 s) cada 3 s
+     con el producto en pantalla y cada 1,5 s en las pantallas propias. Dos fallos seguidos (~6 s: un corte de un
+     instante no saca al usuario de donde está) muestran la pantalla propia «Conectando con <Producto>…» (a los 45 s
+     agrega qué hacer); cuando responde, vuelve a la URL donde estaba. Nunca se ve el error del navegador.
+  4. **Vincular desde la app.** Si el producto no responde y el nodo no está configurado (no existe `nodo.env`: Linux
+     `/etc/libraedge-nodo/nodo.env`, Windows `<raíz>\nodo.env`; la app sólo mira si está, no lo lee; si no puede saberlo
+     asume que sí), muestra «Vincular con el sistema» (dirección + código, con la misma validación que el `.iss`: el
+     alfabeto de ADR-014 y `[a-z0-9.:/-_]` para la dirección). Configurar el nodo es de root/Administrador y la app corre
+     como el usuario: **no se agrega un servicio ni un canal nuevo; se reusa el configurador del instalador, lanzado con
+     la elevación del sistema**, que pide la clave de un administrador:
+     - **Ubuntu:** `pkexec /opt/libraedge-nodo/instalador/instalar.sh --direccion D --codigo-entrada`, con el código
+       por la **entrada estándar** (opción nueva de `instalar.sh`; pkexec la pasa tal cual y limpia el entorno). Una
+       acción de polkit propia (`ar.com.librasuite.libraedge-nodo.vincular`, `exec.path` = ese script) da el mensaje en
+       castellano y pide `auth_admin_keep` (en una sesión activa, `auth_admin` en las demás). `instalar.sh` anota
+       `PKEXEC_UID`. 126/127 de pkexec se traducen a «No se autorizó»; otro error muestra las últimas líneas del
+       configurador (que no imprime secretos).
+     - **Windows:** la app se relanza a sí misma con el verbo `runas` (`ShellExecuteExW`; UAC muestra el nombre y el
+       ícono del producto) y `--vincular-elevado --direccion D --archivo-codigo P`; esa copia elevada no abre ventana:
+       corre `powershell.exe` (de `GetSystemDirectoryW`) con `instalar.ps1 -Direccion D -ArchivoCodigo P`, sin consola, y
+       sale con su código. UAC no le pasa a la copia elevada ni el entorno ni la entrada, así que **el código viaja en un
+       archivo nuevo de la carpeta temporal del usuario** (su perfil: el usuario, SYSTEM y Administradores, que es
+       quien lo lee; `create_new`), que `instalar.ps1` le pasa al ayudante (`--archivo-codigo`) y borra apenas canjea, y
+       la app borra igual al terminar. Una cancelación de UAC (1223) es «No se autorizó»; un fallo muestra la cola de
+       `logs\instalacion.log` (legible por los usuarios, sin secretos). Al terminar bien abre la bandeja (el `.lnk` del
+       inicio común), que en Linux abre `instalar.sh`.
+     - Por qué así y no un servicio que acepte pedidos por un canal local autenticado: un servicio privilegiado escuchando
+       todo el tiempo es superficie nueva (autenticar al cliente, limitar qué puede pedir) para algo que se hace una vez
+       por PC; la elevación del sistema autentica a un administrador, que es exactamente a quien hay que pedirle permiso
+       para configurar un servicio, y el configurador es el mismo que ya probó el CI con el instalador. Quien lance
+       `--vincular-elevado` o `pkexec instalar.sh` a mano igual necesita la clave de un administrador: no hay escalada.
+     - **El código nunca va en una línea de comandos ni en un log**: por la entrada (pkexec) o por un archivo del perfil
+       (UAC); la dirección sí (no es secreta). `--vincular --direccion D` (el código por la entrada o `LIBRAEDGE_CODIGO`)
+       corre la misma función sin ventana: la usa el CI.
+  5. **Pantalla completa opcional:** F11 la alterna en cualquier página, la del producto incluida, y se guarda en
+     `preferencias.json` (carpeta de configuración del usuario); `--pantalla-completa` / `--ventana` la fijan desde el
+     acceso directo (cajas dedicadas, README). F11 lo escucha un script que la app inyecta en todas las páginas y llama
+     al comando `alternar_pantalla_completa`. **La página del producto sólo puede llamar a ese comando**: su capacidad
+     remota (`http://localhost:<puerto>/*` y `127.0.0.1`) se arma al arrancar con ese único permiso; `estado` y
+     `vincular` son sólo de las pantallas propias (capacidad local). Sin barra de menú: no le suma nada a la ventana del
+     producto.
+  6. **La sesión se conserva entre aperturas.** La cookie de sesión de libraauth no tiene vencimiento (cookie «de
+     sesión»: `session_auth.py` no pone `max_age`), así que el navegador embebido la descarta al cerrarse y había que
+     volver a entrar cada vez. La app guarda las cookies de sesión de `http://localhost:<puerto>/` cada 20 s mientras
+     el producto está en pantalla (`sesion.json`, carpeta de datos del usuario, 0600 en Linux) y las repone antes de la
+     primera carga, con el mismo dominio (cookie del host, no de dominio). El producto sigue mandando: la sesión vence
+     igual por inactividad (8 h) y cerrar sesión la borra (el archivo también). Las cookies con vencimiento y el
+     almacenamiento local ya los guarda el webview.
+  7. **Los enlaces externos van al navegador del sistema** (`tauri-plugin-opener`): toda navegación que no sea el
+     producto local ni las pantallas propias (ARCA, Mercado Pago, ayudas, `mailto:`, `whatsapp:`) se cancela y se abre
+     afuera; `file:` y `javascript:` no se abren. `target=_blank`/`window.open` del producto abren otra ventana de la
+     app con la misma sesión (un comprobante, un reporte); lo externo, el navegador. Las descargas van a la carpeta
+     Descargas y se muestran al terminar.
+  8. **El navegador queda de respaldo.** Si la ventana no se puede crear (falta WebView2 o WebKitGTK), la app abre la
+     copia local en el navegador (Edge `--app`; en Ubuntu `abrir_producto.sh --navegador`). Windows: el acceso directo
+     «<Producto>» apunta a la app sólo si está el runtime de WebView2 (`Test-WebView2`); si no, a Edge `--app` como
+     antes; y el menú Inicio suma «<Producto> (navegador)». Ubuntu: la acción «Abrir en el navegador» del `.desktop`
+     (clic derecho en el dock), y `abrir_producto.sh` sin `--navegador` abre la app si está (la bandeja). Linux: la app
+     apaga el renderizador DMA-BUF de WebKitGTK (`WEBKIT_DISABLE_DMABUF_RENDERER=1`, si no está puesta), que deja la
+     ventana en blanco en máquinas virtuales y con algunos drivers.
+  9. **En los instaladores.** Windows: el `.iss` copia `paquete\escritorio\<producto>.exe` como
+     `{app}\escritorio\<Producto>.exe` (`skipifsourcedoesntexist`: sin la app compila igual y el acceso directo es Edge),
+     el asistente ofrece «Abrir <Producto>» al terminar, una actualización cierra la app de cualquier sesión antes de
+     copiar (como al Python de la bandeja) y desinstalar la cierra (`taskkill`) y la borra con el «(navegador)». Los
+     accesos directos pasan a `Crear-AccesosDelProducto` (`comun.ps1`). **Instalar sin vincular**: en el asistente,
+     sin código ni archivo se pregunta; en silencio, `/SINVINCULAR`; `instalar.ps1 -SinVincular` sólo deja los accesos
+     directos (no toca servicios ni la base) y la app pide la vinculación. Ubuntu: `armar_deb.sh --escritorio DIR` mete
+     el binario y la acción de polkit; el `.desktop` apunta a la app (`Exec`, `StartupWMClass`) y el favorito del dock
+     es el mismo `.desktop`; `Depends` suma `libwebkit2gtk-4.1-0, libgtk-3-0` (en 24.04 y 26.04 lo provee
+     `libgtk-3-0t64`) y `Recommends` `pkexec | policykit-1`. Se compila en `ubuntu-22.04` contra WebKitGTK 4.1 y glibc
+     2.35, y el mismo binario anda en 24.04 y 26.04 (mismos sonames). Sin `--escritorio` el `.deb` sale como antes.
+  10. **Firma de código: preparada, apagada.** `armar.py` firma cada `.exe` si existe `LIBRAEDGE_FIRMA_CMD` (un comando
+      con `{archivo}`, por ejemplo `signtool sign ... {archivo}`), que el CI toma del secreto del mismo nombre; el
+      `.iss` firma instalador y desinstalador con `ISCC /DFirmar "/Sfirma=..."`. Agregarla es cargar el certificado y
+      el secreto, y pasar `/DFirmar` en el paso de ISCC. Mientras tanto, SmartScreen y UAC muestran «Editor
+      desconocido».
+  11. **CI** (`publicar-instalador.yml`): el job `escritorio` compila los tres en `windows-latest` y `ubuntu-22.04`
+      (con `Swatinem/rust-cache`) y corre `cargo test` (navegación, validación del código y la dirección, salud,
+      preferencias y sesión); los `.exe` van al paquete de Inno y los binarios al `.deb`. En Ubuntu 22.04/24.04/26.04,
+      con el `.deb` instalado sin recomendadas: las bibliotecas resuelven (`ldd`), sin vincular la app muestra
+      «vincular» bajo `xvfb-run` y su ventana tiene el `WM_CLASS` del `.desktop` (`xdotool`); configurado, carga el
+      producto (el informe de la app y el `GET /` en el journal del producto), con el producto parado muestra la espera
+      y vuelve sola al arrancarlo; vincula por pkexec contra el central de prueba (secreto verificado, código fuera de
+      los logs); el `.desktop` apunta a la app y `remove` la saca con su acción de polkit. En Windows: `/SINVINCULAR`
+      deja el acceso directo en la app y la app muestra «vincular»; configurado, un arranque cronometrado con el
+      proceso vivo, la carga en el informe y el `GET /` en el log del producto; espera y vuelta tras parar el servicio;
+      vincular desde la app por UAC (en el runner no pide nada) con el secreto verificado y sin el archivo del código;
+      desinstalar saca la app y el «(navegador)». `LIBRAEDGE_ESCRITORIO_INFORME` es el archivo donde la app anota lo
+      que muestra (sin secretos), sólo para esto.
+- Descartadas: un servicio/ayudante privilegiado permanente con un canal local (ver punto 4); poner el código en la
+  línea de comandos de pkexec o de UAC (queda en `/proc` y en el registro de auditoría); una barra de menú (sólo para
+  F11); atajo global de teclado (tomaría F11 en toda la PC); compilar la app en cada versión de Ubuntu (el binario de
+  22.04 sirve en las tres); el bundler de Tauri (los instaladores ya existen y son los que se prueban); cambiar libraauth
+  para que la cookie tenga `max_age` (es del motor y afecta a la web: queda como alternativa para el humano).
+- Consecuencias: la app sale con cada tag dentro de los instaladores; no hay actualización propia (se actualiza con el
+  instalador). El tamaño de los instaladores sube unos MB (README). Lo que el CI no ve —cómo se ve la ventana, el pedido
+  de clave de pkexec/UAC con un usuario real, F11, la sesión al cerrar y abrir, los enlaces externos, el dock y la
+  vinculación contra un central de verdad— se prueba en las VMs (`PROBAR_EN_VM.md`, V16 a V18; README, sección Linux).
+  Lo que pide la parte B: la app de una caja secundaria no tiene nodo (no hay `nodo.env` ni producto local), así que
+  necesitará otra fuente para la URL (la PC principal encontrada en la red) y no debe ofrecer «Vincular»; la pantalla de
+  espera y la reconexión sirven tal cual.

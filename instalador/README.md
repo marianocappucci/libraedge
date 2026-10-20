@@ -49,6 +49,42 @@ Los íconos: `instalador/iconos/<producto>.ico` (Windows) y `instalador/marca/<p
 de libra-ui (`marcas/<producto>.svg` y `-favicon.svg`) con `python instalador/armar_icono.py <chrome>`, que arma también
 `libraedge.ico`. Los `.ico` se commitean.
 
+## La versión de escritorio: la app del producto (ADR-015)
+
+El acceso directo «<Producto>» abre **la app de escritorio del producto** («ContaLibra», «VentaLibra», «RestoLibra»):
+una ventana propia sobre `http://localhost:<puerto>/`, con el nombre y el ícono del producto. Es la «versión de
+escritorio» de las webs. El código está en [`escritorio/`](../escritorio) (Tauri 2), uno solo para los tres productos;
+cada uno se compila aparte con `python escritorio/armar.py <producto>`.
+
+- **Ventana:** se abre maximizada la primera vez y después recuerda tamaño y posición. Abrir el acceso directo con la
+  app abierta la trae al frente (una sola por usuario). Ctrl + y Ctrl − cambian el tamaño del texto.
+- **Si el sistema no responde** (la PC está arrancando, se reinició el servicio): muestra «Conectando con
+  <Producto>…» y vuelve sola, a la misma pantalla, cuando responde.
+- **Vincular con el sistema:** si el nodo se instaló sin vincular, la app pide la dirección y el código de
+  «Sucursal sin internet» y configura el nodo; Windows pide permiso de administrador (UAC) y Ubuntu la clave de un
+  administrador (pkexec). Es el mismo configurador del instalador, y el código no queda en ningún log.
+- **Pantalla completa** (cajas dedicadas): **F11** la prende y la apaga y se recuerda. Para dejarla fija desde el
+  acceso directo: agregar `--pantalla-completa` al destino (Windows: Propiedades del acceso directo; Ubuntu: copiar el
+  `.desktop` a `/etc/xdg/autostart/` o a `~/.local/share/applications/` con `Exec=... --pantalla-completa`);
+  `--ventana` la apaga. Con «abrirlo al iniciar sesión» (arriba), la caja arranca directo en el sistema.
+- **La sesión se conserva** al cerrar y abrir la app (hasta que vence por inactividad o se cierra sesión).
+- **Los enlaces externos** (ARCA, Mercado Pago, las ayudas) se abren en el navegador del sistema; las descargas van a
+  Descargas.
+- **El navegador queda de respaldo:** si la app no puede abrir su ventana, abre la copia local en el navegador. En
+  Windows, además, «<Producto> (navegador)» en el menú Inicio (Edge en modo aplicación), y si la PC no tiene el runtime
+  de WebView2 el acceso directo principal es ése. En Ubuntu, clic derecho en el ícono del dock → «Abrir en el
+  navegador».
+
+Dónde guarda lo suyo (por usuario; desinstalar no lo borra, como el perfil de un navegador): Windows
+`%LOCALAPPDATA%\ar.com.librasuite.<producto>\` (la sesión del webview) y `%APPDATA%\ar.com.librasuite.<producto>\`
+(`preferencias.json`); Ubuntu `~/.local/share/ar.com.librasuite.<producto>/` y `~/.config/ar.com.librasuite.<producto>/`.
+
+**Firma de código:** todavía no hay certificado, así que Windows muestra «Editor desconocido» en SmartScreen y en UAC.
+Queda preparada: con un certificado, se carga el secreto `LIBRAEDGE_FIRMA_CMD` (por ejemplo
+`signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f cert.pfx /p <clave> {archivo}`; `armar.py`
+firma cada `.exe` de la app) y se compila el instalador con `ISCC /DFirmar "/Sfirma=signtool sign ... $f"` (firma el
+instalador y el desinstalador).
+
 Sin Docker Desktop: su licencia para empresas no es gratuita y es una capa más que soportar en la PC de un comercio.
 
 **Un nodo por PC.** Servicios, puerto y carpeta de datos son unos solos: si la PC ya tiene el nodo de otro producto
@@ -56,7 +92,7 @@ Sin Docker Desktop: su licencia para empresas no es gratuita y es una capa más 
 
 | Dónde | Qué | ¿Lo borra desinstalar? |
 |---|---|---|
-| `C:\Program Files\LibraEdge\` | Python, producto, PostgreSQL, scripts, `nodo.env` (ACL: SYSTEM y Administradores), `estado.json`, `logs\` | sí |
+| `C:\Program Files\LibraEdge\` | Python, producto, PostgreSQL, scripts, la app (`escritorio\<Producto>.exe`), `nodo.env` (ACL: SYSTEM y Administradores), `estado.json`, `logs\` | sí |
 | `C:\ProgramData\LibraEdge\datos\` | el clúster de PostgreSQL | **no** |
 | `C:\ProgramData\LibraEdge\postgres.clave` | la clave del superusuario (generada, ACL restringida) | **no**: sin ella los datos no se abren |
 | `C:\ProgramData\LibraEdge\app\` | `DATA_DIR` del producto: `config.json` del emisor, backups, errores (ACL restringida) | **no** |
@@ -133,6 +169,12 @@ Se arma en dos lugares:
 
    Sale en `salida\libraedge-nodo-ventalibra-0.10.0.exe`. `/DVersion` es la del tag de LibraEdge (por defecto la que
    dice el `.iss`). Hace falta la carpeta `libraedge\` del repo al lado de `instalador\`: el ayudante se copia de ahí.
+3. **La app de escritorio (ADR-015)**, en el sistema donde va a correr, con Rust estable (`rustup`):
+   `python escritorio/armar.py ventalibra` deja `escritorio/salida/ventalibra.exe` (Windows) o
+   `escritorio/salida/libraedge-nodo-ventalibra` (Ubuntu; hacen falta `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+   `libsoup-3.0-dev`, `build-essential` y `pkg-config`). Para Windows se copia a `paquete\escritorio\ventalibra.exe`
+   antes de ISCC; para el `.deb`, `armar_deb.sh ... --escritorio escritorio/salida`. Sin la app, los dos instaladores
+   salen igual y el acceso directo abre el navegador. El CI la compila en `windows-latest` y `ubuntu-22.04`.
 
 ## Instalar
 
@@ -362,6 +404,15 @@ Corre en el WSL **sin sudo** (necesita `uv`, `git` con acceso a la familia y `dp
 (`publicar-instalador.yml`) se arma en `ubuntu-22.04` y se instala y verifica en `ubuntu-22.04` y `ubuntu-24.04`.
 
 ### Lo que el CI no puede probar
+
+**La app de escritorio (ADR-015)** en un escritorio de verdad, en VMs con Ubuntu Desktop 22.04, 24.04 y 26.04 (Wayland,
+la sesión por defecto) instalando el `.deb` **sin carga**: que el ícono del dock (el favorito) abra la app y la ventana
+quede agrupada con él (no un segundo ícono genérico), con el ícono y el nombre del producto; «Vincular con el sistema»
+con un código de un `dev.` del producto, con el pedido de clave de pkexec en castellano (y con un usuario que no es
+administrador, que pide la clave de otro); que después cargue el producto y la bandeja aparezca; F11 y que se recuerde;
+cerrar y abrir la app sin volver a loguearse; un enlace a ARCA o a una ayuda que se abra en el navegador; exportar un
+reporte (Descargas); `sudo systemctl restart libraedge-producto` con la app abierta (espera y vuelta); reiniciar la PC
+con la app en el inicio de sesión; y que la ventana no quede en blanco (si pasa en una VM: `WEBKIT_DISABLE_COMPOSITING_MODE=1`).
 
 La bandeja en una sesión gráfica real (los runners no tienen escritorio). Para verla: una VM con Ubuntu Desktop 24.04
 (y otra con 22.04), instalar el `.deb` con la carga de prueba **con las recomendadas**, y mirar que aparezca el círculo

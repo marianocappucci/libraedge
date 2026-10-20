@@ -146,3 +146,89 @@ function Proteger-Carpeta {
         $Ruta, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F")
     if ($codigo -ne 0) { throw "No se pudo restringir el acceso a $Ruta (icacls $codigo)." }
 }
+
+# --- Los accesos directos del producto (ADR-013 y ADR-015) ---------------------------
+# En esta PC se entra SIEMPRE por la copia local, aunque haya internet: el nodo
+# sincroniza por detras. Los crea preparar_nodo.ps1 al configurar y instalar.ps1
+# -SinVincular (para vincular despues desde la app); los borra el desinstalador
+# ([UninstallDelete] del .iss, con los mismos nombres).
+#
+# - "<Producto>" (escritorio publico y menu Inicio comun): la app de escritorio,
+#   {app}\escritorio\<Producto>.exe (ADR-015), si esta y la PC tiene WebView2.
+#   Si no, Edge en modo aplicacion con http://localhost:<puerto>/ como antes
+#   (ADR-013), y sin Edge la URL en el navegador por defecto.
+# - "<Producto> (navegador)" (solo en el menu Inicio, y solo si el principal es la
+#   app): el respaldo, Edge en modo aplicacion, por si la app no arranca.
+
+function Buscar-Edge {
+    # Edge viene con Windows 10 y 11. Primero el registro (App Paths), despues
+    # las rutas conocidas.
+    foreach ($clave in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+                         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe")) {
+        $valor = (Get-ItemProperty -Path $clave -ErrorAction SilentlyContinue).'(default)'
+        if ($valor -and (Test-Path $valor)) { return $valor }
+    }
+    foreach ($ruta in @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+                        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe")) {
+        if ($ruta -and (Test-Path $ruta)) { return $ruta }
+    }
+    return $null
+}
+
+function Test-WebView2 {
+    # El runtime de WebView2 (Evergreen) que usa la app: viene con Windows 11 y con
+    # las actualizaciones de Edge en Windows 10. Instalado para la maquina (HKLM) o
+    # para el usuario (HKCU); "pv" es la version, 0.0.0.0 si se desinstalo.
+    $id = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    foreach ($clave in @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id",
+                         "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id",
+                         "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id")) {
+        $pv = (Get-ItemProperty -Path $clave -ErrorAction SilentlyContinue).pv
+        if ($pv -and $pv -ne "0.0.0.0") { return $true }
+    }
+    return $false
+}
+
+function Crear-AccesosDelProducto {
+    param([Parameter(Mandatory = $true)][string]$RaizNodo, [Parameter(Mandatory = $true)]$Plan)
+
+    $urlLocal = "http://localhost:$($Plan.puerto)/"
+    $app = Join-Path $RaizNodo "escritorio\$($Plan.nombre).exe"
+    $icono = Join-Path $RaizNodo "producto.ico"
+    $edge = Buscar-Edge
+    $conApp = (Test-Path $app) -and (Test-WebView2)
+    if ((Test-Path $app) -and -not $conApp) {
+        Write-Warning "Esta PC no tiene el runtime de WebView2: el acceso directo abre $urlLocal con Edge en lugar de la app."
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    function Guardar-Acceso([string]$Ruta, [bool]$ConLaApp) {
+        $lnk = $shell.CreateShortcut($Ruta)
+        if ($ConLaApp) {
+            $lnk.TargetPath = $app
+            $lnk.Arguments = ""
+            $lnk.WorkingDirectory = Split-Path $app -Parent
+        } elseif ($edge) {
+            $lnk.TargetPath = $edge
+            $lnk.Arguments = "--app=$urlLocal"
+        } else {
+            $lnk.TargetPath = Join-Path $env:SystemRoot "explorer.exe"
+            $lnk.Arguments = $urlLocal
+        }
+        if (Test-Path $icono) { $lnk.IconLocation = "$icono,0" }
+        $lnk.Description = "Abre $($Plan.nombre) desde la copia de este local"
+        $lnk.Save()
+        Write-Host "Acceso directo: $Ruta -> $($lnk.TargetPath) $($lnk.Arguments)"
+    }
+    foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms")) {
+        Guardar-Acceso -Ruta (Join-Path ([Environment]::GetFolderPath($carpeta)) "$($Plan.nombre).lnk") -ConLaApp $conApp
+    }
+    $respaldo = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "$($Plan.nombre) (navegador).lnk"
+    if ($conApp) {
+        Guardar-Acceso -Ruta $respaldo -ConLaApp $false
+    } elseif (Test-Path $respaldo) {
+        Remove-Item $respaldo -Force
+    }
+    if (-not $edge -and -not $conApp) {
+        Write-Warning "No se encontro Edge: el acceso directo abre $urlLocal en el navegador por defecto."
+    }
+}

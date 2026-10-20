@@ -4,9 +4,15 @@ Version=1.0
 Name=@NOMBRE@
 GenericName=Sistema del local
 Comment=Abre @NOMBRE@ desde la copia de este local, aunque haya internet
-Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:@PUERTO@/
+Exec=@EXEC@
 Icon=/opt/libraedge-nodo/marca/@PRODUCTO@.svg
 Terminal=false
 Categories=Office;Finance;
 Keywords=LibraEdge;caja;ventas;
 StartupNotify=true
+StartupWMClass=libraedge-nodo-@PRODUCTO@
+Actions=navegador;
+
+[Desktop Action navegador]
+Name=Abrir en el navegador
+Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh --navegador http://localhost:@PUERTO@/

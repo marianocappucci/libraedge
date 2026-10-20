@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  «Vincular con el sistema» desde la app de escritorio (ADR-015): la app corre como el usuario y
+  configurar el nodo es de root. La app corre pkexec con /opt/libraedge-nodo/instalador/instalar.sh
+  (la direccion como argumento y el codigo por la entrada estandar, nunca en la linea de comandos)
+  y pkexec pide la clave de un administrador con este mensaje. Lo instala el .deb y lo quita dpkg
+  al desinstalar.
+-->
+<policyconfig>
+  <vendor>LibraSuite</vendor>
+  <vendor_url>https://librasuite.com.ar</vendor_url>
+  <action id="ar.com.librasuite.libraedge-nodo.vincular">
+    <description>Vincular esta PC con el sistema (nodo LibraEdge)</description>
+    <message>Para vincular esta PC con el sistema hace falta la clave de un administrador.</message>
+    <icon_name>system-software-install</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/libraedge-nodo/instalador/instalar.sh</annotate>
+  </action>
+</policyconfig>

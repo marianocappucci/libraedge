@@ -665,27 +665,32 @@ def test_el_ayudante_acceso_en_texto_y_en_json(monkeypatch, capsys):
 
 
 def test_los_accesos_directos_de_windows_y_su_desinstalacion():
-    """preparar_nodo.ps1 los crea con "<nombre>.lnk"; el .iss los borra con {#NombreProducto}, que un test ya ata al
-    nombre de cada definicion (test_el_iss_tiene_la_misma_tabla_que_las_definiciones)."""
-    nodo = (CARPETA / "preparar_nodo.ps1").read_text(encoding="utf-8")
-    seccion = nodo[nodo.index("# --- El acceso directo del producto"):]
+    """Los crea Crear-AccesosDelProducto (comun.ps1) con "<nombre>.lnk", desde preparar_nodo.ps1 e instalar.ps1
+    -SinVincular; el .iss los borra con {#NombreProducto}, que un test ya ata al nombre de cada definicion
+    (test_el_iss_tiene_la_misma_tabla_que_las_definiciones). La app de escritorio, en ADR-015."""
+    comun = (CARPETA / "comun.ps1").read_text(encoding="utf-8")
+    seccion = comun[comun.index("function Crear-AccesosDelProducto"):]
     assert 'foreach ($carpeta in @("CommonDesktopDirectory", "CommonPrograms"))' in seccion
-    assert '"$($plan.nombre).lnk"' in seccion
-    assert '$urlLocal = "http://localhost:$($plan.puerto)/"' in seccion
+    assert '"$($Plan.nombre).lnk"' in seccion
+    assert '$urlLocal = "http://localhost:$($Plan.puerto)/"' in seccion
     assert '$lnk.Arguments = "--app=$urlLocal"' in seccion
     # Sin Edge, la URL en el navegador por defecto.
     assert 'Join-Path $env:SystemRoot "explorer.exe"' in seccion and "$lnk.Arguments = $urlLocal" in seccion
-    assert '$lnk.IconLocation = "$iconoProducto,0"' in seccion and '"producto.ico"' in seccion
+    assert '$lnk.IconLocation = "$icono,0"' in seccion and '"producto.ico"' in seccion
     # Edge: el registro primero, despues las rutas conocidas.
-    buscar = seccion[seccion.index("function Buscar-Edge"):seccion.index("$urlLocal =")]
+    buscar = comun[comun.index("function Buscar-Edge"):comun.index("function Test-WebView2")]
     assert buscar.index("App Paths\\msedge.exe") < buscar.index("Edge\\Application\\msedge.exe")
+    nodo = (CARPETA / "preparar_nodo.ps1").read_text(encoding="utf-8")
+    assert "Crear-AccesosDelProducto -RaizNodo $RaizNodo -Plan $plan" in nodo
     # Como se entra: acceso.txt, que lee la pagina final del asistente.
-    assert '"acceso", "--definicion", $definicion' in seccion and '"instalador\\acceso.txt"' in seccion
+    final = nodo[nodo.index("Crear-AccesosDelProducto"):]
+    assert '"acceso", "--definicion", $definicion' in final and '"instalador\\acceso.txt"' in final
 
     iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
     borrar = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
     for carpeta in ("commondesktop", "commonprograms", "commonstartup"):
         assert f'Type: files; Name: "{{{carpeta}}}\\{{#NombreProducto}}.lnk"' in borrar
+    assert 'Type: files; Name: "{commonprograms}\\{#NombreProducto} (navegador).lnk"' in borrar
 
 
 def test_la_pagina_final_y_el_log_dicen_como_se_entra():

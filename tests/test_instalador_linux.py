@@ -453,10 +453,13 @@ def test_el_acceso_directo_del_menu_abre_la_copia_local():
     desktop = _texto(LINUX / "libraedge-nodo-producto.desktop")
     lineas = desktop.splitlines()
     assert lineas[0] == "[Desktop Entry]"
-    for linea in ("Type=Application", "Name=@NOMBRE@", "Terminal=false",
-                  "Exec=/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:@PUERTO@/",
+    for linea in ("Type=Application", "Name=@NOMBRE@", "Terminal=false", "Exec=@EXEC@",
                   "Icon=/opt/libraedge-nodo/marca/@PRODUCTO@.svg", "Categories=Office;Finance;"):
         assert linea in lineas
+    # Exec es la app de escritorio (ADR-015) o, si el .deb se armo sin ella, el navegador: lo decide armar_deb.sh.
+    armar_ = _texto(LINUX / "armar_deb.sh")
+    assert 'exec_acceso="/opt/libraedge-nodo/escritorio/libraedge-nodo-$producto"' in armar_
+    assert 'exec_acceso="/opt/libraedge-nodo/bandeja/abrir_producto.sh http://localhost:$puerto/"' in armar_
     # Se ve en el menu de aplicaciones (no como el autostart de la bandeja).
     assert "NoDisplay=true" not in desktop
     armar = _texto(LINUX / "armar_deb.sh")
@@ -515,7 +518,8 @@ def test_la_bandeja_abre_con_el_mismo_lanzador():
     bandeja.abrir_producto(8000, abrir=abiertos.append)
     assert abiertos == [["/opt/libraedge-nodo/bandeja/abrir_producto.sh", "http://localhost:8000/"]]
     desktop = _texto(LINUX / "libraedge-nodo-producto.desktop")
-    assert f"Exec={bandeja.ABRIR_PRODUCTO} http://localhost:@PUERTO@/" in desktop
+    # El mismo lanzador que la accion «Abrir en el navegador» del acceso directo (sin --navegador abre la app).
+    assert f"Exec={bandeja.ABRIR_PRODUCTO} --navegador http://localhost:@PUERTO@/" in desktop
 
 
 def test_la_bandeja_pregunta_la_direccion_de_las_otras_cajas():

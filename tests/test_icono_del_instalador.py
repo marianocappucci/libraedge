@@ -118,7 +118,9 @@ def test_armar_icono_arma_el_de_libraedge_y_uno_por_producto():
     armar = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(armar)
     assert armar.destinos() == {"libraedge": ICO, **{p: CARPETA / "iconos" / f"{p}.ico" for p in PRODUCTOS}}
-    assert sorted(p.name for p in (CARPETA / "iconos").iterdir()) == [f"{p}.ico" for p in PRODUCTOS]
+    # Y el PNG de 256 px de cada uno, para la ventana de la app de escritorio en Linux (ADR-015).
+    esperados = sorted([f"{p}.ico" for p in PRODUCTOS] + [f"{p}.png" for p in PRODUCTOS])
+    assert sorted(p.name for p in (CARPETA / "iconos").iterdir()) == esperados
 
 
 def test_el_iss_instala_el_ico_del_producto():
