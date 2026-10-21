@@ -58,8 +58,9 @@ if [ -n "$carga" ]; then
 else
     [ -s "$ARCHIVO_ENV" ] || morir "No hay $ARCHIVO_ENV ni carga: falta configurar el nodo con su carga."
     # La actualizacion por apt no vuelve a armar el nodo.env: las variables fijas
-    # nuevas del nodo (LIBRAAUTH_COOKIE_SECURE, ADR-016) se agregan sin tocar lo demas.
-    ayudante completar-entorno --entorno "$ARCHIVO_ENV" \
+    # nuevas del nodo (LIBRAAUTH_COOKIE_SECURE, ADR-016) y las "variables" de la
+    # definicion del producto (LIBRAEDGE_CARGA_INICIAL, ADR-023) se agregan sin tocar lo demas.
+    ayudante completar-entorno --entorno "$ARCHIVO_ENV" --definicion "$DEFINICION" \
         || morir "No se pudo completar $ARCHIVO_ENV. El motivo esta arriba."
 fi
 [ "$(stat -c '%U:%G %a' "$ARCHIVO_ENV")" = "root:root 600" ] || morir "$ARCHIVO_ENV no quedo root:root 600."

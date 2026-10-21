@@ -256,6 +256,17 @@ function Actualizar-NodoVinculado {
     }
     $cantidad = Cargar-EntornoEnProceso -Ruta $ArchivoEnv
     Write-Host "Actualizacion de un nodo vinculado: entorno cargado ($cantidad variables), se migra."
+    # El entorno de los servicios vive en NSSM (el registro), no se relee del nodo.env: sin esto una variable que
+    # `completar-entorno` acaba de agregar (LIBRAEDGE_CARGA_INICIAL, ADR-023) quedaba en el archivo y no llegaba nunca
+    # al servicio. Lo mismo que hace preparar_nodo.ps1 al instalar; los servicios arrancan mas abajo.
+    $nssm = Join-Path $RaizNodo "herramientas\nssm.exe"
+    $pares = @(Get-Content $ArchivoEnv -Encoding UTF8 | Where-Object { $_ -match "=" })
+    foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo")) {
+        if (Get-Service -Name $servicio -ErrorAction SilentlyContinue) {
+            & $nssm set $servicio AppEnvironmentExtra $pares | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo cargar el entorno de $servicio en NSSM." }
+        }
+    }
     Push-Location $RaizNodo
     try {
         foreach ($comando in $Plan.migraciones) {

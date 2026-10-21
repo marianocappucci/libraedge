@@ -143,7 +143,7 @@ desconocida es un error):
 | `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Hoy cuatro cadenas: libracore, libraauth, libracommerce y la del producto |
 | `asgi`, `puerto`, `salud` | `app.asgi:app`, `8000` y `/health` (la salud tiene que devolver un objeto JSON) |
 | `extras` | requisitos de pip que el nodo suma a los del producto: `tzdata` (zoneinfo en Windows no trae la base de zonas) y `pystray`/`Pillow` (bandeja) |
-| `variables` | variables fijas de más para el `nodo.env` (hoy ninguna) |
+| `variables` | variables fijas de más para el `nodo.env`. Hoy `LIBRAEDGE_CARGA_INICIAL` (la carga inicial de existencias, ADR-023). Con la carga **pisan**; al actualizar un nodo ya vinculado (`completar-entorno --definicion`) se agregan sólo si faltan, y en Windows se vuelven a cargar en NSSM |
 | `version_esquema` | `LIBRAEDGE_VERSION_ESQUEMA` (`alembic`) |
 
 La tabla de `nodo.iss` (nombre y `AppId` por producto) tiene que coincidir con los `.json`: lo verifica un test.

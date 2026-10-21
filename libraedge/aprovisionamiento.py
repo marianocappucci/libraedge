@@ -33,6 +33,8 @@ declarativa, ``Aprovisionamiento``:
   sistema e incluido en todos los planes: por defecto no hay guarda (``sin_guarda``).
   ``guarda_offline_de_libracore`` (el adicional ``offline`` de libracore ADR-048)
   queda por compatibilidad, para un producto que todavia la pase;
+- **un chequeo del registro**, opcional (``validar_registro``, v0.20, ADR-023): si la instancia tiene algo que impide
+  vincular un nodo (en la familia, depositos sin sucursal), ``registrar`` se niega con el motivo antes de escribir nada;
 - **el prefijo** de las variables del producto (``RESTOLIBRA`` ->
   ``RESTOLIBRA_DATABASE_URL``, ``RESTOLIBRA_EDGE_NODE_ID``).
 
@@ -77,6 +79,19 @@ class SegundoNodoEnLaSucursal(ErrorDeAprovisionamiento):
 
 class AltaRechazada(ErrorDeAprovisionamiento):
     """La guarda del producto (el adicional ``offline``) no deja dar el alta."""
+
+
+class RegistroConProblemas(ErrorDeAprovisionamiento):
+    """``Aprovisionamiento.validar_registro`` encontro problemas en la instancia: el nodo no se registra (ADR-023).
+
+    ``problemas`` son los textos que devolvio el producto; ``str(exc)`` los junta para quien instala. Las pantallas lo
+    contestan 409: el pedido es valido, es la instancia la que no esta lista."""
+
+    def __init__(self, problemas):
+        self.problemas = tuple(str(p) for p in problemas)
+        super().__init__(
+            "No se puede vincular un nodo todavia: hay que arreglar esto en el sistema.\n\n"
+            + "\n".join(f"- {problema}" for problema in self.problemas))
 
 
 # ── la costura del producto ─────────────────────────────────────────────────
@@ -168,6 +183,14 @@ class Aprovisionamiento:
     ``libraedge_mapeo`` a las tablas de referencia y a las de solo lectura (en el nodo solo la escribe el espejo), y
     ``registrar`` manda la declaracion en la carga (``LIBRAEDGE_ALTAS_EN_NODO``). No hace por si sola que el nodo asigne
     ids provisorios ni suba el alta: eso es del producto (``libracore.altas_en_nodo``).
+
+    ``validar_registro(conn) -> list[str]`` (v0.20, ADR-023) es opcional: los problemas de la instancia que impiden
+    vincular un nodo, uno por texto y escritos para quien instala (en la familia, a partir de
+    ``erp.offline_stock.depositos_sin_sucursal`` de LibraCommerce: un deposito sin sucursal no sabe de que nodo es).
+    Lista vacia (o ``None``): se puede.
+    Con problemas, ``registrar`` levanta :class:`RegistroConProblemas` antes de escribir nada y las pantallas del
+    central contestan 409. LibraEdge no sabe que es un deposito: solo pregunta. Corre en cada registro, tambien en el de
+    una PC que se reemplaza o se reinstala.
     """
 
     prefijo: str
@@ -177,6 +200,7 @@ class Aprovisionamiento:
     conectar: Callable[[], Any] | None = None
     tablas_solo_lectura: Any = ()
     altas_en_nodo: Any = ()
+    validar_registro: Callable[[Any], Iterable[str] | None] | None = None
     tablas: tuple[Tabla, ...] = field(init=False)
     solo_lectura: frozenset[str] = field(init=False)
     altas: tuple[AltaEnNodo, ...] = field(init=False)
@@ -551,6 +575,17 @@ def elegir_sucursal(conn, aprov: Aprovisionamiento, pedida: str | None, *,
     return coinciden[0]
 
 
+def verificar_registro(conn, aprov: Aprovisionamiento) -> None:
+    """Le pregunta al producto si la instancia esta lista para vincular un nodo (``validar_registro``, ADR-023).
+
+    Levanta :class:`RegistroConProblemas` con lo que el producto devuelva. Sin costura, no hace nada."""
+    if aprov.validar_registro is None:
+        return
+    problemas = [str(p).strip() for p in (aprov.validar_registro(conn) or ()) if p is not None and str(p).strip()]
+    if problemas:
+        raise RegistroConProblemas(problemas)
+
+
 def rechazar_segundo_nodo(conn, node_id: str, branch_id: str, nombre: str | None = None) -> None:
     """🔴 Una sucursal tiene UN nodo; los demas POS son terminales suyas.
 
@@ -666,7 +701,8 @@ def registrar(conn, aprov: Aprovisionamiento, node_id: str, sucursal: str | None
     """Da de alta el nodo y devuelve su secreto, **que no se puede recuperar despues**.
 
     Orden: la sucursal (existente y activa), la guarda del segundo nodo (la mas
-    especifica), la del adicional, el prefijo de numeracion y recien ahi se escribe. La guarda del
+    especifica), la del adicional, el chequeo del producto (``validar_registro``, ADR-023), el prefijo de numeracion y
+    recien ahi se escribe. La guarda del
     adicional solo frena ALTAS: un nodo ya registrado sigue sincronizando
     aunque se de de baja el adicional, porque tiene ventas sin subir.
     """
@@ -676,6 +712,7 @@ def registrar(conn, aprov: Aprovisionamiento, node_id: str, sucursal: str | None
     elegida = elegir_sucursal(conn, aprov, sucursal, interactivo=interactivo, entrada=entrada, salida=salida)
     rechazar_segundo_nodo(conn, node_id, elegida.id, elegida.nombre)
     aprov.verificar_alta(conn, node_id, elegida.id)
+    verificar_registro(conn, aprov)
     prefijo = asignar_prefijo(conn, node_id, elegida.id)
     espejo = espejo_del_nodo(conn, aprov)
     if aprov.altas:

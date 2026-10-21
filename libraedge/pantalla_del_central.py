@@ -294,6 +294,8 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
             return _error(403, "alta_rechazada", str(exc))
         if isinstance(exc, ap.SegundoNodoEnLaSucursal):
             return _error(409, "sucursal_con_nodo", str(exc))
+        if isinstance(exc, ap.RegistroConProblemas):
+            return _error(409, "registro_con_problemas", str(exc))
         if isinstance(exc, ap.SucursalInvalida):
             return _error(422, "sucursal_invalida", str(exc))
         return _error(422, "no_se_puede", str(exc))
@@ -419,6 +421,11 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
         url, _ = _preparar(request)
         with abrir_conexion() as conn:
             fila = _nodo_activo(conn, node_id)
+            try:
+                # Mismo chequeo que el alta: un codigo que el canje va a rechazar no se emite (ADR-023).
+                ap.verificar_registro(conn, aprov)
+            except ap.ErrorDeAprovisionamiento as exc:
+                raise _como_http(exc) from None
             _publicar(conn)
             sucursal = next((s for s in ap.listar_sucursales(conn, aprov) if s.id == str(fila[0])), None)
             return _responder_codigo(conn, node_id, sucursal, fila[2], url)
@@ -473,6 +480,15 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
         return {"node_id": node_id, "ya_estaba": ya_estaba}
 
     return router
+
+
+def _status_de_registro(exc: Exception) -> tuple[int, str]:
+    """El status y el ``codigo`` del canje cuando ``registrar`` se niega."""
+    if isinstance(exc, ap.AltaRechazada):
+        return 403, "alta_rechazada"
+    if isinstance(exc, ap.RegistroConProblemas):
+        return 409, "registro_con_problemas"
+    return 422, "no_se_puede"
 
 
 def _error_http(HTTPException):
@@ -597,7 +613,7 @@ def create_canje_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
                 alta = ap.registrar(conn, aprov, node_id, str(fila[0]), salida=lambda _: None)
             except ap.ErrorDeAprovisionamiento as exc:
                 conn.rollback()
-                status, codigo = (403, "alta_rechazada") if isinstance(exc, ap.AltaRechazada) else (422, "no_se_puede")
+                status, codigo = _status_de_registro(exc)
                 raise _error(status, codigo, str(exc)) from None
         carga = _carga_de(alta, url, emisor, producto, _error)
         logger.info("Código de vinculación canjeado: nodo %s (ip %s).", node_id, ip)

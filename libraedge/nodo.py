@@ -30,6 +30,12 @@ existe en ningun otro lado**; los datos de referencia que el central tiene para
 darle existen igual si el ciclo se corta a la mitad. Subir primero achica la
 ventana en la que un dato irremplazable vive en un solo disco.
 
+## La carga inicial de existencias va al final
+
+Un paso aparte, **despues** de la bajada y solo si esa bajada termino (ADR-023): trae del central las existencias de la
+sucursal una sola vez por nodo, con la funcion que el producto declara. Su resultado va a `EstadoNodo.carga_inicial` y
+**no** toca `en_linea`: que la carga inicial espere o falle no es estar fuera de linea, y no puede frenar las ventas.
+
 ## El nodo no se cae porque se caiga internet
 
 Es la razon de existir de todo esto. `sincronizar()` **nunca propaga** un error
@@ -61,6 +67,9 @@ class EstadoNodo:
     ultimo_error: str | None = None
     operaciones_subidas: int = 0
     cambios_bajados: int = 0
+    #: La carga inicial de existencias (ADR-023): `None` si esta hecha o el producto no tiene; si no, `esperando: ...`
+    #: o `error: ...`. Aparte de `ultimo_error`, que es de la sincronizacion y la que decide `en_linea`.
+    carga_inicial: str | None = None
 
     def como_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2, sort_keys=True)
@@ -116,11 +125,13 @@ class Nodo:
     """
 
     def __init__(self, repository, node_id: str, outbox_worker=None,
-                 pull_worker=None, ruta_estado: str | None = None):
+                 pull_worker=None, ruta_estado: str | None = None, carga_inicial_worker=None):
         self.repository = repository
         self.node_id = node_id
         self.outbox_worker = outbox_worker
         self.pull_worker = pull_worker
+        #: `libraedge.sync.carga_inicial.CargaInicialWorker`, o `None` si el producto no declara carga inicial.
+        self.carga_inicial_worker = carga_inicial_worker
         self.ruta_estado = ruta_estado
         self._ultima_ok: str | None = None
 
@@ -136,6 +147,7 @@ class Nodo:
         subidas = 0
         bajados = 0
         error: str | None = None
+        carga_inicial: str | None = None
 
         # 🔴 La fila propia del nodo, antes de tocar el cursor. Es idempotente y
         # va en cada ciclo a propósito: si falta, `set_server_cursor` hace un
@@ -162,6 +174,13 @@ class Nodo:
         except Exception as excepcion:  # noqa: BLE001 - ver el docstring del modulo
             error = f"{type(excepcion).__name__}: {excepcion}"
 
+        # La carga inicial de existencias (ADR-023), recien despues de la bajada y solo si esa bajada llego al final: la
+        # funcion del producto lee del espejo (depositos, sucursal) y una tanda llena (`bajados == limite`) puede dejar
+        # filas por bajar. Sin central (`error`) tampoco: lo que tiene que traer esta ahi. `run_once` no levanta, y lo
+        # suyo no entra en `error`: no es una falla de transporte.
+        if self.carga_inicial_worker is not None and error is None:
+            carga_inicial = self.carga_inicial_worker.run_once(bajada_completa=bajados < limite).para_el_estado()
+
         # Hubo un `fallo_al_subir` aparte de `error` hasta que la matriz de
         # mutaciones mostro que sacarlo dejaba la suite verde: `error` ya queda
         # seteado en la misma rama, asi que era una segunda condicion que no
@@ -180,6 +199,7 @@ class Nodo:
             ultimo_error=error,
             operaciones_subidas=subidas,
             cambios_bajados=bajados,
+            carga_inicial=carga_inicial,
         )
         if self.ruta_estado:
             escribir_estado(self.ruta_estado, estado)

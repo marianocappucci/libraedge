@@ -63,11 +63,13 @@ if ($SinVincular) {
             -Definicion (Join-Path $RaizNodo "instalador\producto.json")
         Write-Host "== Nodo LibraEdge de $($plan.nombre), sin vincular"
         # Si es una actualizacion de un nodo ya vinculado, el nodo.env no se vuelve a armar: se le agregan las
-        # variables fijas nuevas (LIBRAAUTH_COOKIE_SECURE, ADR-016) sin tocar lo demas ni su ACL.
+        # variables fijas nuevas (LIBRAAUTH_COOKIE_SECURE, ADR-016) y las "variables" de la definicion del producto
+        # (LIBRAEDGE_CARGA_INICIAL, ADR-023) sin tocar lo demas ni su ACL.
         $archivoEnv = Join-Path $RaizNodo "nodo.env"
         if (Test-Path $archivoEnv) {
             $codigo = Invocar -Programa (Join-Path $RaizNodo "python\python.exe") -Argumentos @(
-                (Join-Path $RaizNodo "instalador\libraedge_instalador.py"), "completar-entorno", "--entorno", $archivoEnv)
+                (Join-Path $RaizNodo "instalador\libraedge_instalador.py"), "completar-entorno", "--entorno", $archivoEnv,
+                "--definicion", (Join-Path $RaizNodo "instalador\producto.json"))
             if ($codigo -ne 0) { throw "No se pudo completar $archivoEnv (codigo $codigo)." }
             # Y el .iss paro los servicios para copiar los archivos nuevos (PrepareToInstall): sin esto el local
             # quedaba sin sistema hasta reiniciar la PC. Se migra (el producto nuevo puede traer migraciones) y se

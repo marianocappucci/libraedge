@@ -30,7 +30,8 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py entorno ... --previo /var/lib/libraedge-nodo/conservado.env   (Linux)
     python libraedge_instalador.py config-emisor --carga ... --config RUTA\\config.json
     python libraedge_instalador.py revisar-entorno --definicion ... --entorno nodo.env
-    python libraedge_instalador.py completar-entorno --entorno nodo.env   (sin carga: variables fijas, ADR-016)
+    python libraedge_instalador.py completar-entorno --entorno nodo.env [--definicion producto.json]
+        (sin carga: variables fijas, ADR-016, y las `variables` del producto, ADR-023)
     python libraedge_instalador.py ejecutar libracore-migrar upgrade --prefijo ventalibra
     python libraedge_instalador.py ejecutar --entorno /etc/libraedge-nodo/nodo.env --como libraedge \\
         libraedge-nodo sincronizar          (Linux, ADR-012)
@@ -301,6 +302,9 @@ def definicion_desde_dict(datos: Mapping, donde: str = "definicion") -> Definici
     if not isinstance(variables, Mapping) or not all(
             isinstance(k, str) and _VARIABLE.match(k) and isinstance(v, str) for k, v in variables.items()):
         raise ErrorDeInstalacion(f"{donde}: 'variables' es un objeto VARIABLE -> texto.")
+    if "LIBRAEDGE_CARGA_INICIAL" in variables and not _ASGI.match(variables["LIBRAEDGE_CARGA_INICIAL"]):
+        raise ErrorDeInstalacion(f"{donde}: 'LIBRAEDGE_CARGA_INICIAL' es 'modulo:funcion' (la del producto que trae las"
+                                 " existencias de la sucursal).")
     version_esquema = datos.get("version_esquema", "alembic")
     if not isinstance(version_esquema, str) or not version_esquema.strip():
         raise ErrorDeInstalacion(f"{donde}: 'version_esquema' es 'alembic', 'ninguna' o 'modulo:funcion'.")
@@ -674,21 +678,29 @@ def revisar_entorno(definicion: Definicion, entorno: Mapping[str, str]) -> list[
     return [nombre for nombre in _variables_generadas(definicion) if not (entorno.get(nombre) or "").strip()]
 
 
-def completar_entorno(texto: str) -> tuple[str, list[str]]:
+def completar_entorno(texto: str, definicion: Definicion | None = None) -> tuple[str, list[str]]:
     """Agrega al ``nodo.env`` las :data:`VARIABLES_FIJAS_DEL_NODO` que no tenga, sin tocar lo demas.
 
     Es para el nodo que se actualiza **sin** la carga (``apt`` en Linux, o el instalador de Windows sin vincular sobre
     un nodo ya vinculado): ahi el ``nodo.env`` no se vuelve a armar y una variable fija nueva no llegaria nunca. Una
-    variable que ya esta, con cualquier valor, se respeta. Devuelve el texto nuevo y los nombres agregados."""
+    variable que ya esta, con cualquier valor, se respeta. Devuelve el texto nuevo y los nombres agregados.
+
+    Con la ``definicion`` del producto (v0.20, ADR-023) tambien agrega sus ``variables`` que falten: asi una variable
+    nueva del producto (``LIBRAEDGE_CARGA_INICIAL``) llega a los nodos ya instalados con solo actualizar, sin volver a
+    vincular. Con la carga el valor de la definicion **pisa** (``armar_entorno``); aca se respeta el que ya estaba,
+    para no deshacer lo que soporte haya tocado a mano en un nodo."""
     presentes = leer_entorno(texto)
-    faltan = [nombre for nombre in VARIABLES_FIJAS_DEL_NODO if nombre not in presentes]
+    por_agregar = dict(VARIABLES_FIJAS_DEL_NODO)
+    if definicion is not None:
+        por_agregar.update(definicion.variables)
+    faltan = {nombre: valor for nombre, valor in por_agregar.items() if nombre not in presentes}
     if not faltan:
         return texto, []
     nuevo = texto.lstrip("\ufeff")
     if nuevo and not nuevo.endswith("\n"):
         nuevo += "\n"
-    nuevo += formatear_entorno({nombre: VARIABLES_FIJAS_DEL_NODO[nombre] for nombre in faltan})
-    return nuevo, faltan
+    nuevo += formatear_entorno(faltan)
+    return nuevo, list(faltan)
 
 
 def escribir_en_archivo_protegido(ruta: str, contenido: str) -> None:
@@ -1174,8 +1186,10 @@ def _parser() -> argparse.ArgumentParser:
     config.add_argument("--carga", required=True)
     config.add_argument("--config", required=True)
     completar = sub.add_parser("completar-entorno",
-                               help="agrega a un nodo.env existente las variables fijas que le falten (ADR-016)")
+                               help="agrega a un nodo.env existente las variables fijas que le falten (ADR-016) y,"
+                                    " con --definicion, las del producto (ADR-023)")
     completar.add_argument("--entorno", required=True)
+    completar.add_argument("--definicion", help="el producto.json: sus `variables` tambien se agregan si faltan")
     revisar = sub.add_parser("revisar-entorno", help="lista las variables que faltan en un nodo.env (sin valores)")
     revisar.add_argument("--definicion", required=True)
     revisar.add_argument("--entorno", required=True)
@@ -1221,7 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.comando == "completar-entorno":
             if not os.path.isfile(args.entorno):
                 raise ErrorDeInstalacion(f"No esta el archivo de entorno: {args.entorno}")
-            texto, agregadas = completar_entorno(_leer_texto(args.entorno))
+            texto, agregadas = completar_entorno(
+                _leer_texto(args.entorno), leer_definicion(args.definicion) if args.definicion else None)
             if agregadas:
                 escribir_en_archivo_protegido(args.entorno, texto)
             detalle = f" ({', '.join(agregadas)})." if agregadas else "."
