@@ -28,7 +28,7 @@
 
 **Abrir <Producto>** (ADR-013) abre el mismo acceso directo del menu Inicio que deja el instalador: el producto en
 modo aplicacion de Edge, desde la copia local. Es la accion por defecto (clic en el icono). Otra linea del menu dice
-la direccion para las otras cajas del local, con la IP de esta PC, y al hacer clic la copia.
+la direccion para los otros puestos del local, con la IP de esta PC, y al hacer clic la copia.
 
 Depende de `pystray` y `Pillow`, que están en el extra `bandeja` — no en las
 dependencias normales: el nodo tiene que poder correr como servicio en una PC sin
@@ -45,7 +45,7 @@ from datetime import UTC, datetime, timezone
 from libraedge.bandeja import (
     Severidad,
     acceso_directo_de_windows,
-    etiqueta_otras_cajas,
+    etiqueta_otros_puestos,
     producto_del_nodo,
     resumen_para_la_bandeja,
 )
@@ -133,12 +133,12 @@ def correr(ruta_estado: str, intervalo_segundos: int = 60,
         nombre, puerto = producto
         acceso = acceso_directo_de_windows(nombre, os.environ.get("ProgramData"))
 
-        def _otras_cajas() -> str:
+        def _otros_puestos() -> str:
             return url_de_la_lan(ip_de_la_lan(), puerto)
 
         items += [
             pystray.MenuItem(f"Abrir {nombre}", lambda: abrir_producto(acceso, url_local(puerto)), default=True),
-            pystray.MenuItem(lambda _: etiqueta_otras_cajas(_otras_cajas()), lambda: copiar(_otras_cajas())),
+            pystray.MenuItem(lambda _: etiqueta_otros_puestos(_otros_puestos()), lambda: copiar(_otros_puestos())),
         ]
     items.append(pystray.MenuItem("Salir", lambda: icono.stop()))
 
@@ -154,7 +154,7 @@ def correr(ruta_estado: str, intervalo_segundos: int = 60,
             icono.icon = _icono(actual.severidad)
             # El tooltip es lo que el operador lee: ahí va el detalle completo.
             icono.title = actual.texto
-            # Los textos del menu (el estado, la IP de las otras cajas) se evaluan al rearmarlo.
+            # Los textos del menu (el estado, la IP de los otros puestos) se evaluan al rearmarlo.
             icono.update_menu()
             time.sleep(refresco_segundos)
 

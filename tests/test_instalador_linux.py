@@ -271,7 +271,8 @@ def test_shellcheck():
 
 def test_estan_las_unidades():
     assert [u.name for u in UNIDADES] == [
-        "libraedge-estado.path", "libraedge-estado.service", "libraedge-nodo.service", "libraedge-producto.service",
+        "libraedge-descubrimiento.service", "libraedge-estado.path", "libraedge-estado.service",
+        "libraedge-nodo.service", "libraedge-producto.service",
         "libraedge-respaldo.service", "libraedge-respaldo.timer"]
 
 
@@ -441,8 +442,9 @@ def test_instalar_nodo_sale_con_error(argumentos, codigo):
 
 def test_el_release_publica_el_script_y_su_suma():
     workflow = _texto(RAIZ / ".github" / "workflows" / "publicar-instalador.yml")
-    assert "sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb instalar-nodo.sh > SHA256SUMS.txt" in workflow
-    assert "libraedge-nodo-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
+    assert ("sha256sum libraedge-nodo-*.exe libraedge-nodo-*.deb libraedge-puesto-*.exe libraedge-puesto-*.deb"
+            " instalar-nodo.sh > SHA256SUMS.txt") in workflow
+    assert "libraedge-puesto-*.deb instalar-nodo.sh SHA256SUMS.txt" in workflow
     assert "probar-instalar-nodo" in workflow and "LIBRAEDGE_DEB_DIR" in workflow
 
 
@@ -522,7 +524,7 @@ def test_la_bandeja_abre_con_el_mismo_lanzador():
     assert f"Exec={bandeja.ABRIR_PRODUCTO} --navegador http://localhost:@PUERTO@/" in desktop
 
 
-def test_la_bandeja_pregunta_la_direccion_de_las_otras_cajas():
+def test_la_bandeja_pregunta_la_direccion_de_las_otros_puestos():
     bandeja = _bandeja()
     vistos = []
 
@@ -533,21 +535,22 @@ def test_la_bandeja_pregunta_la_direccion_de_las_otras_cajas():
         vistos.append(comando)
         return Resultado()
 
-    assert bandeja.otras_cajas(8000, correr=correr) == "http://192.168.1.20:8000"
+    assert bandeja.otros_puestos(8000, correr=correr) == "http://192.168.1.20:8000"
     assert vistos[0] == ["/opt/libraedge-nodo/python/bin/python3", "-I", "-B",
                          "/opt/libraedge-nodo/instalador/libraedge_instalador.py", "acceso", "--definicion",
                          "/opt/libraedge-nodo/instalador/producto.json", "--json"]
-    assert bandeja.etiqueta_otras_cajas("http://192.168.1.20:8000") == "Otras cajas: http://192.168.1.20:8000 (copiar)"
+    etiqueta = bandeja.etiqueta_otros_puestos("http://192.168.1.20:8000")
+    assert etiqueta == "Otros puestos: http://192.168.1.20:8000 (copiar)"
 
     class Roto:
         stdout = "Traceback..."
 
-    assert bandeja.otras_cajas(8000, correr=lambda *_, **__: Roto()) == "http://<IP de esta PC>:8000"
+    assert bandeja.otros_puestos(8000, correr=lambda *_, **__: Roto()) == "http://<IP de esta PC>:8000"
 
     def falla(*_, **__):
         raise FileNotFoundError("python3")
 
-    assert bandeja.otras_cajas(8000, correr=falla) == "http://<IP de esta PC>:8000"
+    assert bandeja.otros_puestos(8000, correr=falla) == "http://<IP de esta PC>:8000"
 
 
 # ── el acceso directo fijado en el dock de todos los usuarios (ADR-013) ─────

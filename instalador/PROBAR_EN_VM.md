@@ -158,14 +158,14 @@ ps_vm 'Get-Content C:\ProgramData\LibraEdge\app\config.json; (Get-Acl "C:\Progra
 `/VERYSILENT`), la página final dice «En este local se entra siempre por la copia local…» con la IP de la VM; en el
 escritorio y en el menú Inicio está «VentaLibra» con la marca naranja; al abrirlo, Edge muestra **una ventana sin barra
 de direcciones** con el título y el ícono del producto (anotar si la primera vez Edge pide su configuración inicial);
-en la bandeja, el clic abre lo mismo y «Otras cajas: http://<IP>:8000 (copiar)» deja la dirección en el portapapeles.
+en la bandeja, el clic abre lo mismo y «Otros puestos: http://<IP>:8000 (copiar)» deja la dirección en el portapapeles.
 La bandeja nueva llega con el pin de LibraEdge del producto (ADR-013): con una versión anterior no tiene esas líneas.
 
 ```bash
 ps_vm '$s = New-Object -ComObject WScript.Shell; foreach ($c in "CommonDesktopDirectory","CommonPrograms") { $l = $s.CreateShortcut((Join-Path ([Environment]::GetFolderPath($c)) "VentaLibra.lnk")); "$($l.TargetPath) $($l.Arguments) [$($l.IconLocation)]" }; Get-Content "C:\Program Files\LibraEdge\instalador\acceso.txt"'
 ```
 
-**V9. El producto desde «otra caja».** Desde el WSL, con el puerto reenviado o la VM en red puente:
+**V9. El producto desde «otro puesto».** Desde el WSL, con el puerto reenviado o la VM en red puente:
 `curl -s http://<ip-de-la-vm>:8000/health` tiene que devolver un objeto JSON. Si la red de la VM quedó como
 **Pública**, la regla de firewall no aplica (sólo Privado y Dominio): `ps_vm 'Get-NetConnectionProfile'`.
 
@@ -239,12 +239,37 @@ Edge en modo aplicación.
 «Abrirlo al iniciar sesión»), reiniciar. Esperado: la app arranca antes que el servicio, muestra la espera y entra sola
 cuando el producto responde, sin error del navegador.
 
-**V19. Entrar por http, en la app y desde otra caja (ADR-016).** Con el nodo configurado y un producto con libraauth
+**V19. Entrar por http, en la app y desde otro puesto (ADR-016).** Con el nodo configurado y un producto con libraauth
 v0.53.0 o más: en la PC, entrar con un usuario en la app «VentaLibra» y navegar (no tiene que volver al login); desde
 otra máquina de la red, entrar por `http://<IP>:8000` (la de `acceso.txt`) con Chrome o Firefox. Esperado: las dos
 sesiones andan y en las herramientas del navegador la cookie de sesión **no** tiene la marca `Secure`. En Ubuntu, lo
 mismo con la app sobre WebKitGTK (es donde se vio el 401). Con un producto con libraauth anterior, la app de Windows
-entra (WebView2 exceptúa `localhost`) y la otra caja no: es lo esperado hasta que suba el pin.
+entra (WebView2 exceptúa `localhost`) y la otro puesto no: es lo esperado hasta que suba el pin.
+
+**V20. Los otros puestos (ADR-017): la VM Windows como puesto y la Ubuntu como PC principal.** En la VM Ubuntu Desktop
+instalar el nodo con un código de un `dev.` (o la carga de prueba) y con **ufw activo**; en la VM Windows (sin el nodo:
+restaurada) instalar `libraedge-puesto-<producto>.exe` con el asistente. Las dos VMs en la **misma red puenteada o
+interna** (no NAT separadas: el broadcast no cruza). Esperado: el asistente deja «<Producto>» en el escritorio; al
+abrirla, «Buscando la PC principal…» y enseguida el producto de la Ubuntu por su IP (iniciar sesión con un usuario del
+central: depende de la cookie sin `Secure` de ADR-016). En la Ubuntu, `sudo libraedge-nodo-verificar` dice
+«descubrimiento: contesta»; `sudo ufw status` tiene `47823/udp` para las redes privadas. Cerrar y abrir la app: no
+busca de nuevo y la sesión sigue. Cambiar la IP de la Ubuntu (otra reserva de DHCP o `nmcli con mod ... ipv4.addresses`
+y `nmcli con up`): la app muestra «Esperando a la PC principal del local (…)» y vuelve sola con la IP nueva. Apagar el
+servicio (`sudo systemctl stop libraedge-descubrimiento`), borrar `%APPDATA%\ar.com.librasuite.<producto>.puesto\principal.json`
+y abrir: pide la dirección; escribir la IP de la Ubuntu: carga el producto. En la Windows marcar la red como
+**Pública** no cambia nada para el puesto (sólo pregunta); al revés (Windows como principal con la red Pública) el puesto no
+la encuentra y hay que escribir la IP: es lo esperado.
+
+```bash
+# En el puesto Windows, sin ventana: las PC principales que contestan.
+ps_vm '& "C:\Program Files\VentaLibra (puesto)\VentaLibra.exe" --buscar | Out-String'
+```
+
+**V21. Dos PC principales y el puesto en Ubuntu.** Con dos nodos del mismo producto en la red (por ejemplo la VM Windows
+como PC principal de otra sucursal y la Ubuntu), instalar `libraedge-puesto-<producto>_amd64.deb` en una tercera PC o en
+una sesión de otra VM. Esperado: «¿Cuál es la PC principal de este local?» con las dos (sucursal · negocio y dirección);
+elegir una la recuerda; «Buscar otra PC principal» en la espera vuelve a la lista. El ícono queda en el dock y agrupa la
+ventana. `sudo apt remove libraedge-puesto-<producto>` la saca del menú y del dock.
 
 ## 4. Traer los logs
 

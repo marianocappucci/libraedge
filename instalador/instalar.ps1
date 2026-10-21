@@ -69,6 +69,10 @@ if ($SinVincular) {
             $codigo = Invocar -Programa (Join-Path $RaizNodo "python\python.exe") -Argumentos @(
                 (Join-Path $RaizNodo "instalador\libraedge_instalador.py"), "completar-entorno", "--entorno", $archivoEnv)
             if ($codigo -ne 0) { throw "No se pudo completar $archivoEnv (codigo $codigo)." }
+            # Y el .iss paro los servicios para copiar los archivos nuevos (PrepareToInstall): sin esto el local
+            # quedaba sin sistema hasta reiniciar la PC. Se migra (el producto nuevo puede traer migraciones) y se
+            # vuelven a arrancar, como en una actualizacion con la carga.
+            Actualizar-NodoVinculado -RaizNodo $RaizNodo -Plan $plan -ArchivoEnv $archivoEnv
         }
         Crear-AccesosDelProducto -RaizNodo $RaizNodo -Plan $plan
         $texto = "Falta vincular esta PC con el sistema: abrir el acceso directo `"$($plan.nombre)`" y escribir " +
@@ -199,7 +203,7 @@ try {
     }
     $salida = 1
     if (-not $tocado) {
-        foreach ($servicio in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo")) {
+        foreach ($servicio in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo", "LibraEdgeDescubrimiento")) {
             $s = Get-Service -Name $servicio -ErrorAction SilentlyContinue
             if ($s -and $s.Status -ne "Running") {
                 Write-Host "Se vuelve a arrancar $servicio (no se toco nada)."

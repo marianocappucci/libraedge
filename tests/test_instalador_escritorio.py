@@ -92,7 +92,7 @@ def test_armar_compila_cada_producto_y_verifica_que_sea_ese():
 
 def test_los_comandos_de_la_app_y_quien_los_puede_llamar():
     main = _rust("main.rs")
-    registrados = re.search(r"generate_handler!\[([^\]]+)\]", main).group(1).replace(" ", "").split(",")
+    registrados = re.sub(r"\s", "", re.search(r"generate_handler!\[([^\]]+)\]", main).group(1)).split(",")
     manifiesto = re.search(r"\.commands\(&\[([^\]]+)\]\)", _texto(ESCRITORIO / "build.rs"), re.S).group(1)
     assert sorted(registrados) == sorted(re.findall(r'"(\w+)"', manifiesto))
     # Las pantallas propias (locales) pueden todo; el producto (remoto) solo la pantalla completa.
@@ -100,10 +100,13 @@ def test_los_comandos_de_la_app_y_quien_los_puede_llamar():
     assert paginas["local"] is True and paginas["windows"] == ["principal"]
     assert sorted(paginas["permissions"]) == sorted(f"allow-{c.replace('_', '-')}" for c in registrados)
     assert "remote" not in paginas
-    remota = main[main.index('CapabilityBuilder::new("producto")'):]
-    remota = remota[:remota.index("app.manage")]
+    # Una capacidad remota por origen (la copia local, o la PC principal de un puesto, ADR-017), solo con F11.
+    remota = main[main.index("fn permitir_f11("):]
+    remota = remota[:remota.index("\n}\n")]
+    assert 'CapabilityBuilder::new(format!("producto-{id}"))' in remota
     assert re.findall(r'\.permission\("([^"]+)"\)', remota) == ["allow-alternar-pantalla-completa"]
-    assert 'format!("http://{host}:{}/*", producto.puerto)' in remota
+    assert 'format!("http://{host}:{}/*", origen.puerto)' in remota
+    assert main.count("permitir_f11(") == 3  # la definicion, al arrancar y al elegir la PC principal
 
 
 def test_el_codigo_y_la_direccion_se_validan_igual_que_en_el_instalador():
@@ -278,3 +281,15 @@ def test_el_workflow_compila_prueba_y_empaqueta_la_app():
     assert "GET / HTTP/1.1" in workflow
     for producto in PRODUCTOS:
         assert producto in workflow
+
+
+def test_actualizar_sin_vincular_un_nodo_vinculado_vuelve_a_arrancar_los_servicios():
+    instalar = _texto(INSTALADOR / "instalar.ps1")
+    rama = instalar[instalar.index("if ($SinVincular) {"):instalar.index("exit $salida")]
+    assert "Actualizar-NodoVinculado -RaizNodo $RaizNodo -Plan $plan -ArchivoEnv $archivoEnv" in rama
+    comun = _texto(INSTALADOR / "comun.ps1")
+    funcion = comun[comun.index("function Actualizar-NodoVinculado"):]
+    assert funcion.index('Start-Service -Name "LibraEdgePostgres"') < funcion.index("$Plan.migraciones")
+    servicios = funcion.index('"LibraEdgeProducto", "LibraEdgeNodo", "LibraEdgeDescubrimiento"')
+    assert funcion.index("$Plan.migraciones") < servicios
+    assert "Actualizar con /SINVINCULAR un nodo vinculado" in _texto(WORKFLOW)

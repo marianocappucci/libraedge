@@ -1,0 +1,36 @@
+# Contesta a los otros puestos del local que buscan esta PC (ADR-017): UDP 47823,
+# con lo que dice descubrimiento.json (producto, nombre, puerto, nodo, sucursal y
+# negocio: nada secreto). No lee el nodo.env ni la base, y corre sin privilegios.
+[Unit]
+Description=@NOMBRE@: contesta a los puestos del local que buscan esta PC (LibraEdge)
+Documentation=https://github.com/marianocappucci/libraedge/tree/main/instalador
+After=network-online.target
+Wants=network-online.target
+# Sin descubrimiento.json el nodo no esta configurado: no hay nada que contestar.
+ConditionPathExists=/var/lib/libraedge-nodo/descubrimiento.json
+
+[Service]
+Type=simple
+# Un usuario propio y efimero: no es el del producto (libraedge), asi que no lee nada del nodo salvo lo que es de
+# todos, como descubrimiento.json (0644). Implica ProtectSystem=strict y sin escritura en el disco.
+DynamicUser=yes
+ExecStart=/opt/libraedge-nodo/python/bin/python3 -I -B /opt/libraedge-nodo/instalador/libraedge_descubrimiento.py responder --datos /var/lib/libraedge-nodo/descubrimiento.json
+Restart=always
+RestartSec=15
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+RestrictNamespaces=yes
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

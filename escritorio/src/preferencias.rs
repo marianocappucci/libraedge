@@ -30,7 +30,7 @@ pub fn guardar(archivo: &Path, preferencias: &Preferencias) {
 }
 
 /// Escribe solo para el usuario (0600 en Linux; en Windows, la carpeta del perfil ya es solo suya).
-fn escribir_privado(archivo: &Path, contenido: &str) -> std::io::Result<()> {
+pub(crate) fn escribir_privado(archivo: &Path, contenido: &str) -> std::io::Result<()> {
     let temporal = archivo.with_extension("tmp");
     {
         let mut opciones = std::fs::OpenOptions::new();

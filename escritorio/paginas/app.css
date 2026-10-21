@@ -59,6 +59,12 @@ button {
   color: var(--acento-texto); background: var(--acento); border: 0; border-radius: 8px; cursor: pointer;
 }
 button:disabled { opacity: 0.6; cursor: default; }
+button.secundario { color: var(--acento); background: transparent; border: 1px solid var(--borde); font-weight: 500; }
+.lista { list-style: none; padding: 0; margin: 8px 0 0; text-align: left; }
+.lista li + li { margin-top: 8px; }
+.lista button { margin-top: 0; text-align: left; color: var(--texto); background: transparent; border: 1px solid var(--borde); font-weight: 500; }
+.lista button:hover, .lista button:focus-visible { border-color: var(--acento); }
+.lista .detalle { display: block; font-weight: 400; font-size: 13px; color: var(--suave); }
 .nota { font-size: 12px; color: var(--suave); text-align: center; margin: 10px 0 0; }
 .error {
   text-align: left; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, monospace;

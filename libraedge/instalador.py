@@ -37,6 +37,8 @@ Uso (lo invocan los scripts del instalador)::
     python libraedge_instalador.py acceso --definicion producto.json     (ADR-013: como se entra, con la IP)
     python libraedge_instalador.py acceso --definicion producto.json --json
     python libraedge_instalador.py favoritos --actual "['a.desktop']" --agregar libraedge-nodo-x.desktop  (dock.sh)
+    python libraedge_instalador.py descubrimiento --definicion producto.json --salida descubrimiento.json \\
+        [--carga carga-nodo.json] [--entorno nodo.env] [--config config.json]    (ADR-017: lo que contesta el nodo)
 
 En Linux (``instalador/linux/``, ADR-012) lo usa ``instalar.sh`` igual que ``instalar.ps1`` en Windows; lo unico
 que agrega es que ``ejecutar`` cargue el ``nodo.env`` y baje al usuario del servicio **dentro** del proceso: asi
@@ -85,7 +87,7 @@ VARIABLES_DE_LA_CARGA = (
 #: secretos ni vienen de la carga:
 #:
 #: - ``LIBRAAUTH_COOKIE_SECURE=0``: el nodo sirve el producto por **http** en la LAN (``http://localhost:8000`` en la
-#:   PC y ``http://<IP>:8000`` desde las otras cajas). Con la cookie de sesion ``Secure`` (el default de libraauth,
+#:   PC y ``http://<IP>:8000`` desde los otros puestos). Con la cookie de sesion ``Secure`` (el default de libraauth,
 #:   ADR-026 de libraauth) el login da 200 y el pedido siguiente 401: WebKitGTK (la app de escritorio en Linux) no
 #:   guarda una cookie ``Secure`` que llega por http ni desde ``localhost``, y ningun navegador la guarda desde una IP.
 #:   Un producto con un libraauth anterior a v0.53.0 la ignora y queda como antes.
@@ -878,7 +880,7 @@ def ejecutar(nombre: str, argumentos: list[str]) -> int:
 #
 # En la PC con el nodo se entra SIEMPRE por la copia local, aunque haya internet: el nodo sincroniza por detras. Quien
 # entra por la nube desde el local se queda sin sistema cuando se corta internet (VM, 2026-10-20). El instalador lo
-# dice al terminar y la bandeja lo repite, con la IP de esta PC ya completa para las otras cajas del local.
+# dice al terminar y la bandeja lo repite, con la IP de esta PC ya completa para los otros puestos del local.
 
 #: Una direccion publica cualquiera: conectar un socket UDP no manda nada, pero hace que el sistema elija la interfaz
 #: de la ruta por defecto, que es la de la red del local.
@@ -928,7 +930,7 @@ def url_local(puerto: int) -> str:
 
 
 def url_de_la_lan(ip: str | None, puerto: int) -> str:
-    """La direccion para las otras cajas del local."""
+    """La direccion para los otros puestos del local."""
     return f"http://{ip}:{puerto}" if ip else f"http://<IP de esta PC>:{puerto}"
 
 
@@ -941,12 +943,74 @@ def acceso(definicion: Definicion, ip: str | None) -> dict:
     lineas = [
         "En este local se entra siempre por la copia local, aunque haya internet:",
         f'  en esta PC, con el acceso directo "{definicion.nombre}" (o {url_local(definicion.puerto)});',
-        f"  desde las otras cajas, con {otras}"
+        f"  desde los otros puestos, con {otras}"
         + ("" if ip else " (no se encontro la IP de esta PC en la red del local)"),
     ]
     lineas.append("La direccion de la nube es para entrar desde afuera del local.")
     return {"nombre": definicion.nombre, "puerto": definicion.puerto, "ip": ip,
             "url_local": url_local(definicion.puerto), "url_lan": otras, "lineas": lineas}
+
+
+#: Donde contesta el nodo a los puestos que lo buscan (``libraedge/descubrimiento.py``, ADR-017). UDP.
+PUERTO_DESCUBRIMIENTO = 47823
+FORMATO_DESCUBRIMIENTO = "libraedge-descubrimiento/1"
+#: Largo maximo de los textos libres que contesta el nodo (la respuesta entera no pasa de 512 bytes).
+_LARGO_DESCUBRIMIENTO = 80
+
+
+def datos_de_descubrimiento(definicion: Definicion, *, carga: Carga | None = None,
+                            entorno: Mapping[str, str] | None = None, config: Mapping | None = None,
+                            previo: Mapping | None = None) -> dict:
+    """Lo que el nodo contesta a los puestos del local (ADR-017): **nada secreto**. Producto, nombre y puerto, de la
+    definicion; el nodo y la sucursal, de la carga (o del ``nodo.env`` y del archivo anterior, al actualizar sin
+    carga); el negocio, del emisor (``empresa_nombre`` de la carga o del ``config.json``)."""
+    entorno = entorno or {}
+    previo = previo if isinstance(previo, Mapping) else {}
+
+    def corto(valor) -> str:
+        texto = " ".join(str(valor or "").split())
+        return texto[:_LARGO_DESCUBRIMIENTO]
+
+    nodo = (carga.entorno.get("LIBRAEDGE_NODE_ID") if carga else None) or entorno.get("LIBRAEDGE_NODE_ID") \
+        or previo.get("nodo") or ""
+    sucursal = (carga.sucursal.get("nombre") if carga else None) or previo.get("sucursal") or ""
+    negocio = ((carga.emisor or {}).get("empresa_nombre") if carga else None) \
+        or (config or {}).get("empresa_nombre") or previo.get("negocio") or ""
+    return {
+        "formato": FORMATO_DESCUBRIMIENTO,
+        "producto": definicion.producto,
+        "nombre": definicion.nombre,
+        "puerto": definicion.puerto,
+        "nodo": corto(nodo),
+        "sucursal": corto(sucursal),
+        "negocio": corto(negocio),
+    }
+
+
+def escribir_descubrimiento(ruta: str, datos: Mapping) -> None:
+    """Escribe ``descubrimiento.json`` legible por todos (0644): lo lee el servicio que contesta, que corre sin
+    privilegios, y no tiene secretos."""
+    carpeta = os.path.dirname(os.path.abspath(ruta))
+    os.makedirs(carpeta, exist_ok=True)
+    descriptor, temporal = tempfile.mkstemp(prefix=".descubrimiento-", suffix=".json", dir=carpeta)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as archivo:
+            json.dump(dict(datos), archivo, ensure_ascii=False, indent=2)
+        os.chmod(temporal, 0o644)
+        os.replace(temporal, ruta)
+    except BaseException:
+        if os.path.exists(temporal):
+            os.unlink(temporal)
+        raise
+
+
+def _leer_json_si_hay(ruta: str | None):
+    if not ruta or not os.path.exists(ruta):
+        return None
+    try:
+        return _leer_json(ruta, ruta)
+    except ErrorDeInstalacion:
+        return None
 
 
 def favoritos_con(actual: str, agregar: str) -> str:
@@ -1015,6 +1079,12 @@ def _parser() -> argparse.ArgumentParser:
     fav = sub.add_parser("favoritos", help="favorite-apps del dock con un .desktop mas (ADR-013, Linux)")
     fav.add_argument("--actual", required=True, help="lo que imprime gsettings get org.gnome.shell favorite-apps")
     fav.add_argument("--agregar", required=True, help="el .desktop que se agrega al final si no esta")
+    desc = sub.add_parser("descubrimiento", help="lo que el nodo contesta a los puestos (ADR-017, sin secretos)")
+    desc.add_argument("--definicion", required=True)
+    desc.add_argument("--salida", required=True, help="descubrimiento.json (0644)")
+    desc.add_argument("--carga", help="la carga del nodo (de ahi salen el nodo, la sucursal y el negocio)")
+    desc.add_argument("--entorno", help="el nodo.env, si no hay carga (solo se lee LIBRAEDGE_NODE_ID)")
+    desc.add_argument("--config", help="el config.json del nodo (empresa_nombre), si no hay carga")
     correr = sub.add_parser("ejecutar", help="corre un console script del Python del nodo")
     correr.add_argument("--entorno", help="nodo.env que se carga en el proceso antes de correr (Linux)")
     correr.add_argument("--como", help="usuario al que se baja despues de leer --entorno (Linux, root)")
@@ -1061,6 +1131,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.comando == "acceso":
             datos = acceso(definicion, ip_de_la_lan())
             print(json.dumps(datos, ensure_ascii=False) if args.json else "\n".join(datos["lineas"]))
+            return 0
+        if args.comando == "descubrimiento":
+            carga = leer_carga(args.carga, definicion.producto) if args.carga else None
+            entorno = leer_entorno(_leer_texto(args.entorno)) if args.entorno else {}
+            datos = datos_de_descubrimiento(
+                definicion, carga=carga, entorno={"LIBRAEDGE_NODE_ID": entorno.get("LIBRAEDGE_NODE_ID", "")},
+                config=_leer_json_si_hay(args.config), previo=_leer_json_si_hay(args.salida))
+            escribir_descubrimiento(args.salida, datos)
+            print(f"descubrimiento.json: {definicion.nombre} en el puerto {definicion.puerto}, nodo "
+                  f"{datos['nodo'] or '(sin nodo)'}; contesta en UDP {PUERTO_DESCUBRIMIENTO}.")
             return 0
         if args.comando == "revisar-entorno":
             faltan = revisar_entorno(definicion, leer_entorno(_leer_texto(args.entorno)))

@@ -232,3 +232,46 @@ function Crear-AccesosDelProducto {
         Write-Warning "No se encontro Edge: el acceso directo abre $urlLocal en el navegador por defecto."
     }
 }
+
+function Actualizar-NodoVinculado {
+    <#
+    Actualizar con /SINVINCULAR un nodo que ya estaba vinculado: el .iss paro los servicios para copiar. Arranca
+    PostgreSQL, corre las migraciones de la definicion con el entorno del nodo.env (como preparar_nodo.ps1) y vuelve
+    a arrancar el producto, el nodo y el descubrimiento. Si una migracion falla, el producto queda parado (no se
+    arranca sobre un esquema a medias) y el error sube.
+    #>
+    param([Parameter(Mandatory = $true)][string]$RaizNodo, [Parameter(Mandatory = $true)]$Plan,
+          [Parameter(Mandatory = $true)][string]$ArchivoEnv)
+
+    $python = Join-Path $RaizNodo "python\python.exe"
+    $ayudante = Join-Path $RaizNodo "instalador\libraedge_instalador.py"
+    if (Get-Service -Name "LibraEdgePostgres" -ErrorAction SilentlyContinue) {
+        Start-Service -Name "LibraEdgePostgres"
+        $isready = Join-Path $RaizNodo "postgres\bin\pg_isready.exe"
+        for ($i = 0; $i -lt 60; $i++) {
+            & $isready -h 127.0.0.1 -p 55432 -q
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep 1
+        }
+    }
+    $cantidad = Cargar-EntornoEnProceso -Ruta $ArchivoEnv
+    Write-Host "Actualizacion de un nodo vinculado: entorno cargado ($cantidad variables), se migra."
+    Push-Location $RaizNodo
+    try {
+        foreach ($comando in $Plan.migraciones) {
+            $partes = @($comando)
+            Write-Host "Migraciones: $($partes -join ' ')"
+            $codigo = Invocar -Programa $python -Argumentos (@($ayudante, "ejecutar") + $partes)
+            if ($codigo -ne 0) { throw "Fallo '$($partes -join ' ')' con codigo $codigo." }
+        }
+    } finally {
+        Pop-Location
+    }
+    foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo", "LibraEdgeDescubrimiento")) {
+        $s = Get-Service -Name $servicio -ErrorAction SilentlyContinue
+        if ($s -and $s.Status -ne "Running") {
+            Start-Service -Name $servicio
+            Write-Host "Se vuelve a arrancar $servicio."
+        }
+    }
+}

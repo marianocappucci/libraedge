@@ -34,7 +34,7 @@ echo "Nodo LibraEdge de $nombre en $RAIZ_NODO"
 echo
 
 # --- 1. Los servicios -------------------------------------------------------------
-for servicio in "$PG_SERVICIO" "${SERVICIOS_NODO[@]}" libraedge-respaldo.timer libraedge-estado.path; do
+for servicio in "$PG_SERVICIO" "${SERVICIOS_NODO[@]}" "$SERVICIO_DESCUBRIMIENTO" libraedge-respaldo.timer libraedge-estado.path; do
     activo="$(systemctl is-active "$servicio" 2> /dev/null)"
     habilitado="$(systemctl is-enabled "$servicio" 2> /dev/null)"
     if [ "$activo" = active ] && [ "$habilitado" = enabled ]; then
@@ -131,6 +131,16 @@ with urllib.request.urlopen(sys.argv[1], timeout=10) as r:
 EOF
 then bien "$nombre responde en $url"
 else falla "$nombre no responde un objeto JSON en $url"; fi
+
+# --- 7b. Los otros puestos encuentran esta PC (ADR-017): el que contesta, preguntandole como un puesto ----
+producto="$(plan_campo 'p["producto"]')"
+if [ "$(stat -c '%a' "$DESCUBRIMIENTO" 2> /dev/null)" != 644 ]; then
+    falla "descubrimiento.json: falta o no es 0644 ($DESCUBRIMIENTO)"
+elif py "$RAIZ_NODO/instalador/libraedge_descubrimiento.py" buscar --producto "$producto" --a 127.0.0.1 --espera 3 > /dev/null; then
+    bien "descubrimiento: contesta en UDP $PUERTO_DESCUBRIMIENTO a los puestos de $nombre"
+else
+    falla "descubrimiento: no contesta en UDP $PUERTO_DESCUBRIMIENTO (los otros puestos no encuentran esta PC)"
+fi
 
 # --- 8. El emisor ----------------------------------------------------------------------------
 config="$DATA_DIR/config.json"

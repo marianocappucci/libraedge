@@ -40,7 +40,7 @@ Write-Host "Nodo LibraEdge de $($plan.nombre) en $RaizNodo"
 Write-Host ""
 
 # --- 1. Los servicios ---------------------------------------------------------
-foreach ($nombre in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo")) {
+foreach ($nombre in @("LibraEdgePostgres", "LibraEdgeProducto", "LibraEdgeNodo", "LibraEdgeDescubrimiento")) {
     $s = Get-Service -Name $nombre -ErrorAction SilentlyContinue
     if (-not $s) { Falla "servicio ${nombre}: no existe"; continue }
     $inicio = (Get-CimInstance Win32_Service -Filter "Name='$nombre'").StartMode
@@ -132,6 +132,19 @@ try {
     else { Falla "$($plan.nombre) en ${url}: $($respuesta.StatusCode) sin un objeto JSON" }
 } catch {
     Falla "$($plan.nombre) no responde en ${url}: $($_.Exception.Message)"
+}
+
+# --- 7b. Los otros puestos encuentran esta PC (ADR-017) --------------------------------------
+# Se le pregunta al que contesta como lo haria un puesto, pero a esta misma PC.
+$descubrimiento = Join-Path $Datos "descubrimiento.json"
+$desc = Join-Path $RaizNodo "instalador\libraedge_descubrimiento.py"
+if (-not (Test-Path $descubrimiento)) { Falla "descubrimiento.json: no esta en $Datos" }
+elseif ((Invocar -Programa $python -Argumentos @("-I", $desc, "buscar", "--producto", $plan.producto, "--a", "127.0.0.1", "--espera", "3")) -eq 0) {
+    Bien "descubrimiento: contesta en UDP 47823 a los puestos de $($plan.nombre)"
+} else {
+    Falla "descubrimiento: no contesta en UDP 47823 (los otros puestos no encuentran esta PC)"
+    $logDesc = Join-Path $Datos "descubrimiento\descubrimiento.log"
+    if (Test-Path $logDesc) { Get-Content $logDesc -Tail 20 | ForEach-Object { Write-Host "       $_" } }
 }
 
 # --- 8. El emisor y lo demas --------------------------------------------------------------------

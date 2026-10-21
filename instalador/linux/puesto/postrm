@@ -1,0 +1,18 @@
+#!/bin/sh
+# postrm de libraedge-puesto-@PRODUCTO@ (ADR-017): el .desktop y la app los saca dpkg; aca se rehacen los favoritos
+# del dock sin este puesto (con el script de otro puesto que quede, o se borra el override si era el ultimo).
+set -e
+case "$1" in
+    remove|purge)
+        otro=""
+        for d in /opt/libraedge-puesto/*/dock.sh; do [ -x "$d" ] && otro="$d" && break; done
+        if [ -n "$otro" ]; then
+            "$otro" || true
+        elif [ -e /usr/share/glib-2.0/schemas/91_libraedge-puesto.gschema.override ]; then
+            rm -f /usr/share/glib-2.0/schemas/91_libraedge-puesto.gschema.override
+            glib-compile-schemas /usr/share/glib-2.0/schemas 2> /dev/null || true
+        fi
+        rmdir /opt/libraedge-puesto 2> /dev/null || true
+        ;;
+esac
+exit 0

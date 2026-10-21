@@ -1,8 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "paginas",
-  "description": "Las pantallas propias de la app (espera y vincular), servidas por la app: pueden pedir el estado y vincular. El producto (http://localhost:<puerto>) tiene su propia capacidad, que se arma al arrancar y solo deja alternar la pantalla completa.",
+  "description": "Las pantallas propias de la app (espera, vincular y, en un puesto, buscar, elegir y escribir la direccion de la PC principal), servidas por la app: pueden pedir el estado, vincular y elegir la PC principal. El producto (http://localhost:<puerto>) tiene su propia capacidad, que se arma al arrancar y solo deja alternar la pantalla completa.",
   "local": true,
   "windows": ["principal"],
-  "permissions": ["allow-estado", "allow-vincular", "allow-alternar-pantalla-completa"]
+  "permissions": [
+    "allow-estado",
+    "allow-vincular",
+    "allow-alternar-pantalla-completa",
+    "allow-buscar-otra",
+    "allow-elegir",
+    "allow-usar-direccion"
+  ]
 }

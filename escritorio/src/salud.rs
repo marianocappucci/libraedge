@@ -1,18 +1,25 @@
-//! ¿Responde el producto local? Un GET a la ruta de salud de la definicion, con plazos cortos.
+//! ¿Responde el producto? Un GET a la ruta de salud de la definicion, con plazos cortos.
 //!
-//! Va a `127.0.0.1` y no a `localhost`: el producto escucha en IPv4 (`--host 0.0.0.0`) y `localhost` puede
-//! resolver primero a `::1`. Sin dependencias: es una sola linea de HTTP/1.0.
+//! En la PC principal va a `127.0.0.1` y no a `localhost`: el producto escucha en IPv4 (`--host 0.0.0.0`) y
+//! `localhost` puede resolver primero a `::1`. En un puesto secundario (ADR-017), a la IP de la PC principal. Sin
+//! dependencias: es una sola linea de HTTP/1.0.
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
+/// El producto local de la PC principal.
 pub fn responde(puerto: u16, ruta: &str, plazo: Duration) -> bool {
-    let direccion = SocketAddr::from(([127, 0, 0, 1], puerto));
+    responde_en(IpAddr::V4(Ipv4Addr::LOCALHOST), "localhost", puerto, ruta, plazo)
+}
+
+/// El producto en `ip:puerto`, con `host` en la cabecera `Host`.
+pub fn responde_en(ip: IpAddr, host: &str, puerto: u16, ruta: &str, plazo: Duration) -> bool {
+    let direccion = SocketAddr::new(ip, puerto);
     let Ok(mut conexion) = TcpStream::connect_timeout(&direccion, plazo) else { return false };
     let _ = conexion.set_read_timeout(Some(plazo));
     let _ = conexion.set_write_timeout(Some(plazo));
-    let pedido = format!("GET {ruta} HTTP/1.0\r\nHost: localhost:{puerto}\r\nUser-Agent: libraedge-escritorio\r\n\r\n");
+    let pedido = format!("GET {ruta} HTTP/1.0\r\nHost: {host}:{puerto}\r\nUser-Agent: libraedge-escritorio\r\n\r\n");
     if conexion.write_all(pedido.as_bytes()).is_err() {
         return false;
     }

@@ -15,7 +15,7 @@ En GNOME (Ubuntu 22.04, 24.04 y 26.04) el area de notificacion es la extension `
 (paquete ``gnome-shell-extension-appindicator``; en 26.04, ``gnome-shell-ubuntu-extensions``), que la sesion
 «ubuntu» trae habilitada para todos los usuarios.
 «Abrir <Producto>» (ADR-013) corre ``abrir_producto.sh``, el mismo lanzamiento que el acceso directo del menu de
-aplicaciones: la copia local en modo aplicacion. Otra linea del menu dice la direccion para las otras cajas del local,
+aplicaciones: la copia local en modo aplicacion. Otra linea del menu dice la direccion para los otros puestos del local,
 con la IP de esta PC (se la pregunta al ayudante del instalador, ``acceso --json``), y al hacer clic la copia.
 
 Arranca al iniciar sesion desde ``/etc/xdg/autostart/libraedge-nodo-bandeja.desktop``; si nadie inicia sesion no
@@ -106,9 +106,9 @@ def url_local(puerto: int) -> str:
     return f"http://localhost:{puerto}/"
 
 
-def otras_cajas(puerto: int, python: str = PYTHON_DEL_NODO, ayudante: str = AYUDANTE,
+def otros_puestos(puerto: int, python: str = PYTHON_DEL_NODO, ayudante: str = AYUDANTE,
                 definicion: str = DEFINICION, correr=subprocess.run) -> str:
-    """La direccion para las otras cajas del local, con la IP de esta PC. La decide el ayudante del instalador (la
+    """La direccion para los otros puestos del local, con la IP de esta PC. La decide el ayudante del instalador (la
     misma que muestra al terminar de instalar); si no contesta, la direccion con la IP a completar."""
     comando = [python, "-I", "-B", ayudante, "acceso", "--definicion", definicion, "--json"]
     try:
@@ -121,9 +121,9 @@ def otras_cajas(puerto: int, python: str = PYTHON_DEL_NODO, ayudante: str = AYUD
     return f"http://<IP de esta PC>:{puerto}"
 
 
-def etiqueta_otras_cajas(url_lan: str) -> str:
+def etiqueta_otros_puestos(url_lan: str) -> str:
     """La linea del menu (como en Windows, ``libraedge/bandeja.py``): al hacer clic, la copia."""
-    return f"Otras cajas: {url_lan} (copiar)"
+    return f"Otros puestos: {url_lan} (copiar)"
 
 
 def abrir_producto(puerto: int, abrir=subprocess.Popen) -> None:
@@ -196,8 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     item_detalle.set_sensitive(False)
     abrir = gtk.MenuItem(label=f"Abrir {nombre}")
     abrir.connect("activate", lambda _: abrir_producto(puerto))
-    direccion = {"url": otras_cajas(puerto), "refrescos": 0}
-    item_otras = gtk.MenuItem(label=etiqueta_otras_cajas(direccion["url"]))
+    direccion = {"url": otros_puestos(puerto), "refrescos": 0}
+    item_otras = gtk.MenuItem(label=etiqueta_otros_puestos(direccion["url"]))
 
     def copiar(_) -> None:
         portapapeles = gtk.Clipboard.get(gdk.SELECTION_CLIPBOARD)
@@ -224,8 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         item_detalle.set_visible(bool(detalle))
         direccion["refrescos"] += 1
         if direccion["refrescos"] >= REFRESCOS_POR_IP:
-            direccion["url"], direccion["refrescos"] = otras_cajas(puerto), 0
-            item_otras.set_label(etiqueta_otras_cajas(direccion["url"]))
+            direccion["url"], direccion["refrescos"] = otros_puestos(puerto), 0
+            item_otras.set_label(etiqueta_otros_puestos(direccion["url"]))
         return True  # que GLib lo siga llamando
 
     refrescar()
