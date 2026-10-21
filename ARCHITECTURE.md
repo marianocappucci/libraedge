@@ -29,7 +29,7 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
 - **`central.py`** (`libraedge-central`) — las herramientas del central: `nodo` (aprovisionamiento)
   y `revision`.
 - **`aprovisionamiento.py`** (`Aprovisionamiento`, `publicar`, `registrar`, `dar_de_baja`, `estado`,
-  `sucursales`, `vigilar`, `asignar_prefijo`) — el aprovisionamiento del central, genérico; el
+  `sucursales`, `vigilar`, `asignar_prefijo`, `conservar`, `restaurar`) — el aprovisionamiento del central, genérico; el
   producto aporta tablas de referencia, sucursales, una guarda opcional del alta y prefijo (ADR-008; desde ADR-014 sin
   adicional: LibraEdge está incluido en todos los planes).
 - **`identidad.py`** (`nodo_actual`, `prefijo_actual`) — `LIBRAEDGE_NODE_ID` y
