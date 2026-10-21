@@ -46,3 +46,15 @@ def test_el_cuerpo_va_a_un_archivo_privado_sin_mostrar_la_clave(tmp_path, monkey
 
 def test_sin_argumentos_validos_sale_con_2(capsys):
     assert lp.main(["otra-cosa"]) == 2
+
+
+
+def test_la_base_del_producto_sale_del_nodo_env_y_no_la_de_libraedge():
+    env = ("LIBRAEDGE_DATABASE_URL=postgresql://postgres:x@127.0.0.1:55432/libraedge\n"
+           "VENTALIBRA_DATABASE_URL=postgresql://postgres:x@127.0.0.1:55432/ventalibra\n")
+    assert lp.url_de_la_base(env).endswith("/ventalibra")
+
+
+def test_sin_base_del_producto_corta_claro():
+    with pytest.raises(SystemExit):
+        lp.url_de_la_base("LIBRAEDGE_DATABASE_URL=postgresql://x/y\n")

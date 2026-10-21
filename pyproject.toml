@@ -65,6 +65,9 @@ name = "libraedge"
 # 0.18.0 -> 0.18.1 (2026-10-21): sin cambios de codigo. Los instaladores de v0.18.0 se armaron antes de promover a `main`
 # la fase 2 de ContaLibra, RestoLibra y VentaLibra (el CI empaqueta el producto desde `main`); este tag los vuelve a armar
 # con los productos que ya traen usuarios del central, caja que sube y altas de clientes.
+# 0.18.1 -> 0.18.2 (2026-10-21): el CI del instalador siembra el usuario de la prueba como el espejo antes del login por
+# http: desde libraauth v0.54.0 (ADR-027) el nodo no crea un admin local y, sin central en el CI, no habia con quien
+# entrar (el release de v0.18.1 fallo por eso y no se publico). Sin cambios en el nodo.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
