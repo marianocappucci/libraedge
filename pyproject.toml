@@ -74,6 +74,9 @@ name = "libraedge"
 # `cursor_maximo`); no cambia nada de lo que habia ni el esquema.
 # 0.19.0 -> 0.19.1 (2026-10-21): sin cambios de codigo. Rearma los instaladores con ContaLibra en libraauth v0.55.0: en el
 # nodo no se pide captcha (desde un puesto el navegador no da WebCrypto por http) y la IP del bloqueo es el par directo.
+# 0.19.1 -> 0.19.2 (2026-10-21): el CI del instalador entra sin captcha cuando el nodo contesta {"requerido": false}
+# (libraauth v0.55.0, ADR-028) y falla si un nodo con libraauth >= 0.55.0 lo pide: es el bug de los puestos. El release de
+# v0.19.1 fallo por eso y no se publico. Sin cambios en el nodo.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

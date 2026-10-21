@@ -8,7 +8,8 @@ admin local, que sale del ``nodo.env``, y el captcha ALTCHA resuelto). El login 
     python -I tests/login_por_http.py version
         imprime "<version de libraauth> nueva|vieja": "nueva" si ya lee LIBRAAUTH_COOKIE_SECURE (v0.53.0 o mas).
     python -I tests/login_por_http.py cuerpo <nodo.env o -> <desafio.json> <salida.json>
-        escribe el cuerpo de ``POST <prefijo>/login`` (usuario, clave y captcha) en <salida.json>, solo para el dueño.
+        escribe el cuerpo de ``POST <prefijo>/login`` (usuario, clave y, si el nodo lo pide, captcha) en <salida.json>,
+        solo para el dueño. Con libraauth >= 0.55.0 el nodo **no** tiene que pedir captcha: si lo pide, falla.
         Con ``-`` el nodo.env llega por la entrada (en Linux es de root: ``sudo cat nodo.env | python ...``).
     python -I tests/login_por_http.py sembrar <nodo.env o ->
         deja en la base del nodo el usuario de la prueba **como lo dejaria el espejo** (libraauth ADR-027: en un nodo
@@ -25,6 +26,9 @@ import sys
 
 #: Desde esta version libraauth lee LIBRAAUTH_COOKIE_SECURE (libraauth ADR-026).
 LIBRAAUTH_CON_COOKIE_CONFIGURABLE = (0, 53, 0)
+#: Desde esta version un nodo no pide captcha (libraauth ADR-028): desde un puesto se entra por http y el
+#: navegador no da WebCrypto, asi que el widget ALTCHA no puede resolverse.
+LIBRAAUTH_SIN_CAPTCHA_EN_EL_NODO = (0, 55, 0)
 
 
 def version_como_tupla(version: str) -> tuple[int, ...]:
@@ -83,6 +87,21 @@ def sembrar_usuario(texto_env: str, usuario: str) -> bool:
     return fila is not None
 
 
+def version_de_libraauth() -> str:
+    """La version instalada, o ``"0"`` si no esta (los tests de este script corren sin libraauth)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("libraauth")
+    except PackageNotFoundError:
+        return "0"
+
+
+def pide_captcha(desafio: dict) -> bool:
+    """``False`` si el producto contesto ``{"requerido": false}`` (un nodo con libraauth >= 0.55.0, ADR-028)."""
+    return desafio.get("requerido") is not False
+
+
 def resolver_captcha(desafio: dict) -> str:
     from altcha import Challenge, Payload, solve_challenge
 
@@ -116,9 +135,16 @@ def main(argv: list[str]) -> int:
             with open(entorno, encoding="utf-8-sig") as archivo:
                 texto = archivo.read()
         with open(desafio, encoding="utf-8") as archivo:
-            captcha = resolver_captcha(json.load(archivo))
-        cuerpo = {"username": os.environ.get("USUARIO_DE_PRUEBA", "admin"), "password": clave_del_admin(texto),
-                  "captcha": captcha}
+            datos_del_desafio = json.load(archivo)
+        cuerpo = {"username": os.environ.get("USUARIO_DE_PRUEBA", "admin"), "password": clave_del_admin(texto)}
+        if pide_captcha(datos_del_desafio):
+            # 🔴 El bug del 2026-10-21: con captcha en el nodo, desde un puesto no se puede iniciar sesion.
+            if version_como_tupla(version_de_libraauth()) >= LIBRAAUTH_SIN_CAPTCHA_EN_EL_NODO:
+                raise SystemExit("El nodo pide captcha: desde un puesto (http por la red del local) no se podria "
+                                 "entrar.")
+            cuerpo["captcha"] = resolver_captcha(datos_del_desafio)
+        else:
+            print("El nodo no pide captcha (libraauth ADR-028).")
         escribir_privado(salida, json.dumps(cuerpo))
         print("Cuerpo del login escrito (sin mostrar la clave).")
         return 0

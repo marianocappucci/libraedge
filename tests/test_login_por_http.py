@@ -58,3 +58,8 @@ def test_la_base_del_producto_sale_del_nodo_env_y_no_la_de_libraedge():
 def test_sin_base_del_producto_corta_claro():
     with pytest.raises(SystemExit):
         lp.url_de_la_base("LIBRAEDGE_DATABASE_URL=postgresql://x/y\n")
+
+
+def test_un_nodo_sin_captcha_contesta_requerido_false():
+    assert lp.pide_captcha({"requerido": False}) is False
+    assert lp.pide_captcha({"parameters": {}, "signature": "x"}) is True
