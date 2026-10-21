@@ -72,6 +72,8 @@ name = "libraedge"
 # demos (que borra la base) no deje huerfana a la PC vinculada: los nodos vuelven con su secreto y el changelog sigue
 # numerando por encima del cursor que el nodo ya tiene. Minor: suma dos subcomandos y API (`conservar`, `restaurar`,
 # `cursor_maximo`); no cambia nada de lo que habia ni el esquema.
+# 0.19.0 -> 0.19.1 (2026-10-21): sin cambios de codigo. Rearma los instaladores con ContaLibra en libraauth v0.55.0: en el
+# nodo no se pide captcha (desde un puesto el navegador no da WebCrypto por http) y la IP del bloqueo es el par directo.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
