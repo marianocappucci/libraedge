@@ -130,11 +130,11 @@ def resumen_para_la_bandeja(estado, ahora: datetime | None = None,
     )
 
 
-# ── abrir el producto y la direccion para las otras cajas (ADR-013) ──────────
+# ── abrir el producto y la direccion para los otros puestos (ADR-013) ──────────
 #
 # En la PC con el nodo se entra SIEMPRE por la copia local, aunque haya internet. La bandeja lo hace obvio: «Abrir
 # <Producto>» abre el mismo acceso directo que deja el instalador (modo aplicacion de Edge), y una linea del menu dice
-# la direccion para las otras cajas del local, con la IP de esta PC.
+# la direccion para los otros puestos del local, con la IP de esta PC.
 
 
 def producto_del_nodo(ruta: str) -> tuple[str, int] | None:
@@ -154,6 +154,6 @@ def acceso_directo_de_windows(nombre: str, programdata: str | None) -> str | Non
     return os.path.join(programdata, "Microsoft", "Windows", "Start Menu", "Programs", f"{nombre}.lnk")
 
 
-def etiqueta_otras_cajas(url_lan: str) -> str:
+def etiqueta_otros_puestos(url_lan: str) -> str:
     """La linea del menu de la bandeja: al hacer clic, la copia."""
-    return f"Otras cajas: {url_lan} (copiar)"
+    return f"Otros puestos: {url_lan} (copiar)"

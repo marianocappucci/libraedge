@@ -1,6 +1,6 @@
 //! Que se abre adentro de la app y que en el navegador del sistema.
 //!
-//! Adentro: el producto (su origen: en la PC principal, `localhost` o `127.0.0.1` en su puerto; en una caja
+//! Adentro: el producto (su origen: en la PC principal, `localhost` o `127.0.0.1` en su puerto; en un puesto
 //! secundaria, la IP de la PC principal en su puerto, ADR-017) y las pantallas propias de la app.
 //! Afuera, en el navegador del sistema: todo lo demas que sea web o un enlace de otra aplicacion (ARCA,
 //! Mercado Pago, las ayudas, `mailto:`, WhatsApp). Lo que no es ninguna de las dos cosas (`file:`,
@@ -88,7 +88,7 @@ mod tests {
         clasificar(&Url::parse(texto).unwrap(), &Origen::local(8000))
     }
 
-    fn de_caja(texto: &str) -> Destino {
+    fn de_puesto(texto: &str) -> Destino {
         clasificar(&Url::parse(texto).unwrap(), &Origen { host: "192.168.0.10".into(), puerto: 8000 })
     }
 
@@ -123,15 +123,15 @@ mod tests {
     }
 
     #[test]
-    fn en_una_caja_el_producto_es_la_pc_principal_y_localhost_no() {
-        assert_eq!(de_caja("http://192.168.0.10:8000/"), Destino::Producto);
-        assert_eq!(de_caja("http://192.168.0.10:8000/ventas?x=1"), Destino::Producto);
-        assert_eq!(de_caja("http://localhost:8000/"), Destino::Externo);
-        assert_eq!(de_caja("http://127.0.0.1:8000/"), Destino::Externo);
-        assert_eq!(de_caja("http://192.168.0.10:8001/"), Destino::Externo);
-        assert_eq!(de_caja("https://192.168.0.10:8000/"), Destino::Externo);
-        assert_eq!(de_caja("http://192.168.0.11:8000/"), Destino::Externo);
-        assert_eq!(de_caja("http://192.168.0.100:8000/"), Destino::Externo);
+    fn en_una_puesto_el_producto_es_la_pc_principal_y_localhost_no() {
+        assert_eq!(de_puesto("http://192.168.0.10:8000/"), Destino::Producto);
+        assert_eq!(de_puesto("http://192.168.0.10:8000/ventas?x=1"), Destino::Producto);
+        assert_eq!(de_puesto("http://localhost:8000/"), Destino::Externo);
+        assert_eq!(de_puesto("http://127.0.0.1:8000/"), Destino::Externo);
+        assert_eq!(de_puesto("http://192.168.0.10:8001/"), Destino::Externo);
+        assert_eq!(de_puesto("https://192.168.0.10:8000/"), Destino::Externo);
+        assert_eq!(de_puesto("http://192.168.0.11:8000/"), Destino::Externo);
+        assert_eq!(de_puesto("http://192.168.0.100:8000/"), Destino::Externo);
         let o = Origen { host: "192.168.0.10".into(), puerto: 8000 };
         assert_eq!((o.url(), o.hosts()), ("http://192.168.0.10:8000/".to_string(), vec!["192.168.0.10".to_string()]));
     }

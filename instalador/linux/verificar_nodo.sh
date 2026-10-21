@@ -132,14 +132,14 @@ EOF
 then bien "$nombre responde en $url"
 else falla "$nombre no responde un objeto JSON en $url"; fi
 
-# --- 7b. Las otras cajas encuentran esta PC (ADR-017): el que contesta, preguntandole como una caja ----
+# --- 7b. Los otros puestos encuentran esta PC (ADR-017): el que contesta, preguntandole como un puesto ----
 producto="$(plan_campo 'p["producto"]')"
 if [ "$(stat -c '%a' "$DESCUBRIMIENTO" 2> /dev/null)" != 644 ]; then
     falla "descubrimiento.json: falta o no es 0644 ($DESCUBRIMIENTO)"
 elif py "$RAIZ_NODO/instalador/libraedge_descubrimiento.py" buscar --producto "$producto" --a 127.0.0.1 --espera 3 > /dev/null; then
-    bien "descubrimiento: contesta en UDP $PUERTO_DESCUBRIMIENTO a las cajas de $nombre"
+    bien "descubrimiento: contesta en UDP $PUERTO_DESCUBRIMIENTO a los puestos de $nombre"
 else
-    falla "descubrimiento: no contesta en UDP $PUERTO_DESCUBRIMIENTO (las otras cajas no encuentran esta PC)"
+    falla "descubrimiento: no contesta en UDP $PUERTO_DESCUBRIMIENTO (los otros puestos no encuentran esta PC)"
 fi
 
 # --- 8. El emisor ----------------------------------------------------------------------------

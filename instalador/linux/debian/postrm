@@ -28,7 +28,7 @@ case "$1" in
             rm -f "$env"
         fi
         rm -f /etc/xdg/autostart/libraedge-nodo-@PRODUCTO@.desktop
-        # Lo que contestaba a las cajas (ADR-017): sin nodo no se contesta nada (sin secretos; lo rehace configurar).
+        # Lo que contestaba a los puestos (ADR-017): sin nodo no se contesta nada (sin secretos; lo rehace configurar).
         rm -f /var/lib/libraedge-nodo/descubrimiento.json
         # El acceso directo fijado en el dock (ADR-013): sin el override vuelven los favoritos del sistema.
         if [ -e /usr/share/glib-2.0/schemas/90_libraedge-nodo.gschema.override ]; then

@@ -213,7 +213,7 @@ def test_bandeja_no_toca_la_base_ni_el_central(tmp_path, monkeypatch, capsys):
     assert "todavía no sincronizó" in capsys.readouterr().out
 
 
-# ── Abrir el producto y la direccion para las otras cajas (ADR-013) ────────
+# ── Abrir el producto y la direccion para los otros puestos (ADR-013) ────────
 
 
 def test_el_producto_sale_de_la_definicion_instalada(tmp_path):
@@ -264,10 +264,10 @@ def test_copiar_va_a_clip_y_un_fallo_no_tumba_la_bandeja():
     copiar("x", correr=falla)
 
 
-def test_la_linea_de_las_otras_cajas():
-    from libraedge.bandeja import etiqueta_otras_cajas
+def test_la_linea_de_las_otros_puestos():
+    from libraedge.bandeja import etiqueta_otros_puestos
 
-    assert etiqueta_otras_cajas("http://192.168.1.20:8000") == "Otras cajas: http://192.168.1.20:8000 (copiar)"
+    assert etiqueta_otros_puestos("http://192.168.1.20:8000") == "Otros puestos: http://192.168.1.20:8000 (copiar)"
 
 
 def test_la_definicion_instalada_esta_al_lado_del_python_embebido(monkeypatch):

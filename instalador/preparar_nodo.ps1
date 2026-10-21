@@ -182,7 +182,7 @@ foreach ($servicio in @("LibraEdgeProducto", "LibraEdgeNodo")) {
 }
 
 # --- El descubrimiento (ADR-017) ------------------------------------------------
-# Las otras cajas del local encuentran esta PC preguntando por UDP 47823. Contesta
+# Los otros puestos del local encuentran esta PC preguntando por UDP 47823. Contesta
 # libraedge_descubrimiento.py (solo biblioteca estandar) como LocalService, sin
 # privilegios: lee SOLO descubrimiento.json, que no tiene secretos (producto,
 # nombre, puerto, nodo, sucursal y negocio), y no puede leer nodo.env (su ACL es
@@ -191,7 +191,7 @@ $descubrimiento = Join-Path $Datos "descubrimiento.json"
 $codigo = Invocar -Programa $python -Argumentos @(
     $ayudante, "descubrimiento", "--definicion", $definicion, "--carga", $Carga, "--salida", $descubrimiento)
 if ($codigo -ne 0) {
-    Write-Warning "No se pudo escribir $descubrimiento (codigo $codigo): las otras cajas no van a encontrar esta PC solas."
+    Write-Warning "No se pudo escribir $descubrimiento (codigo $codigo): los otros puestos no van a encontrar esta PC solas."
 } else {
     $servicioDesc = "LibraEdgeDescubrimiento"
     if (Get-Service -Name $servicioDesc -ErrorAction SilentlyContinue) {
@@ -204,7 +204,7 @@ if ($codigo -ne 0) {
     & $nssm install $servicioDesc $python "-I -B libraedge_descubrimiento.py responder --datos $descubrimiento"
     if ($LASTEXITCODE -ne 0) { throw "nssm install $servicioDesc fallo" }
     & $nssm set $servicioDesc AppDirectory (Join-Path $RaizNodo "instalador") | Out-Null
-    & $nssm set $servicioDesc Description "Contesta a las cajas del local que buscan esta PC (LibraEdge)" | Out-Null
+    & $nssm set $servicioDesc Description "Contesta a los puestos del local que buscan esta PC (LibraEdge)" | Out-Null
     & $nssm set $servicioDesc Start SERVICE_AUTO_START | Out-Null
     & $nssm set $servicioDesc AppThrottle 15000 | Out-Null
     # Su log, en una carpeta propia donde LocalService (S-1-5-19) puede escribir: en {app}\logs no puede.
@@ -222,16 +222,16 @@ if ($codigo -ne 0) {
     if ($LASTEXITCODE -ne 0) { & "$env:SystemRoot\System32\sc.exe" config $servicioDesc obj= "NT AUTHORITY\LocalService" | Out-Null }
     $cuenta = (Get-CimInstance Win32_Service -Filter "Name='$servicioDesc'").StartName
     if ($cuenta -ne "NT AUTHORITY\LocalService") {
-        # Como SYSTEM no: es un proceso que escucha en la red. Sin el, las cajas escriben la IP a mano.
+        # Como SYSTEM no: es un proceso que escucha en la red. Sin el, los puestos escriben la IP a mano.
         & $nssm remove $servicioDesc confirm | Out-Null
-        Write-Warning "No se pudo poner $servicioDesc como LocalService (quedo '$cuenta'): no se instala; las otras cajas no van a encontrar esta PC solas."
+        Write-Warning "No se pudo poner $servicioDesc como LocalService (quedo '$cuenta'): no se instala; los otros puestos no van a encontrar esta PC solas."
     } else {
-        # Que no arranque no frena la instalacion del nodo: las cajas pueden escribir la IP. Se deja el motivo.
+        # Que no arranque no frena la instalacion del nodo: los puestos pueden escribir la IP. Se deja el motivo.
         try {
             Start-Service -Name $servicioDesc -ErrorAction Stop
             Write-Host "Descubrimiento: $((Get-Service $servicioDesc).Status) (UDP 47823, como LocalService)."
         } catch {
-            Write-Warning "No arranco $servicioDesc ($($_.Exception.Message)): las otras cajas no van a encontrar esta PC solas."
+            Write-Warning "No arranco $servicioDesc ($($_.Exception.Message)): los otros puestos no van a encontrar esta PC solas."
             Get-WinEvent -FilterHashtable @{ LogName = "Application"; ProviderName = "nssm" } -MaxEvents 5 -ErrorAction SilentlyContinue |
                 ForEach-Object { Write-Host "    nssm: $($_.Message)" }
             Get-WinEvent -FilterHashtable @{ LogName = "System"; ProviderName = "Service Control Manager" } -MaxEvents 3 -ErrorAction SilentlyContinue |
@@ -242,7 +242,7 @@ if ($codigo -ne 0) {
 }
 
 # --- El firewall ---------------------------------------------------------------
-# Las cajas del local son navegadores que entran a esta PC por la red interna:
+# Los puestos del local son navegadores que entran a esta PC por la red interna:
 # sin la regla, Windows bloquea el puerto y solo anda desde esta misma PC. Solo
 # en los perfiles Privado y Dominio: en una red marcada Publica no se abre.
 $regla = "LibraEdge producto"
@@ -312,6 +312,6 @@ if ($textoAcceso.Codigo -eq 0 -and $textoAcceso.Texto) {
     Escribir-SinBom -Ruta (Join-Path $RaizNodo "instalador\acceso.txt") -Texto $textoAcceso.Texto
     Write-Host $textoAcceso.Texto
 } else {
-    Write-Host "En esta PC: el acceso directo `"$($plan.nombre)`" ($urlLocal); desde las otras cajas: http://<IP de esta PC>:$($plan.puerto)"
+    Write-Host "En esta PC: el acceso directo `"$($plan.nombre)`" ($urlLocal); desde los otros puestos: http://<IP de esta PC>:$($plan.puerto)"
 }
 Write-Host "Verificar con: powershell -ExecutionPolicy Bypass -File `"$RaizNodo\instalador\verificar_nodo.ps1`""

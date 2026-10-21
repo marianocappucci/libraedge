@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=@NOMBRE@
+GenericName=Sistema del local
+Comment=Abre @NOMBRE@ desde la PC principal del local (otro puesto)
+Exec=/opt/libraedge-puesto/@PRODUCTO@/libraedge-puesto-@PRODUCTO@
+Icon=/opt/libraedge-puesto/@PRODUCTO@/marca.svg
+Terminal=false
+Categories=Office;Finance;
+Keywords=LibraEdge;caja;puesto;ventas;
+StartupNotify=true
+StartupWMClass=libraedge-puesto-@PRODUCTO@

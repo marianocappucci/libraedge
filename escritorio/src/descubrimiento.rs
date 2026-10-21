@@ -1,4 +1,4 @@
-//! La caja secundaria encuentra la PC principal en la red del local (ADR-017).
+//! El puesto secundario encuentra la PC principal en la red del local (ADR-017).
 //!
 //! Manda un pedido por UDP al puerto 47823 en broadcast (`255.255.255.255` y el broadcast de la red /24 de esta PC:
 //! en Windows el primero sale por una sola interfaz) y junta las respuestas de los nodos **de su producto** durante
@@ -7,7 +7,7 @@
 //!
 //! - El pedido trae relleno hasta 512 bytes: el nodo no contesta pedidos mas cortos, asi no sirve para amplificar.
 //! - La IP que se usa es la de **quien contesto**, nunca un dato de la respuesta: una respuesta no puede mandar la
-//!   caja a otro lado. Y solo se aceptan IPv4 privadas, de enlace local o loopback.
+//!   puesto a otro lado. Y solo se aceptan IPv4 privadas, de enlace local o loopback.
 //! - Nada de lo que viaja es secreto: producto, nombre, puerto, el identificador del nodo, la sucursal y el negocio.
 
 use serde::{Deserialize, Serialize};

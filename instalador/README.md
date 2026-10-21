@@ -11,7 +11,7 @@ definiciones para **RestoLibra, VentaLibra y ContaLibra**.
 
 ## Qué instala
 
-En la PC designada del local (Windows 10/11 x64, una sola por sucursal; las cajas son navegadores en la red interna):
+En la PC designada del local (Windows 10/11 x64, una sola por sucursal; los puestos son navegadores en la red interna):
 
 1. **PostgreSQL 16** desde el ZIP binario oficial (no el instalador de EDB), como servicio `LibraEdgePostgres`, sólo
    en `127.0.0.1:55432`, con `initdb` en ICU `en-US`, zona `America/Argentina/Buenos_Aires` y `--data-checksums`.
@@ -33,9 +33,9 @@ abrir `localhost:8000` y volver a loguearse (VM, 2026-10-20). Por eso:
 
 - **En esa PC**, el acceso directo «<Producto>» (Windows: escritorio y menú Inicio; Ubuntu: el menú de aplicaciones,
   desde donde se ancla al dock con «Agregar a favoritos»). También `http://localhost:8000`.
-- **Desde las otras cajas del local**, `http://<IP de esa PC>:8000`. El final de la instalación lo muestra con la IP ya
+- **Desde los otros puestos del local**, `http://<IP de esa PC>:8000`. El final de la instalación lo muestra con la IP ya
   completa (Windows: la página final del asistente, `logs\instalacion.log` y el log de Inno; Linux: la salida de
-  `libraedge-nodo-instalar` y de `instalar-nodo.sh`), y la bandeja lo repite en su menú («Otras cajas: http://… (copiar)»).
+  `libraedge-nodo-instalar` y de `instalar-nodo.sh`), y la bandeja lo repite en su menú («Otros puestos: http://… (copiar)»).
   La IP es la privada de la ruta por defecto (`libraedge_instalador.py acceso`).
 - **La dirección de la nube** es para entrar desde afuera del local.
 - «Abrir <Producto>» de la bandeja usa el mismo lanzamiento que el acceso directo.
@@ -63,10 +63,10 @@ cada uno se compila aparte con `python escritorio/armar.py <producto>`.
 - **Vincular con el sistema:** si el nodo se instaló sin vincular, la app pide la dirección y el código de
   «Sucursal sin internet» y configura el nodo; Windows pide permiso de administrador (UAC) y Ubuntu la clave de un
   administrador (pkexec). Es el mismo configurador del instalador, y el código no queda en ningún log.
-- **Pantalla completa** (cajas dedicadas): **F11** la prende y la apaga y se recuerda. Para dejarla fija desde el
+- **Pantalla completa** (puestos dedicados): **F11** la prende y la apaga y se recuerda. Para dejarla fija desde el
   acceso directo: agregar `--pantalla-completa` al destino (Windows: Propiedades del acceso directo; Ubuntu: copiar el
   `.desktop` a `/etc/xdg/autostart/` o a `~/.local/share/applications/` con `Exec=... --pantalla-completa`);
-  `--ventana` la apaga. Con «abrirlo al iniciar sesión» (arriba), la caja arranca directo en el sistema.
+  `--ventana` la apaga. Con «abrirlo al iniciar sesión» (arriba), el puesto arranca directo en el sistema.
 - **La sesión se conserva** al cerrar y abrir la app (hasta que vence por inactividad o se cierra sesión).
 - **Los enlaces externos** (ARCA, Mercado Pago, las ayudas) se abren en el navegador del sistema; las descargas van a
   Descargas.
@@ -85,30 +85,30 @@ Queda preparada: con un certificado, se carga el secreto `LIBRAEDGE_FIRMA_CMD` (
 firma cada `.exe` de la app) y se compila el instalador con `ISCC /DFirmar "/Sfirma=signtool sign ... $f"` (firma el
 instalador y el desinstalador).
 
-## Las otras cajas del local: la app de caja (ADR-017)
+## Los otros puestos del local: la app de puesto (ADR-017)
 
-En las otras PC del local (las que no tienen el nodo) va **la app de caja** del producto: sólo la versión de
+En las otras PC del local (las que no tienen el nodo) va **la app de puesto** del producto: sólo la versión de
 escritorio, sin nodo, base de datos ni Python. Se baja del mismo Release (o de «Sucursal sin internet», «Para las otras
 PC del local»):
 
-- Windows 10/11: `libraedge-caja-<producto>.exe` (en silencio: `/VERYSILENT /SUPPRESSMSGBOXES`). Deja «<Producto>» en
-  el escritorio y el menú Inicio; se desinstala desde «Agregar o quitar programas» («<Producto> (caja)»). Usa el
+- Windows 10/11: `libraedge-puesto-<producto>.exe` (en silencio: `/VERYSILENT /SUPPRESSMSGBOXES`). Deja «<Producto>» en
+  el escritorio y el menú Inicio; se desinstala desde «Agregar o quitar programas» («<Producto> (puesto)»). Usa el
   runtime de WebView2 (Windows 11 lo trae; si falta, el instalador avisa).
-- Ubuntu 22.04/24.04/26.04: `sudo apt install ./libraedge-caja-<producto>_amd64.deb`. Deja «<Producto>» en el menú y
+- Ubuntu 22.04/24.04/26.04: `sudo apt install ./libraedge-puesto-<producto>_amd64.deb`. Deja «<Producto>» en el menú y
   fijado en el dock.
 
 Al abrirla, **busca sola la PC principal** en la red del local (UDP 47823, broadcast; la PC principal contesta con el
 servicio `LibraEdgeDescubrimiento` / `libraedge-descubrimiento`): si hay una la usa, si hay varias deja elegir (por
 sucursal y negocio) y si no encuentra ninguna pide la dirección, la misma que muestra la PC principal en la bandeja
-(«Otras cajas: http://…») y al terminar de instalar. La recuerda; si la PC principal deja de responder muestra
+(«Otros puestos: http://…») y al terminar de instalar. La recuerda; si la PC principal deja de responder muestra
 «Conectando…» y la vuelve a buscar por si cambió de IP. No ofrece «Vincular»: se vincula la PC principal. F11, la
 sesión recordada, los enlaces externos y las descargas, como en la PC principal.
 
-Dónde guarda lo suyo: Windows `%APPDATA%\ar.com.librasuite.<producto>.caja\principal.json` (la PC principal elegida;
-borrarlo hace buscar de nuevo) y `%LOCALAPPDATA%\ar.com.librasuite.<producto>.caja\`; Ubuntu
-`~/.config/ar.com.librasuite.<producto>.caja/` y `~/.local/share/ar.com.librasuite.<producto>.caja/`.
+Dónde guarda lo suyo: Windows `%APPDATA%\ar.com.librasuite.<producto>.puesto\principal.json` (la PC principal elegida;
+borrarlo hace buscar de nuevo) y `%LOCALAPPDATA%\ar.com.librasuite.<producto>.puesto\`; Ubuntu
+`~/.config/ar.com.librasuite.<producto>.puesto/` y `~/.local/share/ar.com.librasuite.<producto>.puesto/`.
 
-Para soporte, sin ventana: `"<Producto>.exe" --buscar` (o `libraedge-caja-<producto> --buscar`) lista las PC principales
+Para soporte, sin ventana: `"<Producto>.exe" --buscar` (o `libraedge-puesto-<producto> --buscar`) lista las PC principales
 que contestan (una línea JSON cada una); `--buscar --a 192.168.0.10` pregunta a esa IP. Desde la PC principal,
 `verificar_nodo` dice si el descubrimiento contesta.
 
@@ -412,7 +412,7 @@ sesión «ubuntu» la trae habilitada para todos (el CI lo comprueba en los paqu
 «Abrir <Producto>» corre `bandeja/abrir_producto.sh` (ADR-013), el mismo que el acceso directo del menú
 (`/usr/share/applications/libraedge-nodo-<producto>.desktop`, ícono `/opt/libraedge-nodo/marca/<producto>.svg`): con
 Google Chrome, Chromium o Edge, en modo aplicación (`--app=`); si no hay ninguno (Ubuntu trae Firefox, que no tiene
-modo aplicación), `xdg-open` de la URL. La línea «Otras cajas: http://<IP>:8000 (copiar)» le pregunta la IP al
+modo aplicación), `xdg-open` de la URL. La línea «Otros puestos: http://<IP>:8000 (copiar)» le pregunta la IP al
 ayudante (`acceso --json`) cada minuto y al hacer clic la copia.
 
 **No se deja un ícono en el escritorio de los usuarios:** en GNOME un `.desktop` en `~/Escritorio` aparece como «no
@@ -448,7 +448,7 @@ con la app en el inicio de sesión; y que la ventana no quede en blanco (si pasa
 La bandeja en una sesión gráfica real (los runners no tienen escritorio). Para verla: una VM con Ubuntu Desktop 24.04
 (y otra con 22.04), instalar el `.deb` con la carga de prueba **con las recomendadas**, y mirar que aparezca el círculo
 al lado del reloj, que pase a ámbar al cortar la red (`sudo systemctl stop libraedge-nodo` lo pone rojo), que «Abrir
-<Producto>» abra la ventana en modo aplicación (con Chrome o Chromium instalado) o el navegador, que «Otras cajas»
+<Producto>» abra la ventana en modo aplicación (con Chrome o Chromium instalado) o el navegador, que «Otros puestos»
 copie la dirección, que el acceso directo aparezca en el menú con la marca del producto y fijado en el dock (con un usuario nuevo y con
 uno que ya tenía el dock ordenado), y que
 vuelva al cerrar y abrir sesión. También: el producto desde otra PC de la red con ufw
@@ -572,13 +572,13 @@ porque las dependencias de la familia son `git+https`.
 
 **4. Faltaba la mitad de las migraciones.** Acá corría sólo
 `alembic upgrade head` —la cadena **propia** del producto— y falta la del
-**motor**, que es la que crea `facturas`, `cajas`, `usuarios` y el schema entero
+**motor**, que es la que crea `facturas`, `puestos`, `usuarios` y el schema entero
 de LibraCore. El central corre las dos: `scripts/panel_admin.py` y
 `scripts/nuevo_cliente.py` del producto tienen exactamente esa tupla.
 
 > Medido: con una sola cadena la migración muere en el `0001` con
 > *relation "facturas" does not exist* y la base del nodo queda con **21**
-> tablas, sin `cajas`, `usuarios` ni `sync_outbox`. Con las dos, **73**.
+> tablas, sin `puestos`, `usuarios` ni `sync_outbox`. Con las dos, **73**.
 
 **5. El producto no levantaba, y el servicio decía `Running`.** El `.env` no
 incluía `SECRET_KEY`, así que `libraauth` abortaba con *"SECRET_KEY no está
@@ -704,7 +704,7 @@ PC que se esta dando de baja.
 | **#1 zona del `initdb`** | `now()` = `-03` con el sistema operativo en **UTC** |
 | Collation | `i\|en-US` (ICU), no `C` |
 | **Checksums** | `data_checksums = on` en un cluster creado por el instalador real |
-| Schema | 73 tablas, con `cajas`, `usuarios`, `facturas` y `sync_outbox` |
+| Schema | 73 tablas, con `puestos`, `usuarios`, `facturas` y `sync_outbox` |
 | El producto | salud 200; los tres servicios `Running` y `Automatic` |
 | **#4 el `.env`** | sin BOM, y solo `SYSTEM` y `BUILTIN\Administradores` |
 | **#2 reiniciar** | los tres servicios solos, salud 200 a los 51 s |

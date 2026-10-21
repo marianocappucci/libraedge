@@ -1,7 +1,7 @@
 //! ¿Responde el producto? Un GET a la ruta de salud de la definicion, con plazos cortos.
 //!
 //! En la PC principal va a `127.0.0.1` y no a `localhost`: el producto escucha en IPv4 (`--host 0.0.0.0`) y
-//! `localhost` puede resolver primero a `::1`. En una caja secundaria (ADR-017), a la IP de la PC principal. Sin
+//! `localhost` puede resolver primero a `::1`. En un puesto secundario (ADR-017), a la IP de la PC principal. Sin
 //! dependencias: es una sola linea de HTTP/1.0.
 
 use std::io::{Read, Write};

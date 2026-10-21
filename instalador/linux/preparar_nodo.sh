@@ -95,7 +95,7 @@ systemctl start libraedge-respaldo.timer libraedge-estado.path
 registrar "Servicios: $(systemctl is-active "${SERVICIOS_NODO[@]}" | tr '\n' ' ')"
 
 # --- El descubrimiento (ADR-017) ------------------------------------------------------------
-# Las otras cajas del local encuentran esta PC preguntando por UDP: contesta un servicio sin privilegios que lee
+# Los otros puestos del local encuentran esta PC preguntando por UDP: contesta un servicio sin privilegios que lee
 # solo descubrimiento.json (sin secretos). Con la carga, de ahi salen el nodo, la sucursal y el negocio; sin ella
 # (una actualizacion), del nodo.env (solo LIBRAEDGE_NODE_ID), del config.json y del archivo anterior.
 desc_args=(--definicion "$DEFINICION" --salida "$DESCUBRIMIENTO" --entorno "$ARCHIVO_ENV" --config "$DATA_DIR/config.json")
@@ -106,11 +106,11 @@ if ayudante descubrimiento "${desc_args[@]}"; then
     systemctl restart "$SERVICIO_DESCUBRIMIENTO"
     registrar "Descubrimiento: $(systemctl is-active "$SERVICIO_DESCUBRIMIENTO") (UDP $PUERTO_DESCUBRIMIENTO)."
 else
-    aviso "No se pudo escribir $DESCUBRIMIENTO: las otras cajas no van a encontrar esta PC solas (se escribe la IP a mano)."
+    aviso "No se pudo escribir $DESCUBRIMIENTO: los otros puestos no van a encontrar esta PC solas (se escribe la IP a mano)."
 fi
 
 # --- El firewall ----------------------------------------------------------------------------
-# Las cajas son navegadores (o la app de caja, ADR-017) en la red del local. Si ufw esta activo se abre el
+# Los puestos son navegadores (o la app de puesto, ADR-017) en la red del local. Si ufw esta activo se abre el
 # puerto del producto y el del descubrimiento (UDP) solo para las redes privadas; si no, no se toca nada.
 puerto="$(plan_campo 'p["puerto"]')"
 if command -v ufw > /dev/null && ufw status 2> /dev/null | grep -q "^Status: active"; then

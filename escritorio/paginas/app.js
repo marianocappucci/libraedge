@@ -1,4 +1,4 @@
-// Las pantallas propias de la app (ADR-015): «inicio», «espera» y «vincular»; en una caja secundaria (ADR-017),
+// Las pantallas propias de la app (ADR-015): «inicio», «espera» y «vincular»; en un puesto secundario (ADR-017),
 // tambien «buscando», «elegir» y «direccion» (la PC principal). Cual se muestra lo decide la app (?p=...), que
 // tambien vuelve al producto apenas responde.
 (function () {
@@ -50,10 +50,10 @@
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(e.marca);
     $('marca').appendChild(img);
     $('direccion-sistema').placeholder = 'sistema.' + e.producto + '.com.ar';
-    var caja = e.modo === 'caja';
-    cada('.solo-caja', function (n) { n.hidden = !caja; });
-    cada('.solo-nodo', function (n) { n.hidden = caja || n.id === 'ayuda-espera'; });
-    if (caja && e.principal) {
+    var puesto = e.modo === 'puesto';
+    cada('.solo-puesto', function (n) { n.hidden = !puesto; });
+    cada('.solo-nodo', function (n) { n.hidden = puesto || n.id === 'ayuda-espera'; });
+    if (puesto && e.principal) {
       var donde = lugar(e.principal);
       cada('.donde-principal', function (n) {
         n.textContent = ' (' + (donde ? donde + ', ' : '') + e.principal.ip + ')';
@@ -64,7 +64,7 @@
     if (pantalla === 'vincular') { $('direccion-sistema').focus(); }
     if (pantalla === 'direccion') { $('ip').focus(); }
     if (pantalla === 'espera') {
-      setTimeout(function () { $(caja ? 'ayuda-espera-caja' : 'ayuda-espera').hidden = false; }, 45000);
+      setTimeout(function () { $(puesto ? 'ayuda-espera-puesto' : 'ayuda-espera').hidden = false; }, 45000);
     }
   }).catch(function () { mostrar(pantalla); });
 

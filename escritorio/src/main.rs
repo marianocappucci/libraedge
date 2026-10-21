@@ -5,18 +5,18 @@
 //!   muestra una pantalla de espera propia («Conectando con ContaLibra…») y vuelve sola cuando responde.
 //! - Si el nodo de esta PC no esta vinculado, muestra «Vincular con el sistema» (direccion + codigo, ADR-014) y
 //!   configura el nodo con la elevacion del sistema (`vinculo.rs`).
-//! - F11 alterna la pantalla completa y se recuerda (cajas dedicadas); tambien `--pantalla-completa` y `--ventana`.
+//! - F11 alterna la pantalla completa y se recuerda (puestos dedicados); tambien `--pantalla-completa` y `--ventana`.
 //! - Recuerda tamaño y posicion; conserva la sesion del producto entre aperturas (`preferencias.rs`).
 //! - Los enlaces que no son del producto (ARCA, Mercado Pago, ayudas) se abren en el navegador del sistema.
 //!
 //! Si la ventana no se puede crear (falta WebView2 o WebKitGTK), abre el producto en el navegador: el mismo
 //! respaldo que el acceso directo «<Producto> (navegador)».
 //!
-//! **En una caja secundaria** (ADR-017: el mismo binario, instalado sin el nodo; ver `producto.rs`) el producto no es
+//! **En un puesto secundario** (ADR-017: el mismo binario, instalado sin el nodo; ver `producto.rs`) el producto no es
 //! la copia local sino el de la PC principal: la primera vez la busca en la red del local (`descubrimiento.rs`); si
 //! hay una la usa, si hay varias deja elegir y si no encuentra ninguna pide la IP a mano. La recuerda
 //! (`principal.rs`) y, si deja de responder, muestra la espera y vuelve a buscar por si cambio de IP. No ofrece
-//! «Vincular» (no hay nodo) y usa otro identificador (`ar.com.librasuite.<producto>.caja`): otra sesion del
+//! «Vincular» (no hay nodo) y usa otro identificador (`ar.com.librasuite.<producto>.puesto`): otra sesion del
 //! navegador embebido y otras preferencias que la app de la PC principal.
 //!
 //! Linea de comandos (sin argumentos abre la ventana):
@@ -78,11 +78,11 @@ enum Pantalla {
     Vincular,
     Vinculando,
     Producto,
-    /// Caja: buscando la PC principal en la red del local.
+    /// Puesto: buscando la PC principal en la red del local.
     Buscando,
-    /// Caja: hay varias PC principales del producto; se elige una.
+    /// Puesto: hay varias PC principales del producto; se elige una.
     Elegir,
-    /// Caja: no se encontro ninguna; se escribe la IP a mano.
+    /// Puesto: no se encontro ninguna; se escribe la IP a mano.
     Direccion,
 }
 
@@ -109,7 +109,7 @@ struct Compartido {
     informe: Option<PathBuf>,
     preferencias: PathBuf,
     sesion: PathBuf,
-    /// Caja (ADR-017): la PC principal elegida, donde se recuerda, lo ultimo que se encontro en la red y si se
+    /// Puesto (ADR-017): la PC principal elegida, donde se recuerda, lo ultimo que se encontro en la red y si se
     /// pidio buscar otra.
     archivo_principal: PathBuf,
     principal: Mutex<Option<Principal>>,
@@ -124,19 +124,19 @@ impl Compartido {
         *self.pantalla.lock().unwrap()
     }
 
-    fn caja(&self) -> bool {
-        self.producto.modo == Modo::Caja
+    fn puesto(&self) -> bool {
+        self.producto.modo == Modo::Puesto
     }
 
     fn principal(&self) -> Option<Principal> {
         self.principal.lock().unwrap().clone()
     }
 
-    /// De donde se sirve el producto: la copia local o la PC principal elegida (en una caja sin elegir, ninguno).
+    /// De donde se sirve el producto: la copia local o la PC principal elegida (en un puesto sin elegir, ninguno).
     fn origen(&self) -> Option<Origen> {
         match self.producto.modo {
             Modo::Nodo => Some(Origen::local(self.producto.puerto)),
-            Modo::Caja => self.principal().map(|p| p.origen()),
+            Modo::Puesto => self.principal().map(|p| p.origen()),
         }
     }
 
@@ -199,13 +199,13 @@ fn estado(compartido: State<'_, Arc<Compartido>>) -> EstadoParaPagina {
     }
 }
 
-/// Caja: la pagina pide buscar otra PC principal (olvida la elegida).
+/// Puesto: la pagina pide buscar otra PC principal (olvida la elegida).
 #[tauri::command]
 fn buscar_otra(compartido: State<'_, Arc<Compartido>>) {
     compartido.buscar_otra.store(true, Ordering::SeqCst);
 }
 
-/// Caja: se eligio una de las PC principales encontradas.
+/// Puesto: se eligio una de las PC principales encontradas.
 #[tauri::command]
 fn elegir(app: AppHandle, compartido: State<'_, Arc<Compartido>>, indice: usize) -> Result<(), String> {
     let nodo = compartido.encontrados.lock().unwrap().get(indice).cloned().ok_or("Ya no está en la lista.")?;
@@ -213,7 +213,7 @@ fn elegir(app: AppHandle, compartido: State<'_, Arc<Compartido>>, indice: usize)
     Ok(())
 }
 
-/// Caja: la IP de la PC principal, escrita a mano. Primero se le pregunta por el descubrimiento (da el puerto y
+/// Puesto: la IP de la PC principal, escrita a mano. Primero se le pregunta por el descubrimiento (da el puerto y
 /// el nodo); si no contesta, se prueba la salud del producto en el puerto escrito (o el de la definicion).
 #[tauri::command]
 async fn usar_direccion(
@@ -270,7 +270,7 @@ fn permitir_f11(app: &AppHandle, compartido: &Compartido, origen: &Origen) {
     }
 }
 
-/// Caja: queda elegida esta PC principal (se recuerda); el vigilante la carga apenas responde.
+/// Puesto: queda elegida esta PC principal (se recuerda); el vigilante la carga apenas responde.
 fn fijar_principal(app: &AppHandle, compartido: &Compartido, p: Principal) {
     principal::guardar(&compartido.archivo_principal, &p);
     compartido.anotar(&format!("principal {}:{} {}", p.ip, p.puerto, p.nodo));
@@ -279,7 +279,7 @@ fn fijar_principal(app: &AppHandle, compartido: &Compartido, p: Principal) {
     compartido.poner(Pantalla::Inicio);
 }
 
-/// Caja: busca las PC principales del producto en la red del local.
+/// Puesto: busca las PC principales del producto en la red del local.
 fn buscar_en_la_red(compartido: &Compartido) -> Vec<Nodo> {
     let destinos = descubrimiento::destinos_broadcast(descubrimiento::PUERTO);
     let nodos = descubrimiento::buscar(PRODUCTO, &destinos, Duration::from_secs(2));
@@ -292,8 +292,8 @@ fn buscar_en_la_red(compartido: &Compartido) -> Vec<Nodo> {
 #[tauri::command]
 async fn vincular(compartido: State<'_, Arc<Compartido>>, direccion: String, codigo: String) -> Result<String, String> {
     let compartido = compartido.inner().clone();
-    if compartido.caja() {
-        return Err("En las otras cajas no se vincula: se vincula la PC principal.".into());
+    if compartido.puesto() {
+        return Err("En los otros puestos no se vincula: se vincula la PC principal.".into());
     }
     if compartido.pantalla() == Pantalla::Vinculando {
         return Err("Ya se está vinculando.".into());
@@ -383,9 +383,9 @@ fn reponer_sesion(ventana: &WebviewWindow, compartido: &Compartido) {
     let Some(origen) = compartido.origen() else { return };
     for guardada in preferencias::leer_sesion(&compartido.sesion).unwrap_or_default() {
         let mut cookie = preferencias::a_cookie(&guardada);
-        // Sin punto adelante es una cookie del host (como la que puso el producto), no de dominio. En una caja, la
+        // Sin punto adelante es una cookie del host (como la que puso el producto), no de dominio. En un puesto, la
         // del host de la PC principal: si cambio de IP, la sesion sigue siendo la misma en el mismo producto.
-        if compartido.caja() || cookie.domain().is_none() {
+        if compartido.puesto() || cookie.domain().is_none() {
             cookie.set_domain(origen.host.clone());
         }
         let _ = ventana.set_cookie(cookie);
@@ -403,14 +403,14 @@ fn vigilar(app: AppHandle, compartido: Arc<Compartido>) {
     loop {
         let Some(ventana) = app.get_webview_window(PRINCIPAL) else { return };
         vueltas += 1;
-        if compartido.caja() && compartido.buscar_otra.swap(false, Ordering::SeqCst) {
+        if compartido.puesto() && compartido.buscar_otra.swap(false, Ordering::SeqCst) {
             principal::olvidar(&compartido.archivo_principal);
             *compartido.principal.lock().unwrap() = None;
             compartido.anotar("buscar otra");
             compartido.poner(Pantalla::Inicio);
         }
         let Some(origen) = compartido.origen() else {
-            // Caja sin PC principal elegida: buscarla.
+            // Puesto sin PC principal elegida: buscarla.
             elegir_principal(&app, &ventana, &compartido, vueltas);
             std::thread::sleep(Duration::from_millis(1500));
             continue;
@@ -422,7 +422,7 @@ fn vigilar(app: AppHandle, compartido: Arc<Compartido>) {
         }
         let arriba = match producto.modo {
             Modo::Nodo => salud::responde(producto.puerto, &producto.salud, Duration::from_secs(3)),
-            Modo::Caja => origen.host.parse::<IpAddr>().is_ok_and(|ip| {
+            Modo::Puesto => origen.host.parse::<IpAddr>().is_ok_and(|ip| {
                 salud::responde_en(ip, &origen.host, origen.puerto, &producto.salud, Duration::from_secs(3))
             }),
         };
@@ -454,7 +454,7 @@ fn vigilar(app: AppHandle, compartido: Arc<Compartido>) {
                     reponer_sesion(&ventana, &compartido);
                     sesion_repuesta = true;
                 }
-                // La URL donde estaba, si es del mismo origen (en una caja la PC principal pudo cambiar de IP).
+                // La URL donde estaba, si es del mismo origen (en un puesto la PC principal pudo cambiar de IP).
                 let guardada = compartido.ultima_url.lock().unwrap().take();
                 let destino = guardada
                     .filter(|u| clasificar(u, &origen) == Destino::Producto)
@@ -471,7 +471,7 @@ fn vigilar(app: AppHandle, compartido: Arc<Compartido>) {
                 if actual != deseada {
                     compartido.mostrar(&ventana, deseada);
                 }
-                // Caja: mientras espera, cada tanto vuelve a buscar por si la PC principal cambio de IP.
+                // Puesto: mientras espera, cada tanto vuelve a buscar por si la PC principal cambio de IP.
                 if let Some(p) = compartido.principal().filter(|_| actual == Pantalla::Espera && vueltas % 4 == 0) {
                     let otra = buscar_en_la_red(&compartido)
                         .into_iter()
@@ -490,7 +490,7 @@ fn vigilar(app: AppHandle, compartido: Arc<Compartido>) {
     }
 }
 
-/// Caja sin PC principal: la busca; si hay una la usa, si hay varias deja elegir y si no hay ninguna pide la IP. En
+/// Puesto sin PC principal: la busca; si hay una la usa, si hay varias deja elegir y si no hay ninguna pide la IP. En
 /// «elegir» se espera; en «direccion» se sigue buscando cada tanto (la PC principal pudo estar apagada).
 fn elegir_principal(app: &AppHandle, ventana: &WebviewWindow, compartido: &Compartido, vueltas: u64) {
     let actual = compartido.pantalla();
@@ -656,7 +656,7 @@ fn main() {
 
     let modo = match producto.modo {
         Modo::Nodo => "nodo",
-        Modo::Caja => "caja",
+        Modo::Puesto => "puesto",
     };
     if args.iter().any(|a| a == "--version") {
         println!(
@@ -666,7 +666,7 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "--buscar") {
-        // Sin ventana (el CI y soporte): la misma busqueda que la pantalla de una caja.
+        // Sin ventana (el CI y soporte): la misma busqueda que la pantalla de un puesto.
         let ips: Vec<std::net::SocketAddr> = args
             .windows(2)
             .filter(|par| par[0] == "--a")
@@ -687,8 +687,8 @@ fn main() {
         std::process::exit(vinculo::vincular_elevado(&producto, &direccion, &archivo));
     }
     if args.iter().any(|a| a == "--vincular") {
-        if producto.modo == Modo::Caja {
-            eprintln!("En las otras cajas no se vincula: se vincula la PC principal.");
+        if producto.modo == Modo::Puesto {
+            eprintln!("En los otros puestos no se vincula: se vincula la PC principal.");
             std::process::exit(2);
         }
         let direccion = valor(&args, "--direccion").unwrap_or_default();
@@ -713,12 +713,12 @@ fn main() {
         None
     };
     let url = producto.url();
-    let caja = producto.modo == Modo::Caja;
-    // Una caja usa otro identificador que la app de la PC principal: otra sesion del navegador embebido, otras
+    let puesto = producto.modo == Modo::Puesto;
+    // Un puesto usa otro identificador que la app de la PC principal: otra sesion del navegador embebido, otras
     // preferencias y otra instancia unica (las dos pueden estar en la misma PC, como en el CI).
     let mut contexto = tauri::generate_context!();
-    if caja {
-        contexto.config_mut().identifier = format!("ar.com.librasuite.{PRODUCTO}.caja");
+    if puesto {
+        contexto.config_mut().identifier = format!("ar.com.librasuite.{PRODUCTO}.puesto");
     }
 
     let principal_al_salir: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -756,7 +756,7 @@ fn main() {
                 let config = app.path().app_config_dir()?;
                 let datos = app.path().app_local_data_dir()?;
                 let archivo_principal = config.join("principal.json");
-                let elegida = if caja { principal::leer(&archivo_principal) } else { None };
+                let elegida = if puesto { principal::leer(&archivo_principal) } else { None };
                 let compartido = Arc::new(Compartido {
                     producto: producto.clone(),
                     pantalla: Mutex::new(Pantalla::Inicio),
@@ -782,7 +782,7 @@ fn main() {
                 }
                 *principal_en_setup.lock().unwrap() = compartido.origen().map(|o| o.url());
                 app.manage(compartido.clone());
-                compartido.anotar(&format!("inicio {PRODUCTO} {VERSION} {}", if caja { "caja" } else { "nodo" }));
+                compartido.anotar(&format!("inicio {PRODUCTO} {VERSION} {}", if puesto { "puesto" } else { "nodo" }));
                 // Un error aca adentro seria un panic dentro del bucle de eventos (en Linux, a traves de GTK: aborta
                 // sin respaldo). Si la ventana no se puede crear (WebView2 o WebKitGTK rotos), el navegador.
                 match ventana_principal(app.handle(), compartido.clone(), prefs.pantalla_completa) {
@@ -805,8 +805,8 @@ fn main() {
     }));
     if !matches!(resultado, Ok(Ok(()))) {
         eprintln!("No se pudo abrir la ventana de {NOMBRE}; se abre en el navegador.");
-        // En una caja, la PC principal recordada (si no hay ninguna, no hay a donde ir).
-        let destino = if caja { principal_al_salir.lock().ok().and_then(|p| p.clone()) } else { Some(url) };
+        // En un puesto, la PC principal recordada (si no hay ninguna, no hay a donde ir).
+        let destino = if puesto { principal_al_salir.lock().ok().and_then(|p| p.clone()) } else { Some(url) };
         if let Some(destino) = destino {
             abrir_en_el_navegador(&destino);
         }

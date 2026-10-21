@@ -134,15 +134,15 @@ try {
     Falla "$($plan.nombre) no responde en ${url}: $($_.Exception.Message)"
 }
 
-# --- 7b. Las otras cajas encuentran esta PC (ADR-017) --------------------------------------
-# Se le pregunta al que contesta como lo haria una caja, pero a esta misma PC.
+# --- 7b. Los otros puestos encuentran esta PC (ADR-017) --------------------------------------
+# Se le pregunta al que contesta como lo haria un puesto, pero a esta misma PC.
 $descubrimiento = Join-Path $Datos "descubrimiento.json"
 $desc = Join-Path $RaizNodo "instalador\libraedge_descubrimiento.py"
 if (-not (Test-Path $descubrimiento)) { Falla "descubrimiento.json: no esta en $Datos" }
 elseif ((Invocar -Programa $python -Argumentos @("-I", $desc, "buscar", "--producto", $plan.producto, "--a", "127.0.0.1", "--espera", "3")) -eq 0) {
-    Bien "descubrimiento: contesta en UDP 47823 a las cajas de $($plan.nombre)"
+    Bien "descubrimiento: contesta en UDP 47823 a los puestos de $($plan.nombre)"
 } else {
-    Falla "descubrimiento: no contesta en UDP 47823 (las otras cajas no encuentran esta PC)"
+    Falla "descubrimiento: no contesta en UDP 47823 (los otros puestos no encuentran esta PC)"
     $logDesc = Join-Path $Datos "descubrimiento\descubrimiento.log"
     if (Test-Path $logDesc) { Get-Content $logDesc -Tail 20 | ForEach-Object { Write-Host "       $_" } }
 }

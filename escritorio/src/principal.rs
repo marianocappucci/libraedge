@@ -1,7 +1,7 @@
-//! La PC principal que eligio esta caja secundaria (ADR-017), recordada en `principal.json` (carpeta de
-//! configuracion del usuario, la de la app en modo caja). No tiene secretos: la IP, el puerto y lo que contesto el
+//! La PC principal que eligio este puesto secundario (ADR-017), recordada en `principal.json` (carpeta de
+//! configuracion del usuario, la de la app en modo puesto). No tiene secretos: la IP, el puerto y lo que contesto el
 //! nodo (su identificador, la sucursal y el negocio). El identificador sirve para reconocer la misma PC principal si
-//! cambio de IP: la caja vuelve a buscar y se queda solo con ese nodo.
+//! cambio de IP: el puesto vuelve a buscar y se queda solo con ese nodo.
 
 use crate::descubrimiento::Nodo;
 use crate::navegacion::Origen;

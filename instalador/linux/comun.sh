@@ -49,7 +49,7 @@ ZONA="America/Argentina/Buenos_Aires"
 
 SERVICIOS_NODO=(libraedge-producto.service libraedge-nodo.service)
 
-# Lo que el nodo contesta a las otras cajas del local que lo buscan (ADR-017): sin secretos, 0644. Lo lee
+# Lo que el nodo contesta a los otros puestos del local que lo buscan (ADR-017): sin secretos, 0644. Lo lee
 # libraedge-descubrimiento.service, que contesta en UDP $PUERTO_DESCUBRIMIENTO.
 DESCUBRIMIENTO="$DATOS/descubrimiento.json"
 PUERTO_DESCUBRIMIENTO=47823

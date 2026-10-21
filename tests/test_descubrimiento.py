@@ -1,9 +1,9 @@
-"""Las otras cajas del local encuentran la PC principal (ADR-017).
+"""Los otros puestos del local encuentran la PC principal (ADR-017).
 
-El que contesta (``libraedge/descubrimiento.py``) se prueba con sockets de verdad en loopback; la app de caja
+El que contesta (``libraedge/descubrimiento.py``) se prueba con sockets de verdad en loopback; la app de puesto
 (``escritorio/src/descubrimiento.rs``) tiene sus pruebas de Rust y las dos se prueban juntas, de punta a punta, en el
-workflow ``publicar-instalador.yml`` (el nodo instalado contesta y la app de caja lo encuentra por broadcast). Aca,
-ademas, que los dos lados digan lo mismo y que los instaladores lleven el servicio, el firewall y la caja.
+workflow ``publicar-instalador.yml`` (el nodo instalado contesta y la app de puesto lo encuentra por broadcast). Aca,
+ademas, que los dos lados digan lo mismo y que los instaladores lleven el servicio, el firewall y el puesto.
 """
 
 import json
@@ -21,7 +21,7 @@ from libraedge import instalador as ins
 RAIZ = Path(__file__).resolve().parent.parent
 INSTALADOR = RAIZ / "instalador"
 LINUX = INSTALADOR / "linux"
-CAJA = LINUX / "caja"
+PUESTO = LINUX / "puesto"
 ESCRITORIO = RAIZ / "escritorio"
 PRODUCTOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
 WORKFLOW = RAIZ / ".github" / "workflows" / "publicar-instalador.yml"
@@ -349,31 +349,31 @@ def test_windows_tiene_el_servicio_como_localservice_y_su_regla():
     assert "LibraEdgeDescubrimiento" in _texto(INSTALADOR / "verificar_nodo.ps1")
 
 
-# ── los instaladores de la caja ───────────────────────────────────────────
+# ── los instaladores de el puesto ───────────────────────────────────────────
 
 
-def test_el_iss_de_la_caja_tiene_la_misma_tabla_que_las_definiciones():
-    iss = _texto(INSTALADOR / "caja.iss")
-    patron = (r'#(?:el)?if Producto == "(\w+)"\s+#define NombreProducto "([^"]+)"\s+#define AppIdCaja\s+"([^"]+)"'
+def test_el_iss_de_la_puesto_tiene_la_misma_tabla_que_las_definiciones():
+    iss = _texto(INSTALADOR / "puesto.iss")
+    patron = (r'#(?:el)?if Producto == "(\w+)"\s+#define NombreProducto "([^"]+)"\s+#define AppIdPuesto\s+"([^"]+)"'
               r'\s+#define AppIdNodo\s+"([^"]+)"')
-    filas = {p: (n, caja, nodo) for p, n, caja, nodo in re.findall(patron, iss)}
+    filas = {p: (n, puesto, nodo) for p, n, puesto, nodo in re.findall(patron, iss)}
     assert sorted(filas) == PRODUCTOS
-    cajas = set()
-    for producto, (nombre, app_caja, app_nodo) in filas.items():
+    puestos = set()
+    for producto, (nombre, app_puesto, app_nodo) in filas.items():
         definicion = json.loads(_texto(INSTALADOR / "productos" / f"{producto}.json"))
         assert nombre == definicion["nombre"]
         assert app_nodo == definicion["app_id"]
-        assert app_caja != app_nodo and re.fullmatch(r"[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}", app_caja)
-        cajas.add(app_caja)
-    assert len(cajas) == len(PRODUCTOS)
+        assert app_puesto != app_nodo and re.fullmatch(r"[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}", app_puesto)
+        puestos.add(app_puesto)
+    assert len(puestos) == len(PRODUCTOS)
 
 
-def test_el_iss_de_la_caja_es_solo_la_app():
-    iss = _texto(INSTALADOR / "caja.iss")
+def test_el_iss_de_la_puesto_es_solo_la_app():
+    iss = _texto(INSTALADOR / "puesto.iss")
     fuentes = re.findall(r'^Source: "([^"]+)"', iss, re.M)
     assert fuentes == ["paquete\\escritorio\\{#Producto}.exe"]
-    assert "OutputBaseFilename=libraedge-caja-{#Producto}-{#Version}" in iss
-    assert "DefaultDirName={autopf}\\{#NombreProducto} (caja)" in iss
+    assert "OutputBaseFilename=libraedge-puesto-{#Producto}-{#Version}" in iss
+    assert "DefaultDirName={autopf}\\{#NombreProducto} (puesto)" in iss
     assert 'Name: "{commondesktop}\\{#NombreProducto}"' in iss and 'Name: "{commonprograms}\\{#NombreProducto}"' in iss
     assert "HayWebView2" in iss and "EsLaPrincipal" in iss
     assert iss.isascii()
@@ -381,23 +381,23 @@ def test_el_iss_de_la_caja_es_solo_la_app():
     assert not [linea for linea in lineas if linea.startswith("[")]
 
 
-def test_el_deb_de_la_caja_es_solo_la_app():
-    armar = _texto(CAJA / "armar_deb.sh")
+def test_el_deb_de_la_puesto_es_solo_la_app():
+    armar = _texto(PUESTO / "armar_deb.sh")
     assert 'install -m 755 "$app" "$opt/$paquete"' in armar
-    assert 'opt="$raiz/opt/libraedge-caja/$producto"' in armar
+    assert 'opt="$raiz/opt/libraedge-puesto/$producto"' in armar
     assert "Depends: libwebkit2gtk-4.1-0, libgtk-3-0" in armar
     assert "postgresql" not in re.search(r"Depends: (.*)", armar).group(1)
     assert "python" not in re.search(r"Recommends: (.*)", armar).group(1)
-    desktop = _texto(CAJA / "libraedge-caja.desktop")
-    assert "Exec=/opt/libraedge-caja/@PRODUCTO@/libraedge-caja-@PRODUCTO@" in desktop
-    assert "StartupWMClass=libraedge-caja-@PRODUCTO@" in desktop
-    dock = _texto(CAJA / "dock.sh")
-    assert "91_libraedge-caja.gschema.override" in dock and "python" not in dock
+    desktop = _texto(PUESTO / "libraedge-puesto.desktop")
+    assert "Exec=/opt/libraedge-puesto/@PRODUCTO@/libraedge-puesto-@PRODUCTO@" in desktop
+    assert "StartupWMClass=libraedge-puesto-@PRODUCTO@" in desktop
+    dock = _texto(PUESTO / "dock.sh")
+    assert "91_libraedge-puesto.gschema.override" in dock and "python" not in dock
     assert "libraedge-nodo-*.desktop" in dock  # no pisa el favorito del nodo si estan los dos
 
 
 @pytest.mark.parametrize("producto", PRODUCTOS)
-def test_armar_el_deb_de_la_caja(tmp_path, producto):
+def test_armar_el_deb_de_la_puesto(tmp_path, producto):
     import shutil
     import subprocess
     if not shutil.which("dpkg-deb"):
@@ -408,34 +408,35 @@ def test_armar_el_deb_de_la_caja(tmp_path, producto):
     app.write_text("#!/bin/sh\n")
     app.chmod(0o755)
     salida = tmp_path / "salida"
-    subprocess.run(["bash", str(CAJA / "armar_deb.sh"), producto, "--escritorio", str(escritorio), "--version", "1.2.3",
+    subprocess.run(["bash", str(PUESTO / "armar_deb.sh"), producto, "--escritorio", str(escritorio),
+                    "--version", "1.2.3",
                     "--salida", str(salida)], check=True, capture_output=True)
-    deb = salida / f"libraedge-caja-{producto}_1.2.3_amd64.deb"
+    deb = salida / f"libraedge-puesto-{producto}_1.2.3_amd64.deb"
     contenido = subprocess.run(["dpkg-deb", "-c", str(deb)], check=True, capture_output=True, text=True).stdout
-    assert f"./opt/libraedge-caja/{producto}/libraedge-caja-{producto}" in contenido
-    assert f"./usr/share/applications/libraedge-caja-{producto}.desktop" in contenido
+    assert f"./opt/libraedge-puesto/{producto}/libraedge-puesto-{producto}" in contenido
+    assert f"./usr/share/applications/libraedge-puesto-{producto}.desktop" in contenido
     control = subprocess.run(["dpkg-deb", "-f", str(deb)], check=True, capture_output=True, text=True).stdout
-    assert f"Package: libraedge-caja-{producto}" in control
+    assert f"Package: libraedge-puesto-{producto}" in control
     for script in ("postinst", "postrm"):
         texto = subprocess.run(["dpkg-deb", "--ctrl-tarfile", str(deb)], check=True, capture_output=True).stdout
         assert script.encode() in texto
-    assert subprocess.run(["bash", str(CAJA / "armar_deb.sh"), producto], capture_output=True).returncode == 2
+    assert subprocess.run(["bash", str(PUESTO / "armar_deb.sh"), producto], capture_output=True).returncode == 2
 
 
 def test_la_app_detecta_el_modo_por_la_definicion_instalada():
     producto = _texto(ESCRITORIO / "src" / "producto.rs")
     assert 'r.join("instalador").join("producto.json")' in producto and "Modo::Nodo" in producto
     main = _texto(ESCRITORIO / "src" / "main.rs")
-    assert 'format!("ar.com.librasuite.{PRODUCTO}.caja")' in main
-    assert "En las otras cajas no se vincula" in main
+    assert 'format!("ar.com.librasuite.{PRODUCTO}.puesto")' in main
+    assert "En los otros puestos no se vincula" in main
 
 
-def test_el_workflow_arma_prueba_y_publica_la_caja():
+def test_el_workflow_arma_prueba_y_publica_la_puesto():
     workflow = _texto(WORKFLOW)
-    assert "instalador/linux/caja/armar_deb.sh" in workflow and "caja.iss" in workflow
-    assert "libraedge-caja-${{ matrix.producto }}_amd64.deb" in workflow
-    assert "libraedge-caja-${{ matrix.producto }}.exe" in workflow
-    assert "libraedge-caja-*.exe libraedge-caja-*.deb" in workflow
+    assert "instalador/linux/puesto/armar_deb.sh" in workflow and "puesto.iss" in workflow
+    assert "libraedge-puesto-${{ matrix.producto }}_amd64.deb" in workflow
+    assert "libraedge-puesto-${{ matrix.producto }}.exe" in workflow
+    assert "libraedge-puesto-*.exe libraedge-puesto-*.deb" in workflow
     assert "--buscar" in workflow and "cambio de direccion" in workflow
     assert '"libraedge/descubrimiento.py"' in workflow
 

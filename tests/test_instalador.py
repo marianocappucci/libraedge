@@ -688,7 +688,7 @@ def test_sin_ruta_por_defecto_la_primera_privada_del_nombre():
         raise OSError("Network is unreachable")
 
     assert ins.ip_de_la_lan(sin_ruta, lambda: ["127.0.1.1", "10.0.0.5", "192.168.1.9"]) == "10.0.0.5"
-    # La ruta por defecto por una interfaz publica (una PC con IP publica) tampoco es para las cajas.
+    # La ruta por defecto por una interfaz publica (una PC con IP publica) tampoco es para los puestos.
     assert ins.ip_de_la_lan(lambda: "200.1.2.3", lambda: ["192.168.1.9"]) == "192.168.1.9"
 
 
@@ -708,7 +708,7 @@ def test_el_texto_de_como_se_entra():
     assert datos["lineas"] == [
         "En este local se entra siempre por la copia local, aunque haya internet:",
         '  en esta PC, con el acceso directo "ContaLibra" (o http://localhost:8000/);',
-        "  desde las otras cajas, con http://192.168.1.20:8000",
+        "  desde los otros puestos, con http://192.168.1.20:8000",
         "La direccion de la nube es para entrar desde afuera del local.",
     ]
     # Inno Setup lee el texto con la pagina de codigos del sistema: sin acentos.
@@ -719,7 +719,7 @@ def test_sin_ip_el_texto_lo_dice():
     definicion = ins.leer_definicion(str(CARPETA / "productos" / "ventalibra.json"))
     datos = ins.acceso(definicion, None)
     assert datos["ip"] is None and datos["url_lan"] == "http://<IP de esta PC>:8000"
-    assert datos["lineas"][2] == ("  desde las otras cajas, con http://<IP de esta PC>:8000 "
+    assert datos["lineas"][2] == ("  desde los otros puestos, con http://<IP de esta PC>:8000 "
                                   "(no se encontro la IP de esta PC en la red del local)")
 
 

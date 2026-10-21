@@ -417,7 +417,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
        sólo llega a los usuarios nuevos; el acceso está en el menú y **fijado en el dock** (punto 7).
   2. **«Abrir <Producto>» de la bandeja usa el mismo lanzamiento:** en Windows abre el `.lnk` del menú Inicio (si no
      está, la URL en el navegador) y es la acción por defecto; en Linux corre `abrir_producto.sh`. Las dos suman
-     **«Otras cajas: http://<IP>:<puerto> (copiar)»**, que al hacer clic copia la dirección (`clip.exe`; el portapapeles
+     **«Otros puestos: http://<IP>:<puerto> (copiar)»**, que al hacer clic copia la dirección (`clip.exe`; el portapapeles
      de GTK). La bandeja de Windows no recibe argumentos nuevos (lee `<RaizNodo>\instalador\producto.json` al lado de su
      Python): corre con el LibraEdge pineado por el producto, que puede ser anterior.
   3. **El final de la instalación dice cómo se entra, con la IP ya completa**, desde un solo lugar:
@@ -457,7 +457,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
   exactamente el de antes después de `remove`, en las sesiones genérica y «ubuntu».
 - Consecuencias: lo que el CI no puede ver se prueba en una VM (`PROBAR_EN_VM.md`, V8b; README, sección Linux): cómo se
   ve la ventana en modo aplicación, el ícono en el escritorio y en el dock, la página final del asistente, y si Edge pide
-  su configuración inicial la primera vez. En Windows, «Abrir» y «Otras cajas» de la bandeja llegan cuando los
+  su configuración inicial la primera vez. En Windows, «Abrir» y «Otros puestos» de la bandeja llegan cuando los
   productos suban el pin de LibraEdge; el acceso directo y el cartel final llegan con el instalador.
 
 
@@ -559,7 +559,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
 
 ## ADR-015 — La versión de escritorio: una app propia por producto (Tauri 2) en la PC principal
 
-- Estado: aceptada (parte A; la parte B, las cajas secundarias que encuentran la PC principal, es ADR-017)
+- Estado: aceptada (parte A; la parte B, los puestos secundarios que encuentran la PC principal, es ADR-017)
 - Fecha: 2026-10-20
 - Contexto: decisiones del humano del 2026-10-20. Comercialmente LibraEdge es la **«versión de escritorio»** de cada
   producto. Hasta ahora el acceso directo abría `http://localhost:<puerto>/` en Edge `--app` (Windows) o en Chrome,
@@ -633,7 +633,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
        corre la misma función sin ventana: la usa el CI.
   5. **Pantalla completa opcional:** F11 la alterna en cualquier página, la del producto incluida, y se guarda en
      `preferencias.json` (carpeta de configuración del usuario); `--pantalla-completa` / `--ventana` la fijan desde el
-     acceso directo (cajas dedicadas, README). F11 lo escucha un script que la app inyecta en todas las páginas y llama
+     acceso directo (puestos dedicados, README). F11 lo escucha un script que la app inyecta en todas las páginas y llama
      al comando `alternar_pantalla_completa`. **La página del producto sólo puede llamar a ese comando**: su capacidad
      remota (`http://localhost:<puerto>/*` y `127.0.0.1`) se arma al arrancar con ese único permiso; `estado` y
      `vincular` son sólo de las pantallas propias (capacidad local). Sin barra de menú: no le suma nada a la ventana del
@@ -695,9 +695,17 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
   instalador). El tamaño de los instaladores sube unos MB (README). Lo que el CI no ve —cómo se ve la ventana, el pedido
   de clave de pkexec/UAC con un usuario real, F11, la sesión al cerrar y abrir, los enlaces externos, el dock y la
   vinculación contra un central de verdad— se prueba en las VMs (`PROBAR_EN_VM.md`, V16 a V18; README, sección Linux).
-  Lo que pide la parte B: la app de una caja secundaria no tiene nodo (no hay `nodo.env` ni producto local), así que
+  Lo que pide la parte B: la app de un puesto secundario no tiene nodo (no hay `nodo.env` ni producto local), así que
   necesitará otra fuente para la URL (la PC principal encontrada en la red) y no debe ofrecer «Vincular»; la pantalla de
   espera y la reconexión sirven tal cual.
+
+**Actualizar sin vincular (2026-10-21):** actualizar con `/SINVINCULAR` (o sin código ni archivo en el asistente) un
+nodo que **ya estaba vinculado** dejaba el local sin sistema hasta reiniciar: `PrepareToInstall` para los servicios
+para copiar y `instalar.ps1 -SinVincular` sólo hacía los accesos directos. Ahora, si está el `nodo.env`,
+`Actualizar-NodoVinculado` (`comun.ps1`) arranca PostgreSQL, corre las migraciones de la definición con ese entorno
+(el producto nuevo puede traerlas) y vuelve a arrancar producto, nodo y descubrimiento; si una migración falla, el
+producto queda parado y el instalador sale con 20. El CI lo prueba (actualizar con `/SINVINCULAR` un nodo vinculado:
+servicios corriendo y `verificar_nodo.ps1` en 0).
 
 ## ADR-016 — La cookie de sesión del producto sale sin `Secure` en el nodo (`LIBRAAUTH_COOKIE_SECURE=0`)
 
@@ -705,9 +713,9 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
 - Fecha: 2026-10-20
 - Contexto: en una VM Ubuntu 26.04 con el nodo de ContaLibra (v0.15.0), la app de escritorio (Tauri sobre WebKitGTK)
   no podía entrar: `POST /api/login` daba 200, la cookie no se guardaba y el pedido siguiente daba 401. El nodo sirve el
-  producto por **http** (`http://localhost:<puerto>` en la PC, `http://<IP>:<puerto>` desde las otras cajas, ADR-013) y
+  producto por **http** (`http://localhost:<puerto>` en la PC, `http://<IP>:<puerto>` desde los otros puestos, ADR-013) y
   libraauth ponía la cookie de sesión con `secure=True` fijo. WebKitGTK no hace la excepción de `localhost` para cookies
-  `Secure` por http; WebView2 (Windows) y Chrome sí, pero **ningún** navegador la guarda desde una IP, así que las cajas
+  `Secure` por http; WebView2 (Windows) y Chrome sí, pero **ningún** navegador la guarda desde una IP, así que los puestos
   secundarias tampoco podían entrar en ningún sistema operativo.
 - Qué ya existe (se miró antes de diseñar):
   - libraauth: la cookie de `SessionAuth.create_session_cookie` (login, login de la demo y renovación deslizante) es la
@@ -732,7 +740,7 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      secretos, ni la ACL: escribe sobre el archivo existente). Lo llaman `preparar_nodo.sh` sin carga (actualización por
      `apt`) e `instalar.ps1 -SinVincular` si ya hay `nodo.env`. Una variable que ya está, con cualquier valor, se respeta.
   4. **Un producto con libraauth anterior a v0.53.0 ignora la variable** y queda como hoy (login roto por http en
-     WebKitGTK y desde las otras cajas) hasta que suba el pin: no hace falta coordinar las dos versiones.
+     WebKitGTK y desde los otros puestos) hasta que suba el pin: no hace falta coordinar las dos versiones.
   5. **La app de escritorio no cambia**: `sesion.json` guarda la marca `Secure` tal como vino (`segura`) y la repone
      igual; una cookie sin `Secure` vuelve sin `Secure` (test nuevo en `preferencias.rs`). Ni la app ni el producto
      exigen https para leer la sesión (`GET /api/me`, `/auth/me`).
@@ -746,28 +754,28 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      libraauth >= 0.53.0 se exige 200 en el login, ningún `Set-Cookie` con `Secure` y 200 con el admin en `/me`; con una
      versión anterior se exige el 200 del login y se deja un *warning* con lo que dio. En Linux la clave del admin se
      suma a «Ningún secreto en los logs».
-- Descartadas: servir el nodo por https con un certificado local (otra autoridad que instalar en cada caja, y no
+- Descartadas: servir el nodo por https con un certificado local (otra autoridad que instalar en cada puesto, y no
   resuelve el problema hoy); que libraauth apague `Secure` solo cuando el pedido llega por http (dejaría a una instancia
   de la nube mal configurada detrás del proxy emitiendo cookies sin `Secure` sin que nadie lo decida); poner la variable
   en la definición de cada producto (son tres copias de lo mismo y `variables` no puede fijar lo que arma el instalador).
 - Consecuencias: en el nodo la cookie viaja en claro por la red del local, igual que ya viajaba la clave en el
   `POST /login` por http; el riesgo es el de una LAN, no uno nuevo. Para que el arreglo llegue a una PC hacen falta las
   dos cosas: el instalador de esta versión (o `completar-entorno` por una actualización) y el producto empaquetado desde
-  `main` con libraauth >= 0.53.0. Lo que el CI no ve —la app de escritorio entrando de verdad en WebKitGTK y otra caja
+  `main` con libraauth >= 0.53.0. Lo que el CI no ve —la app de escritorio entrando de verdad en WebKitGTK y otro puesto
   entrando por la IP desde un navegador— va a `PROBAR_EN_VM.md`.
 
-## ADR-017 — Las otras cajas del local: la app de caja y el descubrimiento de la PC principal
+## ADR-017 — Los otros puestos del local: la app de puesto y el descubrimiento de la PC principal
 
 - Estado: aceptada (es la parte B de ADR-015)
 - Fecha: 2026-10-20
 - Contexto: decisión del humano del 2026-10-20: **una app por producto, sin firma por ahora**, también para las otras
-  PC del local (las «cajas secundarias»). Hasta ahora esas cajas entraban por `http://<IP-de-la-PC-principal>:<puerto>`
-  en un navegador, con la IP copiada de la bandeja o del cartel final: si la PC principal cambiaba de IP (DHCP), la caja
+  PC del local (las «puestos secundarios»). Hasta ahora esas puestos entraban por `http://<IP-de-la-PC-principal>:<puerto>`
+  en un navegador, con la IP copiada de la bandeja o del cartel final: si la PC principal cambiaba de IP (DHCP), el puesto
   quedaba en el error del navegador y alguien tenía que buscar la dirección nueva.
 - Qué ya existe (se miró antes de diseñar):
-  - ADR-013: la dirección para las otras cajas sale de un solo lugar, `libraedge_instalador.py acceso` (la IPv4 privada
+  - ADR-013: la dirección para los otros puestos sale de un solo lugar, `libraedge_instalador.py acceso` (la IPv4 privada
     de la ruta por defecto, `ip_de_la_lan`/`es_ip_de_la_lan`), y la muestran el cartel final de los dos instaladores y
-    «Otras cajas: http://<IP>:<puerto> (copiar)» de las dos bandejas. La regla de firewall del producto (Windows
+    «Otros puestos: http://<IP>:<puerto> (copiar)» de las dos bandejas. La regla de firewall del producto (Windows
     `New-NetFirewallRule ... -Profile Private, Domain` en `preparar_nodo.ps1`; Linux `ufw allow proto tcp from <red>`
     para 10/8, 172.16/12 y 192.168/16 si ufw está activo, en `preparar_nodo.sh`; las borran el `.iss` y el `postrm`
     de `purge`).
@@ -784,12 +792,12 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      contesta con `libraedge/descubrimiento.py` (copiado como `libraedge_descubrimiento.py`, como el ayudante: llega con
      el instalador y no depende del pin de LibraEdge del producto); la app pregunta con `escritorio/src/descubrimiento.rs`.
      Pedido `{"libraedge": "descubrir/1", "producto": P}` con relleno hasta 512 bytes; respuesta `{"libraedge": "nodo/1",
-     producto, nombre, puerto, nodo, sucursal, negocio}`. La caja manda a `255.255.255.255` y al broadcast de su red /24
+     producto, nombre, puerto, nodo, sucursal, negocio}`. El puesto manda a `255.255.255.255` y al broadcast de su red /24
      (en Windows el primero sale por una sola interfaz) y junta respuestas 2 s.
      - **Por qué no mDNS:** en Windows el puerto 5353 ya lo tiene el servicio DNS Cache del sistema y en Ubuntu Avahi; un
        responder propio tendría que compartir el puerto (`SO_REUSEADDR`, que en Windows deja robarlo) o registrarse en
        cada sistema con su API (Bonjour/`dnssd.dll`, D-Bus de Avahi), con dependencias y dos implementaciones. Con
-       broadcast el que contesta son ~250 líneas de biblioteca estándar y la caja no necesita ningún crate nuevo. Lo que
+       broadcast el que contesta son ~250 líneas de biblioteca estándar y el puesto no necesita ningún crate nuevo. Lo que
        se pierde (cruzar subredes, un router que filtre broadcast) tampoco lo resolvería mDNS, que es de enlace local:
        para eso queda escribir la IP.
   2. **Seguridad del que contesta.** No ve ningún secreto: lee **sólo** `descubrimiento.json` (producto, nombre, puerto,
@@ -805,20 +813,20 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      anota cada pedido. Firewall como el del producto: `LibraEdge descubrimiento` UDP 47823 en Privado y Dominio
      (Windows) y `ufw allow proto udp ... port 47823` para las redes privadas si ufw está activo; se borran al
      desinstalar (`.iss`) y en el `purge`.
-  3. **Lo que la caja le cree a una respuesta:** la IP es **la de quien contestó**, nunca un dato del mensaje, y sólo
+  3. **Lo que el puesto le cree a una respuesta:** la IP es **la de quien contestó**, nunca un dato del mensaje, y sólo
      IPv4 privada, de enlace local o loopback; el puerto sí viene en la respuesta. Una respuesta falsa sólo puede venir de
      alguien en la misma red, que con `http` en la LAN ya podía interceptar el tráfico (riesgo aceptado, el mismo de
      ADR-013); cuando hay más de una PC principal se muestra la sucursal y el negocio para elegir, y la elegida se
      reconoce después **por su identificador de nodo**.
   4. **Un solo binario.** La app decide el modo al arrancar: si al lado está la definición instalada
      (`<raíz>/instalador/producto.json`, que sólo pone el instalador del nodo) es la de la **PC principal** (modo nodo,
-     todo como ADR-015); si no, es una **caja** (modo caja). Mismo código y misma compilación (`armar.py`); el instalador
-     de caja pone el mismo archivo en otra carpeta. Se descartó un binario por modo (una feature de Cargo): duplicaba la
+     todo como ADR-015); si no, es una **puesto** (modo puesto). Mismo código y misma compilación (`armar.py`); el instalador
+     de puesto pone el mismo archivo en otra carpeta. Se descartó un binario por modo (una feature de Cargo): duplicaba la
      compilación de los tres productos en los dos sistemas y el riesgo de que diverjan, para ahorrar unas líneas. En modo
-     caja la app usa **otro identificador**, `ar.com.librasuite.<producto>.caja` (`Context::config_mut`): otra sesión
+     puesto la app usa **otro identificador**, `ar.com.librasuite.<producto>.puesto` (`Context::config_mut`): otra sesión
      del navegador embebido, otras preferencias y otra instancia única, así las dos pueden convivir (en el CI conviven).
      `--version` dice el modo.
-  5. **La app en modo caja.** La primera vez busca («Buscando la PC principal…»): si hay una la usa, si hay varias
+  5. **La app en modo puesto.** La primera vez busca («Buscando la PC principal…»): si hay una la usa, si hay varias
      muestra la lista (sucursal · negocio, y la dirección) y si no hay ninguna pide la IP a mano (con el texto de dónde la
      muestra la PC principal: la bandeja y el cartel final) y sigue buscando sola cada ~10 s. La IP escrita se valida
      (IPv4 de la red del local, opcional `:puerto` o `http://`), se le pregunta por el descubrimiento y, si no contesta,
@@ -827,46 +835,46 @@ desinstalar en Windows perdía el `SECRET_KEY` y lo cifrado en los datos que que
      espera de ADR-015 («Esperando a la PC principal del local (…)») y cada ~6 s vuelve a buscar: si el mismo nodo
      contesta desde otra IP, la toma y vuelve sola; además, «Buscar otra PC principal». El origen del producto pasa a ser
      `http://<IP>:<puerto>`: el clasificador lo trata como el producto (no va al navegador del sistema) y `localhost` en
-     una caja ya no lo es; F11 se habilita con una capacidad remota por origen (al arrancar y al elegir otra PC); la
+     un puesto ya no lo es; F11 se habilita con una capacidad remota por origen (al arrancar y al elegir otra PC); la
      sesión se guarda y se repone con el host de la PC principal (si cambia de IP, la misma sesión). **No ofrece
      «Vincular»** (el comando también lo rechaza) ni lo intenta por `--vincular`.
-  6. **El instalador de caja**, por producto, sólo con la app (sin nodo, PostgreSQL ni Python), con nombre fijo en el
-     Release: **`libraedge-caja-<producto>.exe`** y **`libraedge-caja-<producto>_amd64.deb`** (y los `.deb` con versión).
-     El nombre sigue al de `libraedge-nodo-<producto>` (se reconocen como pareja en el Release y en `apt`) y «caja» es la
-     palabra de ADR-013 y de la bandeja («Otras cajas»); para el usuario la app se llama igual que en la PC principal
-     («ContaLibra»), y en «Agregar o quitar programas» «ContaLibra (caja)».
-     - **Windows: un `.iss` chico** (`instalador/caja.iss`), no el bundler de Tauri: Inno ya está en el CI, con la misma
+  6. **El instalador de puesto**, por producto, sólo con la app (sin nodo, PostgreSQL ni Python), con nombre fijo en el
+     Release: **`libraedge-puesto-<producto>.exe`** y **`libraedge-puesto-<producto>_amd64.deb`** (y los `.deb` con versión).
+     El nombre sigue al de `libraedge-nodo-<producto>` (se reconocen como pareja en el Release y en `apt`) y «puesto» es la
+     palabra de ADR-013 y de la bandeja («Otros puestos»); para el usuario la app se llama igual que en la PC principal
+     («ContaLibra»), y en «Agregar o quitar programas» «ContaLibra (puesto)».
+     - **Windows: un `.iss` chico** (`instalador/puesto.iss`), no el bundler de Tauri: Inno ya está en el CI, con la misma
        tabla nombre/AppId (AppId propio por producto, comparado con las definiciones), los íconos de ADR-013 y los textos
        en castellano; el bundler pedía instalar la CLI de Tauri (o WiX) y armar una configuración por producto para un
-       solo archivo. Instala `C:\Program Files\<Producto> (caja)\<Producto>.exe` con «<Producto>» en el escritorio
+       solo archivo. Instala `C:\Program Files\<Producto> (puesto)\<Producto>.exe` con «<Producto>» en el escritorio
        público y el menú Inicio, se desinstala desde «Agregar o quitar programas» (cierra la app de esa carpeta). Avisa
        (sin frenar en silencio) si la PC ya tiene el nodo del producto o si falta WebView2.
-     - **Ubuntu: `instalador/linux/caja/armar_deb.sh`** → `/opt/libraedge-caja/<producto>/libraedge-caja-<producto>` (el
-       nombre del `.desktop`: WM_CLASS/app_id para el dock), `libraedge-caja-<producto>.desktop`, `Depends:
+     - **Ubuntu: `instalador/linux/puesto/armar_deb.sh`** → `/opt/libraedge-puesto/<producto>/libraedge-puesto-<producto>` (el
+       nombre del `.desktop`: WM_CLASS/app_id para el dock), `libraedge-puesto-<producto>.desktop`, `Depends:
        libwebkit2gtk-4.1-0, libgtk-3-0`. El favorito del dock con `dock.sh` **sin Python** (el valor por defecto con
-       `gsettings` en un entorno vacío, como ADR-013, más los `.desktop` de caja y, si estuviera, el del nodo, en
-       `91_libraedge-caja.gschema.override`); el `postrm` lo rehace o lo borra con la última caja.
+       `gsettings` en un entorno vacío, como ADR-013, más los `.desktop` de puesto y, si estuviera, el del nodo, en
+       `91_libraedge-puesto.gschema.override`); el `postrm` lo rehace o lo borra con la última puesto.
   7. **La pantalla del central** (libra-ui `SucursalSinInternet`, ADR-086 del kit): la tarjeta del instalador suma «Para
-     las otras PC del local» con las descargas de caja, armadas al lado del `.exe` del nodo como las otras (el backend no
+     las otras PC del local» con las descargas de puesto, armadas al lado del `.exe` del nodo como las otras (el backend no
      manda nada nuevo).
-  8. **CI** (`publicar-instalador.yml`): el job `deb` arma también el `.deb` de caja (shellcheck de sus scripts) y
-     `compilar` el `.exe` (en `salida-caja`); `publicar` los sube y los suma a `SHA256SUMS.txt`. En Ubuntu
+  8. **CI** (`publicar-instalador.yml`): el job `deb` arma también el `.deb` de puesto (shellcheck de sus scripts) y
+     `compilar` el `.exe` (en `salida-puesto`); `publicar` los sube y los suma a `SHA256SUMS.txt`. En Ubuntu
      22.04/24.04/26.04, con el nodo instalado y configurado en el mismo runner: el servicio activo con un usuario
-     efímero, `descubrimiento.json` 0644 sin el secreto, un pedido corto o de otro producto sin respuesta; la caja
-     instalada con `--no-install-recommends` (bibliotecas resueltas, `--version` en modo caja, `.desktop` válido, dock con
-     el nodo y la caja), `--buscar` encuentra el nodo **por broadcast con la IP del runner**, y bajo `xvfb-run` la app
+     efímero, `descubrimiento.json` 0644 sin el secreto, un pedido corto o de otro producto sin respuesta; el puesto
+     instalada con `--no-install-recommends` (bibliotecas resueltas, `--version` en modo puesto, `.desktop` válido, dock con
+     el nodo y el puesto), `--buscar` encuentra el nodo **por broadcast con la IP del runner**, y bajo `xvfb-run` la app
      busca, encuentra y carga `http://<IP del runner>:<puerto>/` (el `GET /` desde esa IP en el journal, nunca
      `localhost`, nunca «vincular»); con una IP guardada que no responde espera y vuelve a encontrar el mismo nodo; sin
      nadie que conteste pide la IP y, cuando el servicio vuelve, lo encuentra solo; `remove` saca la app, el `.desktop` y
-     el override. En Windows: el servicio como LocalService, la regla UDP, el `.json` sin secretos; la caja instalada en
-     silencio con sus accesos directos, `--version` en modo caja, `--buscar` (si el broadcast no vuelve en el runner, se
+     el override. En Windows: el servicio como LocalService, la regla UDP, el `.json` sin secretos; el puesto instalado en
+     silencio con sus accesos directos, `--version` en modo puesto, `--buscar` (si el broadcast no vuelve en el runner, se
      avisa y se prueba la IP directa), la app carga el producto por la IP del runner con el `GET /` en el log del
-     producto, y desinstalar la saca. `verificar_nodo` (los dos) pregunta como una caja a `127.0.0.1`.
+     producto, y desinstalar la saca. `verificar_nodo` (los dos) pregunta como un puesto a `127.0.0.1`.
 - Descartadas: mDNS (punto 1); que la respuesta traiga la IP (la decide quien contesta); un binario por modo (punto 4);
-  el bundler de Tauri para la caja de Windows (punto 6); que la caja busque también en `127.0.0.1` (en la PC principal
-  se entra por el acceso directo del nodo, no por la caja); ofrecer «Vincular» en la caja.
+  el bundler de Tauri para el puesto de Windows (punto 6); que el puesto busque también en `127.0.0.1` (en la PC principal
+  se entra por el acceso directo del nodo, no por el puesto); ofrecer «Vincular» en el puesto.
 - Consecuencias: lo que el CI no ve (una red de verdad con dos PC, DHCP que cambia la IP, el firewall de Windows con la
   red en «Pública», la lista con dos PC principales, cómo se ve) se prueba en las VMs (`PROBAR_EN_VM.md`, V20 y V21).
   El responder llega a las PC principales que ya tienen el nodo cuando se actualicen con el instalador nuevo (un nodo
-  anterior no contesta: la caja pide la IP). Si la red del local filtra broadcast o la caja está en otra subred, se
-  escribe la IP; la caja la recuerda y, si cambia, vuelve a pedirla.
+  anterior no contesta: el puesto pide la IP). Si la red del local filtra broadcast o el puesto está en otra subred, se
+  escribe la IP; el puesto la recuerda y, si cambia, vuelve a pedirla.

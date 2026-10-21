@@ -1,9 +1,9 @@
-"""Las otras cajas del local encuentran la PC principal (ADR-017).
+"""Los otros puestos del local encuentran la PC principal (ADR-017).
 
 La PC principal (la del nodo) contesta en la red del local un pedido de descubrimiento por **UDP en el puerto
-47823**: la app de una caja secundaria (``escritorio/src/descubrimiento.rs``) manda el pedido en broadcast y cada
+47823**: la app de un puesto secundario (``escritorio/src/descubrimiento.rs``) manda el pedido en broadcast y cada
 nodo **de su producto** le contesta con datos que **no son secretos**: el producto, su nombre, el puerto donde atiende,
-el identificador del nodo, la sucursal y el nombre del negocio. La IP no viaja en la respuesta: la caja usa la
+el identificador del nodo, la sucursal y el nombre del negocio. La IP no viaja en la respuesta: el puesto usa la
 direccion de quien le contesto.
 
 🔴 **Solo biblioteca estandar, y sin importar nada de ``libraedge``**: como ``instalador.py``, los instaladores copian
@@ -70,7 +70,7 @@ def origen_permitido(ip: str) -> bool:
 
 
 def armar_pedido(producto: str) -> bytes:
-    """El pedido de una caja, con relleno hasta :data:`TAMANO_DEL_PEDIDO` (JSON admite espacios al final)."""
+    """El pedido de un puesto, con relleno hasta :data:`TAMANO_DEL_PEDIDO` (JSON admite espacios al final)."""
     cuerpo = json.dumps({"libraedge": PEDIDO, "producto": producto}).encode()
     return cuerpo + b" " * max(0, TAMANO_DEL_PEDIDO - len(cuerpo))
 
@@ -280,7 +280,7 @@ def buscar(producto: str, *, destinos: Iterable[str] | None = None, puerto: int 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="libraedge_descubrimiento", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="comando", required=True)
-    resp = sub.add_parser("responder", help="contesta los pedidos de las cajas (el servicio del nodo)")
+    resp = sub.add_parser("responder", help="contesta los pedidos de los puestos (el servicio del nodo)")
     resp.add_argument("--datos", required=True, help="descubrimiento.json (sin secretos)")
     resp.add_argument("--puerto", type=int, default=PUERTO)
     busca = sub.add_parser("buscar", help="busca los nodos de un producto en la red del local")

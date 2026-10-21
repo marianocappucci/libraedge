@@ -123,7 +123,7 @@ Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName:
 Source: "paquete\escritorio\{#Producto}.exe"; DestDir: "{app}\escritorio"; DestName: "{#NombreProducto}.exe"; Flags: ignoreversion skipifsourcedoesntexist
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\instalador.py";     DestDir: "{app}\instalador"; DestName: "libraedge_instalador.py"; Flags: ignoreversion
-; El que contesta a las cajas del local (ADR-017): libraedge/descubrimiento.py tal cual, solo biblioteca estandar.
+; El que contesta a los puestos del local (ADR-017): libraedge/descubrimiento.py tal cual, solo biblioteca estandar.
 Source: "..\libraedge\descubrimiento.py"; DestDir: "{app}\instalador"; DestName: "libraedge_descubrimiento.py"; Flags: ignoreversion
 Source: "comun.ps1";             DestDir: "{app}\instalador"; Flags: ignoreversion
 Source: "instalar.ps1";          DestDir: "{app}\instalador"; Flags: ignoreversion
@@ -167,7 +167,7 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 ; nodo.env lo escribe instalar.ps1, asi que el desinstalador no sabe de el.
 Type: files; Name: "{app}\nodo.env"
 Type: files; Name: "{app}\estado.json"
-; Lo que contestaba a las cajas del local (ADR-017; sin secretos): sin nodo no se contesta.
+; Lo que contestaba a los puestos del local (ADR-017; sin secretos): sin nodo no se contesta.
 Type: files; Name: "{commonappdata}\LibraEdge\descubrimiento.json"
 Type: filesandordirs; Name: "{commonappdata}\LibraEdge\descubrimiento"
 Type: files; Name: "{commonstartup}\LibraEdge - estado del nodo.lnk"
@@ -424,7 +424,7 @@ begin
   Result := '';
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeNodo /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeProducto /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
-  { El que contesta a las cajas (ADR-017) corre con el mismo Python. }
+  { El que contesta a los puestos (ADR-017) corre con el mismo Python. }
   Exec(ExpandConstant('{sys}\net.exe'), 'stop LibraEdgeDescubrimiento /y', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   { PostgreSQL tambien: sus binarios se reemplazan y el RestartManager no puede
     cerrar un servicio. En silencio eso es un Abort y la actualizacion se

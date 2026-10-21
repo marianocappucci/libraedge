@@ -8,9 +8,9 @@
 //! - Ubuntu:  `/opt/libraedge-nodo/escritorio/libraedge-nodo-<producto>` -> `/opt/libraedge-nodo`
 //!
 //! **El modo sale de ahi** (ADR-017): si en la raiz esta la definicion instalada (`instalador/producto.json`) la app es
-//! la de la PC principal (modo nodo: `localhost`, «Vincular»); si no, es la de una caja secundaria (modo caja: busca la
-//! PC principal en la red del local). Es el mismo binario: el instalador de caja lo pone en otra carpeta
-//! (`C:\Program Files\<Producto> (caja)\<Producto>.exe`, `/opt/libraedge-caja/<producto>/libraedge-caja-<producto>`).
+//! la de la PC principal (modo nodo: `localhost`, «Vincular»); si no, es la de un puesto secundario (modo puesto: busca la
+//! PC principal en la red del local). Es el mismo binario: el instalador de puesto lo pone en otra carpeta
+//! (`C:\Program Files\<Producto> (puesto)\<Producto>.exe`, `/opt/libraedge-puesto/<producto>/libraedge-puesto-<producto>`).
 
 use std::path::{Path, PathBuf};
 
@@ -28,8 +28,8 @@ pub const MARCA_SVG: &str = include_str!(concat!(env!("OUT_DIR"), "/marca.svg"))
 pub enum Modo {
     /// La PC principal: el producto es la copia local del nodo.
     Nodo,
-    /// Una caja secundaria: el producto es el de la PC principal, que se busca en la red del local.
-    Caja,
+    /// Un puesto secundario: el producto es el de la PC principal, que se busca en la red del local.
+    Puesto,
 }
 
 #[derive(Clone, Debug)]
@@ -48,7 +48,7 @@ impl Producto {
             Ok(exe) if cfg!(windows) => Self::en(&exe),
             Ok(exe) => Self::en(&exe.canonicalize().unwrap_or(exe)),
             Err(_) => {
-                Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz: None, modo: Modo::Caja }
+                Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz: None, modo: Modo::Puesto }
             }
         }
     }
@@ -57,7 +57,7 @@ impl Producto {
     pub fn en(exe: &Path) -> Self {
         let raiz = exe.parent().and_then(Path::parent).map(Path::to_path_buf);
         let mut producto =
-            Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz, modo: Modo::Caja };
+            Producto { puerto: PUERTO.parse().unwrap_or(8000), salud: SALUD.to_string(), raiz, modo: Modo::Puesto };
         if let Some(def) = producto.raiz.as_ref().map(|r| r.join("instalador").join("producto.json")) {
             if def.is_file() {
                 producto.modo = Modo::Nodo;
@@ -101,8 +101,8 @@ impl Producto {
     /// ¿Esta PC ya esta vinculada? Si no se puede saber (sin permiso para mirar), se asume que si: la app
     /// muestra la espera y no ofrece vincular algo que ya esta.
     pub fn configurado(&self) -> bool {
-        if self.modo == Modo::Caja {
-            return true; // una caja no tiene nodo que vincular
+        if self.modo == Modo::Puesto {
+            return true; // un puesto no tiene nodo que vincular
         }
         match self.archivo_de_configuracion() {
             Some(ruta) => ruta.try_exists().unwrap_or(true),
@@ -137,17 +137,17 @@ mod tests {
     }
 
     #[test]
-    fn sin_la_definicion_instalada_es_una_caja() {
+    fn sin_la_definicion_instalada_es_una_puesto() {
         let dir = std::env::temp_dir().join(format!("libraedge-modo-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("escritorio")).unwrap();
         let exe = dir.join("escritorio").join("app");
-        assert_eq!(Producto::en(&exe).modo, Modo::Caja);
+        assert_eq!(Producto::en(&exe).modo, Modo::Puesto);
         std::fs::create_dir_all(dir.join("instalador")).unwrap();
         std::fs::write(dir.join("instalador").join("producto.json"), "{}").unwrap();
         assert_eq!(Producto::en(&exe).modo, Modo::Nodo);
-        let caja = Producto { modo: Modo::Caja, ..base() };
-        assert!(caja.configurado());
+        let puesto = Producto { modo: Modo::Puesto, ..base() };
+        assert!(puesto.configurado());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

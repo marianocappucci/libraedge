@@ -1,8 +1,8 @@
-# Contesta a las otras cajas del local que buscan esta PC (ADR-017): UDP 47823,
+# Contesta a los otros puestos del local que buscan esta PC (ADR-017): UDP 47823,
 # con lo que dice descubrimiento.json (producto, nombre, puerto, nodo, sucursal y
 # negocio: nada secreto). No lee el nodo.env ni la base, y corre sin privilegios.
 [Unit]
-Description=@NOMBRE@: contesta a las cajas del local que buscan esta PC (LibraEdge)
+Description=@NOMBRE@: contesta a los puestos del local que buscan esta PC (LibraEdge)
 Documentation=https://github.com/marianocappucci/libraedge/tree/main/instalador
 After=network-online.target
 Wants=network-online.target
