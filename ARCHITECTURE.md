@@ -44,6 +44,10 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
     `desinstalar_trigger`, `sembrar`, `listar_cambios`), con validación de
     identificadores. Es lo que llena el outbox sin que el producto tenga que
     llamar a nadie.
+- **`mapeo.py`** (`siguiente_id_provisorio`, `anotar_mapeo`, `traducir_id`, `SinMapeo`) — el id provisorio negativo de las altas
+  del nodo y la tabla `libraedge_mapeo` con la que el central las traduce (ADR-021).
+- **`altas.py`** (`AltaEnNodo`, `Referencia`, `parsear_altas`, `formatear_altas`) — las tablas con alta en el nodo y lo que las
+  referencia sin FK; viaja por la carga como `LIBRAEDGE_ALTAS_EN_NODO`.
 - **`domain/sync.py`** — el modelo de la sincronización, puro:
   `OutboxOperation`, `ReferenceChange`, `ReferenceOperation`,
   `SyncOperationStatus`. Distingue las dos direcciones (operaciones locales que
@@ -52,7 +56,10 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
   - `worker` (`OutboxWorker`, `SyncTransport`, `PushResult`, `ResultadoOutbox`) —
     drena el outbox hacia el servidor (push).
   - `pull` (`PullWorker`, `MirrorApplier`, `HttpPullTransport`) — trae y aplica
-    los cambios de referencia del servidor (pull), con clave simple o compuesta.
+    los cambios de referencia del servidor (pull), con clave simple o compuesta; con `altas` reapunta las altas del nodo
+    cuando baja su mapeo (ADR-021).
+  - `reconciliacion` (`reapuntar`, `claves_foraneas_hacia`) — pasa lo que referenciaba al id provisorio al definitivo y
+    borra la fila provisoria (ADR-021).
   - `receiver` (`SyncReceiver`) — el lado servidor que recibe el push del nodo.
   - `despacho` (`Despachador`, `SinManejador`) — un manejador por
     `(operation_type, schema_version)`; lo que no tiene manejador va a revisión

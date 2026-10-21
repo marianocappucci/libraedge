@@ -19,14 +19,17 @@ adelante.
 """
 
 import json
+import sys
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from libraedge.altas import normalizar_altas
 from libraedge.db.changelog import cargar_payload, columnas_de_clave, validar_identificador
 from libraedge.db.guarda import marcar_aplicando
 from libraedge.domain.sync import ReferenceChange, ReferenceOperation
-from libraedge.sync import esquema
+from libraedge.mapeo import TABLA as TABLA_MAPEO
+from libraedge.sync import esquema, reconciliacion
 
 
 class HttpPullTransport:
@@ -97,14 +100,41 @@ class MirrorApplier:
     en **cada** `aplicar` y no una vez al construirlo: `PullWorker` commitea
     despues de cada cambio y el `SET LOCAL` muere con el commit. Sobre una tabla
     sin guarda no cambia nada, y sobre SQLite es un no-op.
+
+    ## Desde v0.18: reapunta las altas del nodo (ADR-021)
+
+    Con `node_id` y `altas` (las tablas donde el nodo da de alta filas con un id provisorio negativo), una fila de
+    `libraedge_mapeo` **de este nodo** no solo se guarda: reapunta lo que referenciaba al id provisorio hacia el
+    definitivo y borra la fila provisoria (`sync/reconciliacion.py`), en la misma transaccion del `aplicar`. Las filas
+    del mapeo de **otros** nodos se ignoran: no son del nodo ni le sirven. Un reapuntado que falla **no frena el
+    espejo**: se deshace (`SAVEPOINT`), queda anotado en `sin_reconciliar` y en stderr, y el barrido del final de cada
+    ciclo (`reconciliar_pendientes`) lo reintenta; lo peor que pasa es que la fila provisoria sigue un rato junto a la
+    definitiva. Sin `altas` el aplicador es el de v0.17.
     """
 
-    def __init__(self, conn, tablas_permitidas: dict[str, str | tuple[str, ...]]):
+    def __init__(self, conn, tablas_permitidas: dict[str, str | tuple[str, ...]], *, node_id: str | None = None,
+                 altas=()):
         self._conn = conn
         self._tablas = {
             validar_identificador(tabla): columnas_de_clave(pk)
             for tabla, pk in tablas_permitidas.items()
         }
+        self._node_id = node_id
+        self._altas = {alta.tabla: alta for alta in normalizar_altas(altas)}
+        if self._altas:
+            if not node_id:
+                raise ValueError("las altas en el nodo piden el node_id: el mapeo se reconoce por nodo")
+            if TABLA_MAPEO not in self._tablas:
+                raise ValueError(
+                    f"las altas en el nodo piden espejar {TABLA_MAPEO}: sin el mapeo el nodo nunca se entera del id "
+                    "definitivo")
+            for tabla in self._altas:
+                if tabla not in self._tablas:
+                    raise ValueError(f"la tabla {tabla!r} tiene alta en el nodo pero el nodo no la espeja")
+                if len(self._tablas[tabla]) != 1:
+                    raise ValueError(f"la tabla {tabla!r} tiene alta en el nodo y una clave compuesta: no se admite")
+        #: `{(tabla, id_provisorio): motivo}` de lo que no se pudo reapuntar. Vacio cuando todo esta al dia.
+        self.sin_reconciliar: dict[tuple[str, int], str] = {}
 
     def aplicar(self, cambio: ReferenceChange) -> None:
         tabla = cambio.table_name
@@ -116,6 +146,10 @@ class MirrorApplier:
         clave = self._tablas[tabla]
         marcar_aplicando(self._conn)
 
+        if tabla == TABLA_MAPEO and self._altas:
+            self._aplicar_mapeo(cambio, clave)
+            return
+
         if cambio.operation == ReferenceOperation.DELETE:
             if len(clave) == 1:
                 self._conn.execute(
@@ -126,6 +160,9 @@ class MirrorApplier:
             self._conn.execute(f"DELETE FROM {tabla} WHERE {condicion}", valores)
             return
 
+        self._upsert(tabla, clave, cambio)
+
+    def _upsert(self, tabla: str, clave: tuple[str, ...], cambio: ReferenceChange) -> None:
         payload = cambio.payload or {}
         columnas = [validar_identificador(columna) for columna in payload]
         if not columnas:
@@ -150,6 +187,58 @@ class MirrorApplier:
                  f"ON CONFLICT ({conflicto}) DO NOTHING"
         )
         self._conn.execute(sql, tuple(payload[columna] for columna in columnas))
+
+    # ── las altas del nodo (ADR-021) ────────────────────────────────────────
+
+    def _aplicar_mapeo(self, cambio: ReferenceChange, clave: tuple[str, ...]) -> None:
+        """Una fila del mapeo: la guarda y reapunta, si es de este nodo y de una tabla con alta. Si no, la ignora."""
+        payload = cambio.payload or {}
+        if cambio.operation == ReferenceOperation.DELETE or payload.get("node_id") != self._node_id:
+            return
+        if payload.get("tabla") not in self._altas:
+            return
+        self._upsert(TABLA_MAPEO, clave, cambio)
+        self._reconciliar(payload["tabla"], int(payload["id_nodo"]), int(payload["id_central"]))
+
+    def _reconciliar(self, tabla: str, provisorio: int, definitivo: int) -> None:
+        alta = self._altas[tabla]
+        try:
+            with reconciliacion.savepoint(self._conn):
+                resultado = reconciliacion.reapuntar(
+                    self._conn, tabla, provisorio, definitivo, clave=self._tablas[tabla][0],
+                    referencias=alta.referencias, espejadas=frozenset(self._tablas) - {TABLA_MAPEO})
+        except Exception as exc:  # noqa: BLE001 - lo que sea que falle no puede frenar el espejo
+            motivo = f"{type(exc).__name__}: {exc}"
+            if self.sin_reconciliar.get((tabla, provisorio)) != motivo:
+                print(f"AVISO: no se pudo reapuntar {tabla} {provisorio} -> {definitivo}: {motivo}. "
+                      "Se reintenta en el proximo ciclo.", file=sys.stderr)
+            self.sin_reconciliar[(tabla, provisorio)] = motivo
+            return
+        if resultado == reconciliacion.PENDIENTE:
+            self.sin_reconciliar[(tabla, provisorio)] = f"la fila {definitivo} del central todavia no bajo"
+        else:
+            self.sin_reconciliar.pop((tabla, provisorio), None)
+
+    def reconciliar_pendientes(self) -> int:
+        """El barrido del final de cada ciclo: reintenta los reapuntados que no se pudieron hacer (la definitiva
+        todavia no habia bajado, o fallo). Devuelve cuantos quedaron hechos. Barato: una consulta por tabla con alta,
+        que sin provisorias vivas no devuelve nada. Commitea (es su propia transaccion)."""
+        if not self._altas:
+            return 0
+        hechos = 0
+        marcar_aplicando(self._conn)
+        for tabla in self._altas:
+            clave = self._tablas[tabla][0]
+            filas = self._conn.execute(
+                f"SELECT m.id_nodo, m.id_central FROM {TABLA_MAPEO} m WHERE m.node_id = ? AND m.tabla = ?"
+                f" AND EXISTS (SELECT 1 FROM {tabla} t WHERE t.{clave} = m.id_nodo) ORDER BY m.id_nodo DESC",
+                (self._node_id, tabla),
+            ).fetchall()
+            for id_nodo, id_central in ((f[0], f[1]) for f in filas):
+                self._reconciliar(tabla, int(id_nodo), int(id_central))
+                hechos += (tabla, int(id_nodo)) not in self.sin_reconciliar
+        self._conn.commit()
+        return hechos
 
     @staticmethod
     def _valores_de_clave(tabla, clave, cambio: ReferenceChange) -> tuple:
@@ -194,6 +283,11 @@ class PullWorker:
             # vuelve a pedir. Ver el docstring del modulo.
             self.repository.set_server_cursor(node_id, cambio.cursor)
             aplicados += 1
+        # Las altas del nodo (ADR-021): lo que no se pudo reapuntar al aplicar el mapeo (la definitiva todavia no
+        # habia bajado, o fallo) se reintenta al final de cada ciclo. Un aplicador sin altas no lo tiene.
+        barrer = getattr(self.applier, "reconciliar_pendientes", None)
+        if barrer is not None:
+            barrer()
         return aplicados
 
 

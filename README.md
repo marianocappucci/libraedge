@@ -107,6 +107,24 @@ que ser de referencia). `registrar` las manda en la carga (`LIBRAEDGE_TABLAS_SOL
 un trigger que levanta `solo_en_el_central` (SQLSTATE `LE001`) en toda escritura que no sea del espejo. Una migración de datos sobre
 una de esas tablas llama antes a `libraedge.db.guarda.marcar_aplicando(conn)`. Sobre SQLite no hace nada.
 
+## Fase 2 (v0.18): altas de referencia en el nodo (ADR-021)
+
+Un cliente (u otra fila de referencia) que se da de alta en el nodo nace con un **id provisorio negativo**
+(`libraedge.mapeo.siguiente_id_provisorio`) y sube como una operación del producto; el **central** crea la fila con su id y
+anota `libraedge_mapeo(node_id, tabla, id_nodo, id_central)` en la misma transacción (`anotar_mapeo`). Ese mapeo hace dos cosas:
+el central traduce con él las referencias de lo que sube después (`traducir_id(conn, node_id, tabla, id_nodo)`: un negativo sin
+mapeo es `SinMapeo`, un `ValueError` que va a revisión manual), y **baja por el espejo**: el `MirrorApplier` del nodo
+(`MirrorApplier(conn, tablas, node_id=, altas=)`) reapunta lo que referenciaba al provisorio —claves foráneas del catálogo y las
+referencias sin FK que el producto declare— y borra la fila provisoria. Se declara por tabla:
+
+```python
+Aprovisionamiento(..., tablas_de_referencia=[..., "clients", "parties"],
+                  altas_en_nodo=[("clients", [("cc_asientos", "tercero_id", {"rol": "cliente"})]), "parties"])
+```
+
+`registrar` la manda en la carga (`LIBRAEDGE_ALTAS_EN_NODO`) y suma `libraedge_mapeo` al espejo; una tabla con alta puede además
+estar en `tablas_solo_lectura`: la guarda deja pasar sus filas provisorias. Sin declarar nada, v0.18 se comporta como v0.17.
+
 ## El ticket de ARCA prestado (v0.9, ADR-009)
 
 El nodo factura con internet usando el ticket de ARCA del central; la clave no sale del VPS. En el central:

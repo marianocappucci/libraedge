@@ -22,7 +22,10 @@ declarativa, ``Aprovisionamiento``:
   ``code``, no ``id``);
 - **cuales de esas tablas el nodo no puede escribir** (``tablas_solo_lectura``, v0.17, ADR-019), opcional y vacio por
   defecto: el nodo instala en ellas la guarda del espejo (``libraedge.db.guarda``) y solo el espejo las escribe. Es
-  opt-in por tabla porque las altas de clientes en el nodo todavia no estan resueltas;
+  opt-in por tabla porque no todas las de referencia se guardan;
+- **en cuales el nodo da de alta filas** (``altas_en_nodo``, v0.18, ADR-021), opcional y vacio por defecto: el nodo les
+  pone un id provisorio negativo, el central le asigna el definitivo (``libraedge_mapeo``) y el espejo reapunta lo que
+  referenciaba al provisorio. Declararlas suma ``libraedge_mapeo`` al espejo solo;
 - **como listar las sucursales** de la instancia (``id``, ``nombre``, ``activa``);
 - **una guarda del alta**, opcional. Desde v0.14 (ADR-014) LibraEdge es parte del
   sistema e incluido en todos los planes: por defecto no hay guarda (``sin_guarda``).
@@ -46,7 +49,10 @@ from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any
 
+from libraedge.altas import AltaEnNodo, formatear_altas, normalizar_altas
 from libraedge.db.changelog import columnas_de_clave, validar_identificador
+from libraedge.mapeo import CLAVE as CLAVE_DEL_MAPEO
+from libraedge.mapeo import TABLA as TABLA_DEL_MAPEO
 
 Salida = Callable[[str], None]
 
@@ -152,6 +158,12 @@ class Aprovisionamiento:
     escribir desde el producto: ``registrar`` las manda en la carga (``LIBRAEDGE_TABLAS_SOLO_LECTURA``) y
     ``libraedge-nodo`` les instala la guarda al arrancar. Una que no es de referencia es un error: una tabla que nadie
     espeja quedaria bloqueada para siempre.
+
+    ``altas_en_nodo`` (v0.18, ADR-021) son las tablas **de las de referencia** donde el nodo da de alta filas con un id
+    provisorio negativo (``AltaEnNodo``, el nombre, o ``(tabla, referencias)``; ver ``libraedge.altas``). Suma
+    ``libraedge_mapeo`` a las tablas de referencia y a las de solo lectura (en el nodo solo la escribe el espejo), y
+    ``registrar`` manda la declaracion en la carga (``LIBRAEDGE_ALTAS_EN_NODO``). No hace por si sola que el nodo asigne
+    ids provisorios ni suba el alta: eso es del producto (``libracore.altas_en_nodo``).
     """
 
     prefijo: str
@@ -160,8 +172,10 @@ class Aprovisionamiento:
     verificar_alta: Callable[[Any, str, str], None] = sin_guarda
     conectar: Callable[[], Any] | None = None
     tablas_solo_lectura: Any = ()
+    altas_en_nodo: Any = ()
     tablas: tuple[Tabla, ...] = field(init=False)
     solo_lectura: frozenset[str] = field(init=False)
+    altas: tuple[AltaEnNodo, ...] = field(init=False)
 
     def __post_init__(self):
         from libraedge.identidad import variable_del_producto
@@ -177,6 +191,18 @@ class Aprovisionamiento:
             raise ValueError(
                 f"las tablas de solo lectura {sobran} no estan en las tablas de referencia: el nodo no las espeja, "
                 "asi que nadie las escribiria")
+        self.altas = normalizar_altas(self.altas_en_nodo)
+        sin_espejo = sorted({a.tabla for a in self.altas} - self.nombres)
+        if sin_espejo:
+            raise ValueError(
+                f"las altas en el nodo {sin_espejo} no estan en las tablas de referencia: el nodo no las espeja, asi "
+                "que nunca se enteraria del id que les asigna el central")
+        if self.altas:
+            # El mapeo baja por el espejo como cualquier otra tabla, y en el nodo solo el espejo lo escribe.
+            if TABLA_DEL_MAPEO not in self.nombres:
+                self.tablas = tuple(sorted((*self.tablas, Tabla(TABLA_DEL_MAPEO, CLAVE_DEL_MAPEO)),
+                                           key=lambda t: t.nombre))
+            self.solo_lectura = self.solo_lectura | {TABLA_DEL_MAPEO}
 
     @property
     def nombres(self) -> frozenset[str]:
@@ -604,6 +630,8 @@ class Alta:
     prefijo: str
     #: Las del espejo que el nodo guarda contra escrituras del producto (ADR-019). Vacio: sin guarda.
     solo_lectura: tuple[str, ...] = ()
+    #: Las tablas donde el nodo da de alta filas con id provisorio (ADR-021). Vacio: el nodo no reapunta nada.
+    altas: tuple[AltaEnNodo, ...] = ()
 
     def entorno_del_nodo(self) -> list[str]:
         """Las lineas que van al archivo de entorno del nodo."""
@@ -615,6 +643,9 @@ class Alta:
             # Solo si el producto la declara: un nodo sin guarda no recibe una variable de mas (y un instalador
             # anterior a v0.17 rechaza las que no conoce).
             lineas.append(f"LIBRAEDGE_TABLAS_SOLO_LECTURA={','.join(self.solo_lectura)}")
+        if self.altas:
+            # Idem: solo si el producto las declara (un instalador anterior a v0.18 rechaza la variable).
+            lineas.append(f"LIBRAEDGE_ALTAS_EN_NODO={formatear_altas(self.altas)}")
         return lineas
 
 
@@ -642,13 +673,21 @@ def registrar(conn, aprov: Aprovisionamiento, node_id: str, sucursal: str | None
     rechazar_segundo_nodo(conn, node_id, elegida.id, elegida.nombre)
     aprov.verificar_alta(conn, node_id, elegida.id)
     prefijo = asignar_prefijo(conn, node_id, elegida.id)
-    secreto = NodeRepository(conn).register_node(node_id, branch_id=elegida.id, prefijo=prefijo)
     espejo = espejo_del_nodo(conn, aprov)
+    if aprov.altas:
+        # Una alta que el central no puede publicar (la tabla o el mapeo no estan en la base) dejaria al nodo con filas
+        # provisorias que nunca se reapuntan: mejor no registrar el nodo que registrarlo mal. Antes de escribir nada.
+        faltan = sorted(({a.tabla for a in aprov.altas} | {TABLA_DEL_MAPEO}) - set(espejo))
+        if faltan:
+            raise ErrorDeAprovisionamiento(
+                f"las altas en el nodo piden publicar {', '.join(faltan)} y el central no las publica (no estan en "
+                "la base o no tienen clave primaria): correr `nodo publicar` y revisar el aviso.")
+    secreto = NodeRepository(conn).register_node(node_id, branch_id=elegida.id, prefijo=prefijo)
     conn.commit()
     # Solo las que de verdad se espejan en esta base: una de solo lectura que `publicar` no pudo publicar no baja nunca,
     # y guardarla dejaria al nodo con una tabla que nadie escribe.
     solo_lectura = tuple(sorted(aprov.solo_lectura & set(espejo)))
-    return Alta(node_id, elegida, secreto, espejo, prefijo, solo_lectura)
+    return Alta(node_id, elegida, secreto, espejo, prefijo, solo_lectura, aprov.altas)
 
 
 def dar_de_baja(conn, node_id: str, salida: Salida = print) -> int:

@@ -83,10 +83,12 @@ VARIABLES_DE_LA_CARGA = (
     "LIBRAEDGE_TABLAS_ESPEJO",
 )
 
-#: Lo opcional que puede traer la carga (v0.17, ADR-019): las tablas del espejo que el nodo guarda contra escrituras del
-#: producto. Solo viaja si el producto las declara; sin ella el nodo no instala ninguna guarda.
+#: Lo opcional que puede traer la carga: las tablas del espejo que el nodo guarda contra escrituras del producto (v0.17,
+#: ADR-019) y las tablas donde da de alta filas con un id provisorio, con lo que las referencia sin FK (v0.18, ADR-021).
+#: Solo viajan si el producto las declara; sin ellas el nodo no instala ninguna guarda ni reapunta nada.
 VARIABLES_OPCIONALES_DE_LA_CARGA = (
     "LIBRAEDGE_TABLAS_SOLO_LECTURA",
+    "LIBRAEDGE_ALTAS_EN_NODO",
 )
 
 #: Lo que el nodo fija en el entorno del producto, igual en todos los nodos y en Windows y Linux (ADR-016). No son
@@ -364,6 +366,9 @@ class Carga:
         solo_lectura = self.entorno.get("LIBRAEDGE_TABLAS_SOLO_LECTURA")
         if solo_lectura:
             resumen["tablas_solo_lectura"] = len(solo_lectura.split(","))
+        altas = self.entorno.get("LIBRAEDGE_ALTAS_EN_NODO")
+        if altas:
+            resumen["altas_en_nodo"] = [parte.partition(":")[0] for parte in altas.split(",")]
         return resumen
 
 
@@ -468,6 +473,60 @@ def parsear_tablas_solo_lectura(crudo: str, espejo: Mapping[str, tuple[str, ...]
     return tuple(sorted(nombres))
 
 
+_VALOR_DE_CONDICION = re.compile(r"^[A-Za-z0-9_-]+$")
+#: El mapeo de los ids provisorios a los del central (``libraedge.mapeo.TABLA``): se repite aca porque este modulo solo
+#: usa la biblioteca estandar (se copia al lado de los scripts del instalador y corre con el Python del producto).
+_TABLA_DEL_MAPEO = "libraedge_mapeo"
+
+
+def parsear_altas_en_nodo(crudo: str, espejo: Mapping[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """``"clients:cc_asientos.tercero_id@rol=cliente,parties"`` -> ``("clients", "parties")``: las tablas con alta en el
+    nodo. El mismo formato que lee ``libraedge-nodo`` (``libraedge.altas.parsear_altas``; un test fija que coinciden).
+
+    Cada tabla tiene que ser **del espejo** y de una sola columna de clave, y el espejo tiene que traer
+    ``libraedge_mapeo``: sin el, el nodo nunca se entera del id que le asigna el central."""
+    tablas: list[str] = []
+    for parte in (crudo or "").split(","):
+        parte = parte.strip()
+        if not parte:
+            continue
+        tabla, _, referencias = parte.partition(":")
+        tabla = tabla.strip()
+        if not _IDENTIFICADOR_SQL.match(tabla):
+            raise ErrorDeInstalacion(f"LIBRAEDGE_ALTAS_EN_NODO no se entiende: la tabla {tabla!r} no es valida.")
+        for referencia in (r.strip() for r in referencias.split("+") if r.strip()):
+            cabeza, *condiciones = referencia.split("@")
+            hija, punto, columna = cabeza.partition(".")
+            if not punto or not _IDENTIFICADOR_SQL.match(hija) or not _IDENTIFICADOR_SQL.match(columna):
+                raise ErrorDeInstalacion(
+                    f"LIBRAEDGE_ALTAS_EN_NODO no se entiende: la referencia {referencia!r} es tabla.columna.")
+            for condicion in condiciones:
+                nombre, igual, valor = condicion.partition("=")
+                if not igual or not _IDENTIFICADOR_SQL.match(nombre) or not _VALOR_DE_CONDICION.match(valor):
+                    raise ErrorDeInstalacion(
+                        f"LIBRAEDGE_ALTAS_EN_NODO no se entiende: la condicion {condicion!r} es columna=valor.")
+        tablas.append(tabla)
+    sobran = sorted(set(tablas) - set(espejo))
+    if sobran:
+        raise ErrorDeInstalacion(f"LIBRAEDGE_ALTAS_EN_NODO trae tablas que el nodo no espeja: {', '.join(sobran)}.")
+    compuestas = sorted(t for t in tablas if len(espejo[t]) != 1)
+    if compuestas:
+        raise ErrorDeInstalacion(
+            f"LIBRAEDGE_ALTAS_EN_NODO trae tablas con clave compuesta: {', '.join(compuestas)}.")
+    if tablas and _TABLA_DEL_MAPEO not in espejo:
+        raise ErrorDeInstalacion(
+            f"LIBRAEDGE_ALTAS_EN_NODO pide {_TABLA_DEL_MAPEO} en LIBRAEDGE_TABLAS_ESPEJO y no esta: sin el mapeo el "
+            "nodo no reapunta lo que dio de alta.")
+    return tuple(sorted(set(tablas)))
+
+
+#: Como se valida cada variable opcional de la carga (recibe el texto y el espejo).
+_VALIDADORES_OPCIONALES = {
+    "LIBRAEDGE_TABLAS_SOLO_LECTURA": lambda valor, espejo: parsear_tablas_solo_lectura(valor, espejo),
+    "LIBRAEDGE_ALTAS_EN_NODO": lambda valor, espejo: parsear_altas_en_nodo(valor, espejo),
+}
+
+
 def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     """Valida la carga contra el producto que se esta instalando. Los errores nunca muestran el secreto."""
     if not isinstance(datos, Mapping):
@@ -506,12 +565,12 @@ def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     for nombre in VARIABLES_OPCIONALES_DE_LA_CARGA:
         valor = crudo.get(nombre)
         if valor is None or (isinstance(valor, str) and not valor.strip()):
-            continue  # sin guarda: el nodo se instala igual que en v0.16
+            continue  # no la declaro el producto: el nodo se instala igual que en v0.16
         if not isinstance(valor, str):
             raise ErrorDeInstalacion(f"{nombre} tiene que ser un texto.")
         valor = valor.strip()
         _sin_saltos(nombre, valor)
-        parsear_tablas_solo_lectura(valor, espejo)
+        _VALIDADORES_OPCIONALES[nombre](valor, espejo)
         entorno[nombre] = valor
     avisos: list[str] = []
     emisor = _emisor(datos.get("emisor"), avisos)

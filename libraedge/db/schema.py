@@ -107,6 +107,12 @@ def init_schema(conn) -> None:
 
     init_vinculacion_schema(conn)
 
+    # Desde v0.18 (ADR-021): el mapeo de los ids provisorios del nodo a los del central. Mismo criterio: va acá y no en
+    # una migración del producto, y el central y el nodo tienen la misma tabla (el nodo se queda con las filas suyas).
+    from libraedge.mapeo import init_mapeo_schema
+
+    init_mapeo_schema(conn)
+
 
 #: Las columnas de revision manual de `sync_inbox`. Todas nulables: las filas
 #: `applied` de antes de v0.7 no las tienen y no les hacen falta.

@@ -20,6 +20,13 @@ todavia no estan resueltas (hoy se crean en el nodo aunque `clientes` se espeje)
 Se guarda lo que ya esta decidido que el nodo no toca --catalogo, precios, usuarios--, y la lista crece a medida que
 cada tabla queda resuelta.
 
+## Desde v0.18: las filas provisorias de una tabla con alta pasan (ADR-021)
+
+Una tabla con alta en el nodo (`libraedge.altas`, p. ej. `clients`) puede guardarse igual: el trigger de esa tabla
+recibe su columna clave y **deja pasar las filas con id negativo** (las altas provisorias del nodo y su edicion o
+baja), y sigue rechazando todo lo que toque una fila del central. `UPDATE` exige que el id anterior **y** el nuevo sean
+provisorios: no se puede convertir una fila del central en provisoria ni al reves.
+
 ## Es una red de seguridad, no una frontera de seguridad
 
 Cualquiera con acceso a la base puede hacer `SET libraedge.aplicando = '1'` y escribir. La guarda atrapa el **error del
@@ -56,12 +63,30 @@ _SUFIJO_TRIGGER = "_libraedge_guarda"
 
 _FUNCION_GUARDA = f"""
 CREATE OR REPLACE FUNCTION libraedge_guarda_de_espejo() RETURNS trigger AS $libraedge$
+DECLARE
+    antes text;
+    despues text;
 BEGIN
     IF COALESCE(current_setting('{VARIABLE}', true), '') = '1' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    -- Una tabla con alta en el nodo trae su columna clave como argumento: las filas con id negativo pasan.
+    IF TG_NARGS > 0 THEN
+        IF TG_OP <> 'INSERT' THEN
+            antes := to_jsonb(OLD) ->> TG_ARGV[0];
+        END IF;
+        IF TG_OP <> 'DELETE' THEN
+            despues := to_jsonb(NEW) ->> TG_ARGV[0];
+        END IF;
+        IF (antes IS NULL OR antes ~ '^-[0-9]+$') AND (despues IS NULL OR despues ~ '^-[0-9]+$') THEN
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            END IF;
+            RETURN NEW;
+        END IF;
     END IF;
     RAISE EXCEPTION '{MENSAJE}: la tabla % se espeja del central y no se escribe en el nodo (% rechazado)',
         TG_TABLE_NAME, TG_OP
@@ -105,8 +130,11 @@ def desinstalar_guarda_de_espejo(conn, tabla: str) -> None:
     conn.execute(f"DROP TRIGGER IF EXISTS {tabla}{_SUFIJO_TRIGGER} ON {tabla}")
 
 
-def instalar_guarda_de_espejo(conn, tablas) -> tuple[str, ...]:
+def instalar_guarda_de_espejo(conn, tablas, claves_de_alta=None) -> tuple[str, ...]:
     """Pone la guarda en cada tabla de `tablas` y **converge**: la saca de las que ya no estan en la lista.
+
+    `claves_de_alta` (`{tabla: columna_clave}`, v0.18) son las tablas **con alta en el nodo**: su guarda deja pasar las
+    filas con id negativo. Una que no esta en `tablas` no se guarda (la lista de solo lectura manda).
 
     Devuelve las tablas que quedaron guardadas, en orden. Una tabla que no esta en esta base (el producto la declara y
     una migracion todavia no la creo) se saltea y **no** aparece en el resultado: quien llama compara contra lo que
@@ -119,6 +147,7 @@ def instalar_guarda_de_espejo(conn, tablas) -> tuple[str, ...]:
     saca de la lista seguiria bloqueada hasta que alguien tocara el trigger a mano.
     """
     pedidas = tuple(sorted({validar_identificador(tabla) for tabla in tablas}))
+    claves_de_alta = {validar_identificador(t): validar_identificador(c) for t, c in (claves_de_alta or {}).items()}
     if _es_sqlite(conn):
         return ()
     guardadas = []
@@ -128,10 +157,11 @@ def instalar_guarda_de_espejo(conn, tablas) -> tuple[str, ...]:
         if not guardadas:
             conn.execute(_FUNCION_GUARDA)
         conn.execute(f"DROP TRIGGER IF EXISTS {tabla}{_SUFIJO_TRIGGER} ON {tabla}")
+        argumento = f"'{claves_de_alta[tabla]}'" if tabla in claves_de_alta else ""
         conn.execute(
             f"CREATE TRIGGER {tabla}{_SUFIJO_TRIGGER}"
             f" BEFORE INSERT OR UPDATE OR DELETE ON {tabla}"
-            f" FOR EACH ROW EXECUTE FUNCTION libraedge_guarda_de_espejo()"
+            f" FOR EACH ROW EXECUTE FUNCTION libraedge_guarda_de_espejo({argumento})"
         )
         guardadas.append(tabla)
     for sobrante in tablas_con_guarda(conn):
