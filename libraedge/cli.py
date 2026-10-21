@@ -22,10 +22,16 @@ archivo de entorno.
 | `LIBRAEDGE_ALTAS_EN_NODO` | Opcional: tablas del espejo con alta en el nodo, id provisorio (v0.18, ADR-021) |
 | `LIBRAEDGE_ESTADO` | Donde escribir el estado para que lo lea una UI |
 | `LIBRAEDGE_VERSION_ESQUEMA` | Opcional: `alembic` (default), `modulo:funcion` o `ninguna` |
+| `LIBRAEDGE_CARGA_INICIAL` | Opcional: `modulo:funcion` que trae las existencias de la sucursal (v0.20, ADR-023) |
 
 Una clave compuesta en `LIBRAEDGE_TABLAS_ESPEJO` va con `+`
 (`party_roles:party_id+role`). `LIBRAEDGE_VERSION_ESQUEMA` dice como se calcula
 la version del esquema que el nodo le declara al central (`sync/esquema.py`).
+
+`LIBRAEDGE_CARGA_INICIAL` es **blanda** a proposito: si no se entiende o el producto instalado no trae el modulo, el
+nodo arranca igual, sigue subiendo las ventas y lo dice en el estado (`carga_inicial`). Las demas variables frenan el
+arranque porque sin ellas el nodo sincronizaria mal; esta no, y frenarlo dejaria una caja sin sistema por un dato que
+se arregla actualizando.
 
 `LIBRAEDGE_TABLAS_ESPEJO` no tiene default a proposito: sin lista, el aplicador
 aceptaria cualquier tabla que el central mande, y esa lista **es** la frontera
@@ -40,6 +46,7 @@ import time
 from datetime import UTC
 
 from libraedge.db.changelog import columnas_de_clave
+from libraedge.sync.carga_inicial import VARIABLE as VARIABLE_CARGA_INICIAL
 
 
 def _requerido(nombre: str) -> str:
@@ -197,7 +204,23 @@ def construir_nodo():
             MirrorApplier(conexion, tablas, node_id=node_id, altas=altas),
         ),
         ruta_estado=os.environ.get("LIBRAEDGE_ESTADO"),
+        carga_inicial_worker=carga_inicial_del_nodo(
+            repositorio, conexion, node_id, central, secreto, version, os.environ.get(VARIABLE_CARGA_INICIAL)),
     ), conexion
+
+
+def carga_inicial_del_nodo(repositorio, conexion, node_id, central, secreto, version, especificacion):
+    """El `CargaInicialWorker` si el producto declara `LIBRAEDGE_CARGA_INICIAL`; si no, `None` (ADR-023).
+
+    No importa la funcion aca: se resuelve en cada intento y, si falla, queda en el estado del nodo (ver el docstring de
+    `libraedge.sync.carga_inicial`)."""
+    from libraedge.sync.carga_inicial import CargaInicialWorker, HttpCargaInicialTransport
+
+    if not (especificacion or "").strip():
+        return None
+    return CargaInicialWorker(
+        repositorio, conexion, node_id,
+        HttpCargaInicialTransport(central, node_id, secreto, version_esquema=version), especificacion)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -239,6 +262,13 @@ def main(argv: list[str] | None = None) -> int:
     reenviar = revision_sub.add_parser(
         "reenviar", help="la vuelve a poner en cola (despues de resolverla en el central)")
     reenviar.add_argument("operation_id")
+
+    carga = sub.add_parser(
+        "carga-inicial",
+        help="trae las existencias de la sucursal del central si todavia no se trajeron (soporte)")
+    carga.add_argument(
+        "--forzar", action="store_true",
+        help="borra la marca y la hace ya. Cuidado: pisa las existencias del nodo con las del central")
 
     args = parser.parse_args(argv)
 
@@ -297,6 +327,9 @@ def main(argv: list[str] | None = None) -> int:
             # puedan alertar sin parsear el JSON.
             return 0 if estado.en_linea else 1
 
+        if args.comando == "carga-inicial":
+            return _carga_inicial_del_nodo(nodo, forzar=args.forzar)
+
         while True:
             estado = nodo.sincronizar()
             estado_texto = "en linea" if estado.en_linea else "fuera de linea"
@@ -304,12 +337,34 @@ def main(argv: list[str] | None = None) -> int:
                 f"[{estado.ultimo_intento}] {estado_texto} | "
                 f"pendientes={estado.pendientes} subidas={estado.operaciones_subidas} "
                 f"bajados={estado.cambios_bajados}"
-                + (f" | {estado.ultimo_error}" if estado.ultimo_error else ""),
+                + (f" | {estado.ultimo_error}" if estado.ultimo_error else "")
+                + (f" | carga inicial {estado.carga_inicial}" if estado.carga_inicial else ""),
                 flush=True,
             )
             time.sleep(args.intervalo)
     finally:
         conexion.close()
+
+
+def _carga_inicial_del_nodo(nodo, forzar: bool) -> int:
+    """`libraedge-nodo carga-inicial [--forzar]`: un intento, con el resultado en JSON.
+
+    Sale 0 si quedo terminada (hecha, ya estaba, o el central no tiene nada que traer) y 1 si espera o fallo."""
+    import json
+
+    from libraedge.sync.carga_inicial import VARIABLE, YA_HECHA
+
+    trabajador = nodo.carga_inicial_worker
+    if trabajador is None:
+        print(f"Este nodo no tiene {VARIABLE}: el producto no declara carga inicial de existencias.", file=sys.stderr)
+        return 1
+    resultado = trabajador.run_once(forzar=forzar)
+    print(json.dumps({"estado": resultado.estado, "detalle": resultado.detalle,
+                      "resultado": resultado.resultado}, ensure_ascii=False, indent=2, default=str))
+    if resultado.estado == YA_HECHA:
+        print("Ya estaba hecha. Para volver a traerla (pisa las existencias del nodo): carga-inicial --forzar.",
+              file=sys.stderr)
+    return 0 if resultado.terminada else 1
 
 
 def _revision_del_nodo(args) -> int:

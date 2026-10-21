@@ -51,6 +51,8 @@
     "pystray>=0.19",
     "Pillow>=10"
   ],
-  "variables": {},
+  "variables": {
+    "LIBRAEDGE_CARGA_INICIAL": "libracommerce.erp.offline_stock:aplicar_carga_inicial"
+  },
   "version_esquema": "alembic"
 }

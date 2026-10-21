@@ -270,6 +270,36 @@ class NodeRepository:
             self._conn.commit()
         return sequence
 
+    # ── las marcas del nodo (ADR-023) ───────────────────────────────────────
+
+    def tiene_marca(self, nombre: str) -> bool:
+        """Si el nodo ya dejo la marca ``nombre``: algo que se hace **una sola vez** por nodo.
+
+        Vive en ``local_sequences`` (``next_value = 1``) y no en una tabla nueva: ya existe en los dos motores y en
+        todos los nodos instalados, asi que una marca no pide migracion ni ``ALTER`` en una base de un cliente. Es lo
+        mismo que ``next_sequence``: un nombre y un entero.
+        """
+        fila = self._conn.execute("SELECT 1 FROM local_sequences WHERE name = ?", (nombre,)).fetchone()
+        return fila is not None
+
+    def poner_marca(self, nombre: str, commit: bool = True) -> None:
+        """Deja la marca ``nombre``. Idempotente.
+
+        ``commit=False`` la deja **dentro de la transaccion del llamador**: asi lo que el nodo hizo y la marca que
+        dice que ya lo hizo entran juntos o no entra ninguno (la carga inicial, ADR-023).
+        """
+        self._escribir(
+            "INSERT INTO local_sequences (name, next_value) VALUES (?, 1) ON CONFLICT (name) DO NOTHING",
+            (nombre,), propia=commit,
+        )
+        if commit:
+            self._conn.commit()
+
+    def quitar_marca(self, nombre: str) -> None:
+        """Borra la marca ``nombre``: lo que se hacia una sola vez se vuelve a hacer (``carga-inicial --forzar``)."""
+        self._escribir("DELETE FROM local_sequences WHERE name = ?", (nombre,))
+        self._conn.commit()
+
     def enqueue_operation(
         self, operation: OutboxOperation, commit: bool = True
     ) -> OutboxOperation:

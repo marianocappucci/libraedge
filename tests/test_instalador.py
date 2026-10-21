@@ -346,6 +346,7 @@ def test_el_entorno_completo_del_nodo():
         "VENTALIBRA_ADMIN_PASSWORD": "generado-1",
         "TZ": "America/Argentina/Buenos_Aires",
         "LIBRAAUTH_COOKIE_SECURE": "0",
+        "LIBRAEDGE_CARGA_INICIAL": "libracommerce.erp.offline_stock:aplicar_carga_inicial",  # ADR-023
     }
     assert ins.revisar_entorno(ins.definicion_desde_dict(_definicion()), entorno) == []
 

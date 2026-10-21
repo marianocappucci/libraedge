@@ -1166,3 +1166,102 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   (lo que el central recibió) tampoco: la demo nueva no tiene las ventas que subió el nodo ayer. (4) Si entre `conservar` y
   `restaurar` alguien registró otro nodo con el mismo prefijo de numeración, `restaurar` falla con un error claro y no deja nada a
   medias. (5) El archivo es un secreto (hashes): quien lo usa lo guarda con permisos 600 y lo borra al terminar.
+
+## ADR-023 — La carga inicial de existencias: al vincular, el nodo trae las de su sucursal; desde ahí manda el nodo
+
+- Estado: aceptada (decisión del humano del 2026-10-21; sale en v0.20.0)
+- Fecha: 2026-10-21
+- Contexto: el espejo (ADR-002) trae el catálogo, los precios y los depósitos, pero **las existencias son de autoridad del
+  nodo**: las mueven sus ventas y sus recepciones, y no bajan por el changelog. Un nodo recién vinculado arranca con el
+  stock en cero aunque la sucursal tenga mercadería. El humano decidió que **al vincular el nodo trae las existencias de
+  SU sucursal del central, y desde ahí manda el nodo**: no hay una segunda bajada ni un vaivén de stock. La aritmética
+  (qué es una existencia, cómo se arma el movimiento de apertura) es de LibraCommerce
+  (`libracommerce.erp.offline_stock`); LibraEdge sólo pone las costuras genéricas, y sigue sin importar a LibraCommerce.
+- Decisión:
+  1. **Central: `GET /sync/v1/carga-inicial?node_id=`**, en `create_sync_router(..., carga_inicial=None)`, con el molde de
+     `prestar_ticket`. Mismo gate que push y pull (`_autenticar` con el latido, `_verificar_esquema`). **La sucursal sale de
+     `node_identity.branch_id` del nodo autenticado, no de un parámetro**: con el secreto de un nodo no se piden las
+     existencias de otra sucursal (ni de otro nodo: el `node_id` tiene que ser el del secreto, si no 401). La costura es
+     `carga_inicial(conexion, node_id, branch_id) -> dict`, **sincrónica** (recibe la conexión del request; una `async` se
+     rechaza al construir el router). `branch_id` llega como está guardado en `node_identity`, **texto**. El `dict` viaja
+     con `default=str`, igual que la bajada: los `Decimal` son texto y no se degradan a `float`. Sin la costura contesta
+     **501** (después de autenticar: a quien no es un nodo no se le cuenta qué tiene este central) con
+     `detail.codigo = carga_inicial_no_disponible`. Una costura que no devuelve un `dict` es 502.
+  2. **Nodo: `CargaInicialWorker`** (`libraedge/sync/carga_inicial.py`), un paso de `Nodo.sincronizar` **después del pull**,
+     mientras falte la marca **`carga_inicial:<node_id>`** en `local_sequences` (`NodeRepository.tiene_marca/poner_marca/
+     quitar_marca`: la tabla ya existe en los dos motores y en todos los nodos instalados, así que no hay migración). Llama
+     a la función del producto de `LIBRAEDGE_CARGA_INICIAL=modulo:funcion` con **`(conexion, traer)`**; `traer()` hace el
+     GET con el mismo patrón de transporte que la bajada (`HttpCargaInicialTransport`, secreto del nodo, cabecera de
+     esquema, timeout de 30 s). La función devuelve un `dict`: con **`"hecha": False`** (y un `"motivo"`) dice «todavía no
+     puedo» y el worker **no marca** y reintenta el ciclo siguiente; cualquier otra cosa es «lo hice» y marca.
+  3. **La función y la marca entran en una sola transacción.** La función no necesita commitear: si no lo hace, el worker
+     commitea lo que escribió **junto con la marca**. No puede quedar aplicada y sin marca (se aplicaría de nuevo y pisaría
+     el stock que el nodo ya movió) ni marcada y sin aplicar (el nodo no tendría nunca sus existencias). Ante una
+     excepción o un «espero», `rollback`.
+  4. **Solo corre cuando hay con qué.** Si el ciclo ya tuvo un error (sin central, subida caída) no se intenta. Si la
+     bajada de este ciclo llenó su tanda (`bajados >= limite`, puede quedar espejo por bajar) tampoco: la función lee del
+     espejo (depósitos, sucursal) y llamarla con un espejo a medias la haría esperar o, peor, cargar de menos.
+  5. **Errores: se registran en el estado y el nodo sigue.** `EstadoNodo.carga_inicial` (campo nuevo, `None` por defecto) vale
+     `None` si está hecha o el producto no tiene, `esperando: <motivo>` o `error: <Tipo>: <mensaje>`. **No toca `en_linea`
+     ni `ultimo_error`**: que la carga inicial espere o falle no es estar fuera de línea, y no puede frenar la subida de
+     las ventas (la bandeja diría «sin conexión» por un dato que se arregla actualizando). `run_once` no levanta. La
+     función se importa **al intentar, no al arrancar** (`LIBRAEDGE_CARGA_INICIAL` es una variable blanda, a diferencia de
+     `LIBRAEDGE_TABLAS_ESPEJO`): un nodo cuyo libracommerce todavía no trae `offline_stock` no se cae; queda
+     `error: ... no se pudo importar el modulo ... actualizar el nodo`, no se marca y se reintenta solo cuando se actualice.
+  6. **501 = el producto no tiene carga inicial**: se marca como hecha (nada que traer) y se loguea **una vez** con
+     `warning` (sin `logging` configurado sólo salen los warnings). **Un 404 no es un 501**: un central anterior a v0.20 no
+     tiene la ruta, y eso se arregla actualizándolo; darlo por hecho dejaría al nodo sin sus existencias para siempre. 401,
+     409 de esquema, red caída y los demás: error y reintento.
+  7. **CLI de soporte: `libraedge-nodo carga-inicial [--forzar]`**. Hace un intento y imprime el resultado en JSON; sale 0
+     si quedó terminada (hecha, ya estaba, o el central no tiene nada que traer) y 1 si espera o falla. Sin `--forzar`, si la
+     marca existe no hace nada y lo dice. `--forzar` borra la marca y corre ya: **pisa las existencias del nodo con las del
+     central**, así que es de soporte (nodo recién vinculado que quedó en cero, o reinstalado a propósito), no de rutina.
+  8. **Instalador: `LIBRAEDGE_CARGA_INICIAL` viaja como `variables` del producto** (`instalador/productos/*.json`, que ya
+     existía y estaba vacío): `libracommerce.erp.offline_stock:aplicar_carga_inicial` en ContaLibra, RestoLibra y VentaLibra
+     (los tres corren las migraciones de libracommerce). Con la carga, `armar_entorno` la escribe en el `nodo.env` (pisa,
+     como toda `variables`). **Para que la reciban los nodos ya instalados al actualizar**, `completar-entorno` aprende
+     `--definicion`: agrega las `variables` del producto que **falten** (respeta la que ya esté, con cualquier valor: es lo
+     que soporte pudo haber tocado a mano), y lo usan `preparar_nodo.sh` (apt) e `instalar.ps1` (`/SINVINCULAR` sobre un
+     nodo vinculado). Con sólo declararla en el json, una actualización **no** la habría traído: sin carga el `nodo.env` no
+     se rearma. La definición valida la forma `modulo:funcion`. No es obligatoria para `revisar-entorno`: un nodo sin ella
+     sigue siendo un nodo completo.
+  9. **Windows: el entorno de los servicios se vuelve a cargar al actualizar.** Los servicios de NSSM guardan su entorno en
+     el registro (`AppEnvironmentExtra`, escrito por `preparar_nodo.ps1`) y **no releen el `nodo.env`**. Hasta hoy
+     `Actualizar-NodoVinculado` completaba el archivo y arrancaba los servicios con el entorno viejo, así que una variable
+     agregada por `completar-entorno` no llegaba a un nodo de Windows. `Actualizar-NodoVinculado` ahora hace el mismo
+     `nssm set ... AppEnvironmentExtra` que la instalación, antes de arrancar los servicios. En Linux no hace falta
+     (`EnvironmentFile=` se lee en cada arranque).
+  10. **El registro de un nodo pasa por un chequeo del producto** (decisión del humano: si la instancia tiene depósitos sin
+     sucursal, vincular se niega). LibraEdge no conoce depósitos: `Aprovisionamiento(..., validar_registro=)` es opcional,
+     `validar_registro(conn) -> list[str]` de problemas escritos para quien instala (`None` o vacía: se puede). Lo consulta
+     `registrar` —que es el embudo de todas las altas: el CLI, el alta por código, el alta por archivo, la carga nueva y el
+     canje—, después de las guardas de siempre (sucursal, segundo nodo, adicional) y **antes de escribir nada**. Con
+     problemas levanta `RegistroConProblemas` (un `ErrorDeAprovisionamiento`, con `.problemas`): las pantallas del central
+     contestan **409** `registro_con_problemas` con el texto, y el CLI sale 1. El canje contesta 409 y **no gasta el
+     código**. `pedir_otro_codigo` lo consulta también, para no emitir un código que el canje va a rechazar. Corre en cada
+     registro, también el de una PC que se reemplaza: si se niega, el secreto del nodo que ya andaba no se invalida.
+- Descartadas:
+  - **Que la carga inicial baje por el changelog**: las existencias son de autoridad del nodo (ADR-002); publicarlas haría
+    que el central se las devolviera a cada cambio y el nodo se pisara su stock.
+  - **Que el nodo elija la sucursal** (`?branch_id=`): cualquier nodo con su secreto podría pedir las existencias de otra
+    sucursal.
+  - **Marcar «hecha» ante cualquier 4xx/5xx del central**, o ante un 404: un central sin actualizar dejaría al nodo en cero
+    para siempre y en silencio.
+  - **Un paso del instalador, o un comando que corra una sola vez a mano**: el nodo ya sincroniza cada minuto, ya tiene la
+    conexión y el espejo, y reintenta solo cuando falta algo; un paso aparte necesitaría su propio manejo de «todavía no».
+  - **Exigir que la función commitee**, o commitear la marca aparte: abre la ventana de aplicada-sin-marca descrita arriba.
+  - **Fallar al arrancar** si `LIBRAEDGE_CARGA_INICIAL` no se entiende o no se importa: dejaría una caja sin sistema por un
+    dato que se arregla actualizando.
+  - **Poner el error en `ultimo_error`**: lo lee `en_linea`, la bandeja y los scripts de verificación como «sin conexión».
+- Consecuencias: **MINOR (v0.20.0)**: suma una ruta, un paso del ciclo, una variable, un subcomando, un campo del estado y
+  dos costuras opcionales; sin tocar el esquema ni lo que había. **Los productos tienen que sumar la fila de
+  `GET /sync/v1/carga-inicial` en su matriz de roles**, como «PÚBLICA» autenticada por el secreto del nodo, igual que push,
+  pull y ticket-arca (`libraedge.sync.api.RUTAS_AUTENTICADAS_POR_NODO` es la lista); y pasar `carga_inicial=` al router y
+  `validar_registro=` al `Aprovisionamiento` (en la familia, `carga_inicial_del_central` y
+  `depositos_sin_sucursal` de `libracommerce.erp.offline_stock`). **Lo que la función del producto tiene que cumplir**:
+  idempotencia razonable (el worker la protege con la transacción única, pero `--forzar` la vuelve a correr), esperar con
+  `{"hecha": False, "motivo": ...}` si el espejo no trajo todavía lo que necesita, y no commitear si quiere la atomicidad
+  con la marca. **Lo que no cubre**: (1) un nodo que ya vendió antes de recibir la carga inicial: la función decide qué hace
+  con esas existencias (el worker no sabe de stock); (2) la bandeja no muestra `carga_inicial`: sólo el estado, `libraedge-
+  nodo estado` y la línea de `correr`; (3) la marca vive en la base del nodo: un nodo cuya base se recrea vuelve a cargar
+  (correcto: arranca en cero), y uno que conserva la base no (sí con `--forzar`).

@@ -77,6 +77,14 @@ name = "libraedge"
 # 0.19.1 -> 0.19.2 (2026-10-21): el CI del instalador entra sin captcha cuando el nodo contesta {"requerido": false}
 # (libraauth v0.55.0, ADR-028) y falla si un nodo con libraauth >= 0.55.0 lo pide: es el bug de los puestos. El release de
 # v0.19.1 fallo por eso y no se publico. Sin cambios en el nodo.
+# 0.19.x -> 0.20.0 (2026-10-21, ADR-023): la carga inicial de existencias. Al vincular, el nodo trae las de SU sucursal del
+# central (`GET /sync/v1/carga-inicial`, `create_sync_router(..., carga_inicial=)`) con la funcion que el producto declara en
+# `LIBRAEDGE_CARGA_INICIAL=modulo:funcion`, una sola vez (marca `carga_inicial:<node_id>`), y desde ahi manda el nodo. Nuevo:
+# `libraedge-nodo carga-inicial [--forzar]`, `EstadoNodo.carga_inicial`, `completar-entorno --definicion` (los nodos ya
+# instalados reciben las `variables` del producto al actualizar; en Windows se vuelven a cargar en NSSM) y
+# `Aprovisionamiento(validar_registro=)`: con problemas en la instancia (depositos sin sucursal) vincular contesta 409.
+# Minor: suma una ruta, un campo del estado y dos costuras opcionales; no toca el esquema ni lo que habia. Los productos
+# suman la fila de la ruta en su matriz de roles (PUBLICA, secreto del nodo).
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

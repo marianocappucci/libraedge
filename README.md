@@ -145,6 +145,41 @@ Aprovisionamiento(..., tablas_de_referencia=[..., "clients", "parties"],
 `registrar` la manda en la carga (`LIBRAEDGE_ALTAS_EN_NODO`) y suma `libraedge_mapeo` al espejo; una tabla con alta puede además
 estar en `tablas_solo_lectura`: la guarda deja pasar sus filas provisorias. Sin declarar nada, v0.18 se comporta como v0.17.
 
+## La carga inicial de existencias (v0.20, ADR-023)
+
+Un nodo recién vinculado arranca con el stock en cero: las existencias son de autoridad del nodo y no bajan por el espejo.
+Al vincular, **el nodo trae las de su sucursal del central, una vez, y desde ahí manda el nodo**. LibraEdge pone las
+costuras; la aritmética es del producto (en la familia, `libracommerce.erp.offline_stock`). En el central:
+
+```python
+router = create_sync_router(get_connection, despachador=..., version_esquema=version_de_alembic,
+                            carga_inicial=carga_inicial_del_central)   # GET /sync/v1/carga-inicial?node_id=
+```
+
+`carga_inicial(conexion, node_id, branch_id) -> dict` es sincrónica; la sucursal es la del nodo autenticado (`node_identity.
+branch_id`, como texto), no un parámetro, y los `Decimal` viajan como texto. Sin la costura la ruta contesta 501. Es una ruta
+autenticada por el secreto del nodo, como push, pull y ticket-arca: **cada producto suma su fila «PÚBLICA» en la matriz de
+roles** (`libraedge.sync.api.RUTAS_AUTENTICADAS_POR_NODO` es la lista).
+
+En el nodo, con `LIBRAEDGE_CARGA_INICIAL=modulo:funcion` (la trae el `producto.json`, ver el instalador), `Nodo.sincronizar`
+la llama después de la bajada, mientras falte la marca `carga_inicial:<node_id>` de `local_sequences`:
+
+```python
+def aplicar_carga_inicial(conexion, traer) -> dict:
+    datos = traer()                         # el dict del central, con los Decimal como texto
+    ...                                     # escribe las existencias; no hace falta commitear
+    return {"hecha": True}                  # o {"hecha": False, "motivo": "..."} para esperar al ciclo siguiente
+```
+
+La función y la marca entran en **una sola transacción**. Si espera, no marca y reintenta; si el central contesta 501 (el
+producto no tiene carga inicial) se da por hecha; los errores (incluido que el producto instalado no traiga el módulo)
+quedan en `EstadoNodo.carga_inicial` y no cortan la sincronización ni cambian `en_linea`. Soporte:
+`libraedge-nodo carga-inicial [--forzar]` (`--forzar` borra la marca y **pisa las existencias del nodo** con las del central).
+
+**Vincular se niega si la instancia no está lista.** `Aprovisionamiento(..., validar_registro=)` es una costura opcional
+`(conn) -> list[str]` de problemas (en la familia, los depósitos sin sucursal): con alguno, `registrar` no escribe nada y las
+pantallas del central contestan 409 `registro_con_problemas` con el texto.
+
 ## El ticket de ARCA prestado (v0.9, ADR-009)
 
 El nodo factura con internet usando el ticket de ARCA del central; la clave no sale del VPS. En el central:
