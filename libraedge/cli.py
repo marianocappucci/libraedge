@@ -19,6 +19,7 @@ archivo de entorno.
 | `LIBRAEDGE_DATABASE_URL` | La base del producto, donde vive el outbox |
 | `LIBRAEDGE_TABLAS_ESPEJO` | `tabla:pk` separadas por coma. **Es el reparto de autoridad** |
 | `LIBRAEDGE_TABLAS_SOLO_LECTURA` | Opcional: tablas **del espejo** que el producto no escribe (v0.17, ADR-019) |
+| `LIBRAEDGE_ALTAS_EN_NODO` | Opcional: tablas del espejo con alta en el nodo, id provisorio (v0.18, ADR-021) |
 | `LIBRAEDGE_ESTADO` | Donde escribir el estado para que lo lea una UI |
 | `LIBRAEDGE_VERSION_ESQUEMA` | Opcional: `alembic` (default), `modulo:funcion` o `ninguna` |
 
@@ -37,6 +38,8 @@ import os
 import sys
 import time
 from datetime import UTC
+
+from libraedge.db.changelog import columnas_de_clave
 
 
 def _requerido(nombre: str) -> str:
@@ -89,6 +92,32 @@ def tablas_solo_lectura(crudo: str | None, espejo) -> tuple[str, ...]:
     return nombres
 
 
+def altas_en_nodo(crudo: str | None, espejo) -> tuple:
+    """`"clients:cc_asientos.tercero_id@rol=cliente,parties"` -> las `AltaEnNodo` (ver `libraedge.altas`). Vacia o
+    ausente: ninguna. Cada tabla tiene que ser del espejo, con una sola columna de clave, y el espejo tiene que traer
+    el mapeo: sin el, el nodo dio de alta filas que nunca se reapuntan."""
+    from libraedge.altas import parsear_altas
+    from libraedge.mapeo import TABLA as TABLA_MAPEO
+
+    try:
+        altas = parsear_altas(crudo)
+    except ValueError as exc:
+        raise SystemExit(f"LIBRAEDGE_ALTAS_EN_NODO no se entiende: {exc}") from exc
+    sobran = sorted({a.tabla for a in altas} - set(espejo))
+    if sobran:
+        raise SystemExit(
+            f"LIBRAEDGE_ALTAS_EN_NODO trae tablas que no estan en LIBRAEDGE_TABLAS_ESPEJO: {', '.join(sobran)}. "
+            "El nodo no recibiria nunca el id que les asigna el central.")
+    compuestas = sorted(a.tabla for a in altas if len(columnas_de_clave(espejo[a.tabla])) != 1)
+    if compuestas:
+        raise SystemExit(f"LIBRAEDGE_ALTAS_EN_NODO trae tablas con clave compuesta: {', '.join(compuestas)}.")
+    if altas and TABLA_MAPEO not in espejo:
+        raise SystemExit(
+            f"LIBRAEDGE_ALTAS_EN_NODO pide {TABLA_MAPEO} en LIBRAEDGE_TABLAS_ESPEJO y no esta: sin el mapeo el nodo no "
+            "reapunta lo que dio de alta.")
+    return altas
+
+
 def version_esquema_del_nodo(conexion, especificacion: str | None) -> str | None:
     """La version del esquema que el nodo declara, segun `LIBRAEDGE_VERSION_ESQUEMA`.
 
@@ -134,6 +163,7 @@ def construir_nodo():
     base = _requerido("LIBRAEDGE_DATABASE_URL")
     tablas = tablas_espejo(_requerido("LIBRAEDGE_TABLAS_ESPEJO"))
     solo_lectura = tablas_solo_lectura(os.environ.get("LIBRAEDGE_TABLAS_SOLO_LECTURA"), tablas)
+    altas = altas_en_nodo(os.environ.get("LIBRAEDGE_ALTAS_EN_NODO"), tablas)
 
     core.configure(base)
     conexion = core.get_connection()
@@ -141,7 +171,15 @@ def construir_nodo():
     version = version_esquema_del_nodo(conexion, os.environ.get("LIBRAEDGE_VERSION_ESQUEMA"))
     # La guarda del espejo (ADR-019), en cada arranque y despues de las migraciones: el servicio del nodo arranca
     # cuando la base ya esta migrada. Converge: sin la variable saca las guardas que hubiera de una carga anterior.
-    guardadas = instalar_guarda_de_espejo(conexion, solo_lectura)
+    # Las tablas con alta en el nodo dejan pasar sus filas provisorias (id negativo): ADR-021.
+    if altas:
+        # El mapeo lo crea `init_schema()` con el arranque del producto; si el servicio del nodo se adelanta, que no
+        # falle el primer ciclo por una tabla que todavia no esta (idempotente).
+        from libraedge.mapeo import init_mapeo_schema
+
+        init_mapeo_schema(conexion)
+    guardadas = instalar_guarda_de_espejo(
+        conexion, solo_lectura, {a.tabla: columnas_de_clave(tablas[a.tabla])[0] for a in altas})
     for faltante in sorted(set(solo_lectura) - set(guardadas)):
         print(f"AVISO: LIBRAEDGE_TABLAS_SOLO_LECTURA nombra {faltante!r} y esa tabla no esta en la base: "
               "sin guarda hasta que la cree una migracion.", file=sys.stderr)
@@ -156,7 +194,7 @@ def construir_nodo():
         pull_worker=PullWorker(
             repositorio,
             HttpPullTransport(central, node_id, secreto, version_esquema=version),
-            MirrorApplier(conexion, tablas),
+            MirrorApplier(conexion, tablas, node_id=node_id, altas=altas),
         ),
         ruta_estado=os.environ.get("LIBRAEDGE_ESTADO"),
     ), conexion

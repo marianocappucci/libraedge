@@ -58,6 +58,10 @@ name = "libraedge"
 # tabla con `Aprovisionamiento.tablas_solo_lectura`) y el orden causal del outbox: ante un fallo de transporte
 # `OutboxWorker.run_once` corta la tanda en vez de seguir con la siguiente. Minor: suma API y una variable opcional de la
 # carga; el worker cambia de comportamiento con la red caida (una operacion por ciclo en vez de todas).
+# 0.17.x -> 0.18.0 (2026-10-21, ADR-021, Fase 2): las altas de referencia en el nodo: id provisorio negativo, `libraedge_mapeo`
+# (la crea `init_schema`) y el reapuntado cuando el mapeo baja por el espejo (`MirrorApplier(node_id=, altas=)`), la variable
+# opcional `LIBRAEDGE_ALTAS_EN_NODO` de la carga y la guarda que deja pasar lo provisorio. Minor: suma API y una variable opcional;
+# sin declarar `altas_en_nodo` se comporta como v0.17. Un instalador anterior rechaza la carga que trae la variable.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

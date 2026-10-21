@@ -1039,3 +1039,89 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   vez de subir lo de atrás desordenado. **Lo que no cubre:** si el central acepta una venta cuyo manejador no verifica
   que exista el cliente, un `cliente.alta` rechazado antes no la frena; eso es un contrato de cada manejador del producto,
   que debe rechazar lo que le falta.
+
+## ADR-021 — Las altas de referencia en el nodo: id provisorio negativo, mapeo del central y reapuntado por el espejo
+
+- Estado: aceptada (Fase 2 de LibraEdge, decidida por el humano; sale en v0.18.0). Opt-in por tabla; esta versión la usa **sólo
+  para clientes** (productos va después, con el mismo mecanismo).
+- Fecha: 2026-10-21
+- Contexto: ADR-002 dice que el central manda sobre la referencia y el nodo la espeja, y ADR-019 dejó abierto qué hacer con las
+  **altas de clientes en el nodo**: el POS crea clientes en el nodo, y `clients` se espeja. Un cliente creado en el nodo tomaba el
+  siguiente id de la secuencia **de la base del nodo**, que no tiene nada que ver con la del central: chocaba por id con un cliente
+  del central (o lo pisaba el espejo, que escribe con el id del central) y la venta subía con un `cliente_id` que en el central es
+  de **otro cliente**, sin ningún error. La decisión del humano (2026-10-21): **las altas de referencia en el nodo se permiten y
+  suben como operación; el central asigna su id y reescribe las referencias.** Esta decisión es la mitad de LibraEdge: el id
+  provisorio, el mapeo y el reapuntado. El alta como operación (`cliente.alta`) y el aplicador del central son de `libracommerce`
+  (ADR-070) y el gancho del alta de `libracore` (ADR-077): LibraEdge no sabe qué es un cliente (ADR-001).
+- Qué ya existe (se miró antes de diseñar): `local_sequences` y `NodeRepository.next_sequence(commit=False)` (la secuencia del
+  outbox, en la transacción del llamador); el espejo con clave compuesta (ADR-007), que ya sabe mover una tabla de clave
+  `(node_id, tabla, id_nodo)`; la guarda (ADR-019) y su patrón de declarar por `Aprovisionamiento` → `registrar` → carga →
+  `nodo.env` → `libraedge-nodo`; el catálogo de PostgreSQL como fuente de las claves (`clave_primaria`, `_dependencias`); y la regla
+  del `SyncReceiver` de revisión manual para `ValueError` (ADR-007) sin trabar la cola (ADR-020).
+- Decisión:
+  1. **Id provisorio negativo** (`libraedge.mapeo.siguiente_id_provisorio(conn)`): -1, -2, ... de `local_sequences`, **en la
+     transacción del alta** (no commitea; si el alta se deshace, el número también) y **atómico** entre procesos (un `UPDATE ...
+     RETURNING` toma la fila hasta el commit). Un id del central es siempre positivo, así que **no se cruza nunca** con uno que
+     llegue por el espejo ni con uno que el nodo todavía no conoce, y `id < 0` dice a simple vista «todavía no existe en el
+     central». No se reusa jamás: el mapeo es por `(nodo, tabla, id_nodo)` y un id reusado apuntaría a otra fila.
+  2. **`libraedge_mapeo(node_id, tabla, id_nodo, id_central, creado_at)`**, clave `(node_id, tabla, id_nodo)`, la crea
+     `init_schema()` (en el central y en el nodo, sin migración del producto). El central la llena al aplicar el alta
+     (`anotar_mapeo`: idempotente; un mapeo distinto para el mismo id es `MapeoEnConflicto`, o sea que el nodo reusó un id) y la usa
+     para traducir las referencias de lo que sube después (`traducir_id(conn, node_id, tabla, id_nodo)`: `None` y un id no negativo
+     pasan sin tocar; uno negativo se busca y, **sin mapeo, `SinMapeo`, un `ValueError`**: revisión manual con un mensaje que dice qué
+     alta falta, y la cola sigue).
+  3. **El mapeo baja por el espejo y es lo que dispara el reapuntado.** `libraedge_mapeo` es una tabla más del espejo (la publica
+     el central con su trigger y su clave compuesta; declarar `altas_en_nodo` la suma sola a las tablas de referencia y a las de
+     solo lectura). `MirrorApplier(conn, tablas, node_id=, altas=)` se queda con las filas **de su nodo** (las de otros nodos y
+     las de tablas sin alta se ignoran) y, al guardar una, reapunta (`sync/reconciliacion.py`), todo en la transacción del `aplicar`.
+  4. **El reapuntado** (`reapuntar(conn, tabla, provisorio, definitivo)`), cuando ya están **las dos filas** (la provisoria y la
+     definitiva, que bajó con su contenido): (a) cada **clave foránea de una columna** hacia la tabla, leída del catálogo de la
+     base (`pg_constraint` / `PRAGMA foreign_key_list`) y no de una lista, pasa del provisorio al definitivo; (b) las
+     **referencias sin FK** que el producto declaró (`Referencia(tabla, columna, donde)`: el `tercero_id` de un libro de
+     cuentas, que sirve a clientes y proveedores y por eso no tiene FK; el `donde` es sólo igualdades) hacen lo mismo; (c) lo que
+     cuelga de la provisoria desde una **tabla que el nodo espeja** se borra y no se reapunta (la autoridad es el central, que
+     nunca creó esa fila); (d) se borra la fila provisoria. Es la única operación del espejo que borra una fila que el central no
+     borró, y por eso es estrecha: sólo con un id negativo y sólo cuando la definitiva ya está. Idempotente (`YA_ESTABA`).
+  5. **Un reapuntado que falla no frena el espejo.** Va en un `SAVEPOINT`: se deshace entero (también en PostgreSQL, donde un error
+     aborta la transacción del cursor), queda en `MirrorApplier.sin_reconciliar` y en stderr (una vez por motivo) y la bajada
+     sigue. `PullWorker` llama `reconciliar_pendientes()` al final de cada ciclo: reintenta lo que quedó (la definitiva todavía
+     no había bajado, o el choque se arregló) con una consulta barata por tabla. Lo peor que pasa es que la fila provisoria
+     convive un rato con la definitiva.
+  6. **Se declara por tabla y viaja por la carga**: `Aprovisionamiento(..., altas_en_nodo=[("clients", [("cc_asientos",
+     "tercero_id", {"rol": "cliente"})]), "parties"])` (tienen que ser de referencia; `AltaEnNodo`/`Referencia` en
+     `libraedge.altas`). `registrar` manda la variable **opcional** `LIBRAEDGE_ALTAS_EN_NODO` (`clients:cc_asientos.tercero_id@rol=
+     cliente,parties`: sin comillas ni caracteres de shell, porque termina en un archivo de entorno), `instalador` la valida con
+     un parser propio —ese módulo sólo usa la biblioteca estándar— y un test fija que coincide con el del nodo, y `libraedge-nodo`
+     la lee al arrancar y arma el aplicador. **`registrar` no registra el nodo** (y no escribe nada) si el central no puede
+     publicar la tabla o el mapeo: un nodo así daría de alta filas que nunca se reapuntan.
+  7. **La guarda (ADR-019) deja pasar lo provisorio.** Una tabla con alta puede estar además en `tablas_solo_lectura`: su trigger
+     recibe la columna clave y acepta las filas con id negativo (alta, edición y baja de lo provisorio; un `UPDATE` exige que el id
+     anterior **y** el nuevo sean provisorios) y sigue rechazando todo lo que toque una fila del central. Sin la clave
+     (`instalar_guarda_de_espejo(conn, tablas)`) es la de v0.17.
+- Desvío del diseño propuesto, y por qué: **no hay columna `uid`.** La propuesta era un UUID en la fila para que el nodo
+  reconociera su provisoria al bajar la del central. No alcanza: cuando el central **deduplica** —el CUIT ya existía, o dos
+  nodos dieron de alta al mismo cliente— la fila que baja es otra y su `uid` no es el del nodo, así que la provisoria quedaría
+  para siempre y la venta local a su nombre también. El mapeo dice exactamente lo que el central decidió, sea cual sea el
+  motivo, y además resuelve en un solo mecanismo la traducción de las referencias en el central. Y evita lo que el `uid` pedía:
+  una columna nueva en `clients` y en `parties` (la fila entera viaja por el espejo, así que **todos** los nodos tendrían que
+  migrar antes de seguir sincronizando: 409 de esquema), un backfill de las filas existentes y el cambio de la fixture congelada
+  del esquema de libracore. Con el mapeo no se toca ninguna tabla del producto.
+- Descartadas: el `uid` (ver arriba); un trigger de PostgreSQL que asigne el id negativo en el nodo (no cubre SQLite, que es lo que
+  prueba el resto de la familia; y el `lastrowid` de la capa de LibraCore no lo vería: el id lo asigna mejor quien hace el
+  alta, que es `libracore.db.clients`); reapuntar con `UPDATE ... ON UPDATE CASCADE` (las FK del motor no lo declaran y cambiar
+  las FK de las tablas del producto es una migración por producto); devolver el id definitivo en la respuesta del `push` (cambia el
+  protocolo y se pierde si la respuesta se pierde: el mapeo espejado es idempotente y sobrevive a un corte); filtrar el mapeo por
+  nodo en el changelog (el changelog es global y filtrar es un cambio de protocolo; cada nodo recibe unas filas de más y ignora las
+  que no son suyas).
+- Consecuencias: **MINOR (v0.18.0)**: suma API y una variable opcional de la carga, y `init_schema()` crea `libraedge_mapeo`; sin
+  declarar `altas_en_nodo` el comportamiento es el de v0.17. Un **instalador anterior a v0.18 rechaza** una carga con
+  `LIBRAEDGE_ALTAS_EN_NODO` («trae variables que no le corresponden»): actualizar el instalador antes de que un producto declare
+  las altas. En el central, `libraedge-central nodo publicar` suma el trigger de `libraedge_mapeo` y siembra lo que haya.
+  El id provisorio **no es seguro de reusar**: una PC reemplazada con el mismo `node_id` que arrancara `local_sequences` de cero
+  reusaría el -1 (el aplicador del central lo detecta si el cliente es otro y lo manda a revisión; el reemplazo de una PC
+  —`dar-de-baja` y `registrar`— es un nodo nuevo, y con el mismo `node_id` ya se repetirían también los `operation_id`). Mientras el mapeo no baja, el nodo ve al cliente dos veces (el provisorio y el del central): se resuelve en el
+  mismo ciclo. **Lo que no cubre:** la *edición* o baja de un cliente creado en el nodo no sube (la decisión es de altas), así que
+  lo que se corrija en el nodo antes de que baje el cliente del central se pierde cuando se borra la provisoria; las tablas de
+  clave compuesta no admiten alta; una referencia sin FK que el producto no declare queda colgada del id provisorio (la
+  declaración de `libracore` está fijada contra su esquema, pero el esquema de un producto es suyo); y el nodo no publica
+  `sin_reconciliar` en su estado (hoy sólo stderr).
