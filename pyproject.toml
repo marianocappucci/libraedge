@@ -62,6 +62,9 @@ name = "libraedge"
 # (la crea `init_schema`) y el reapuntado cuando el mapeo baja por el espejo (`MirrorApplier(node_id=, altas=)`), la variable
 # opcional `LIBRAEDGE_ALTAS_EN_NODO` de la carga y la guarda que deja pasar lo provisorio. Minor: suma API y una variable opcional;
 # sin declarar `altas_en_nodo` se comporta como v0.17. Un instalador anterior rechaza la carga que trae la variable.
+# 0.18.0 -> 0.18.1 (2026-10-21): sin cambios de codigo. Los instaladores de v0.18.0 se armaron antes de promover a `main`
+# la fase 2 de ContaLibra, RestoLibra y VentaLibra (el CI empaqueta el producto desde `main`); este tag los vuelve a armar
+# con los productos que ya traen usuarios del central, caja que sube y altas de clientes.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
