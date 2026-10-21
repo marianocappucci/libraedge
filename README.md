@@ -91,6 +91,22 @@ libraedge-central nodo vigilar --umbral 15       # para el cron del VPS: sale 1 
 
 `registrar` imprime una sola vez `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_PREFIJO` (el prefijo de numeración del nodo, `S02`, único por nodo y nunca reusado) y `LIBRAEDGE_TABLAS_ESPEJO`. En el producto, `libraedge.identidad.nodo_actual("VENTALIBRA")` dice si la instancia es un nodo.
 
+## Fase 2 (v0.17): orden del outbox, salud de los nodos y guarda del espejo
+
+**Orden causal del outbox (ADR-020).** `OutboxWorker.run_once` sube por secuencia y, ante un fallo de transporte o un error
+reintentable, **corta la tanda**: una venta no sale antes que el `cliente.alta` o el `turno.abierto` que la precede. Un rechazo
+definitivo del central (`rejected`, también el 422) va a revisión manual y la cola sigue.
+
+**Salud para uptime-kuma (ADR-018).** Con `LIBRAEDGE_TOKEN_MONITOREO` en el entorno del central, `create_sync_router` suma
+`GET /sync/v1/salud` y `GET /sync/v1/salud/{node_id}[?umbral=15]`: 200 si el nodo está al día, 503 si `sin_noticias` o `nunca`, 404
+si está dado de baja o no existe; el cuerpo trae `estado`, `minutos_sin_verse`, `ultima_sincronizacion` y `palabra_clave`
+(`LIBRAEDGE_OK` / `LIBRAEDGE_ALERTA`). Token por `Authorization: Bearer` (mejor) o `?token=`; sin la variable las rutas contestan 404.
+
+**Guarda del espejo (ADR-019).** Opt-in por tabla: `Aprovisionamiento(..., tablas_solo_lectura=["catalog_items", "units"])` (tienen
+que ser de referencia). `registrar` las manda en la carga (`LIBRAEDGE_TABLAS_SOLO_LECTURA`) y `libraedge-nodo` instala al arrancar
+un trigger que levanta `solo_en_el_central` (SQLSTATE `LE001`) en toda escritura que no sea del espejo. Una migración de datos sobre
+una de esas tablas llama antes a `libraedge.db.guarda.marcar_aplicando(conn)`. Sobre SQLite no hace nada.
+
 ## El ticket de ARCA prestado (v0.9, ADR-009)
 
 El nodo factura con internet usando el ticket de ARCA del central; la clave no sale del VPS. En el central:

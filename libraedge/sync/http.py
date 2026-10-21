@@ -45,5 +45,14 @@ class HttpSyncTransport:
             # El 409 de esquema sale con un texto que dice que hacer; el worker
             # lo trata igual como reintento: la operacion espera en el outbox.
             esquema.relanzar_si_es_de_esquema(exc)
+            if exc.code == 422:
+                # El central entendio el pedido y dijo que la operacion no es valida: es un rechazo definitivo, no
+                # una falla de transporte. Como excepcion se reintentaria para siempre y, desde v0.17 (ADR-020),
+                # cortaria la tanda: todas las ventas de atras quedarian sin subir detras de una que no sube nunca.
+                try:
+                    detalle = exc.read().decode("utf-8", "replace")[:200]
+                except OSError:
+                    detalle = ""
+                return PushResult("rejected", f"el central la rechazo por invalida (422) {detalle}".strip())
             raise
         return PushResult(data["result"], data.get("error"))

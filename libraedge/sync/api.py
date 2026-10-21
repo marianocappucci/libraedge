@@ -7,10 +7,16 @@ Dos endpoints, uno por direccion:
   el nodo los espeje (la bajada, desde la Fase 2).
 
 Los dos se autentican igual: el secreto por nodo como ``Authorization: Bearer``.
+
+Desde v0.17 ``create_sync_router`` suma ``GET /sync/v1/salud`` y ``/salud/{node_id}``, la salud de los nodos para el
+monitor «HTTP + keyword» de uptime-kuma (ADR-018). Esas dos NO usan el secreto de un nodo sino un token de monitoreo
+de la instancia.
 """
 
+import hmac
 import inspect
 import logging
+import os
 
 from libraedge.db.changelog import listar_cambios
 from libraedge.domain.sync import OutboxOperation
@@ -19,6 +25,17 @@ from libraedge.sync import ticket as _ticket
 from libraedge.sync.pull import serializar_cambio
 
 logger = logging.getLogger(__name__)
+
+#: El token de monitoreo de la instancia (ADR-018). Sin esta variable las rutas de salud no existen (404).
+VARIABLE_TOKEN_MONITOREO = "LIBRAEDGE_TOKEN_MONITOREO"
+RUTA_SALUD = "/sync/v1/salud"
+#: Las palabras que busca el monitor «HTTP + keyword». **Estables: son un contrato con el monitor**, no se renombran.
+#: `PALABRA_OK` esta solo en las respuestas 200 y `PALABRA_ALERTA` solo en las 503, asi el monitor sirve igual
+#: configurado para buscar una o para buscar que la otra falte.
+PALABRA_OK = "LIBRAEDGE_OK"
+PALABRA_ALERTA = "LIBRAEDGE_ALERTA"
+#: Tope del `?umbral=`: una semana. Mas que eso ya no es un umbral, es apagar el monitor.
+UMBRAL_MAXIMO_MINUTOS = 7 * 24 * 60
 
 #: Lo que un push tiene que traer. Vive afuera de las dos fabricas para que no
 #: se les vaya desincronizando una de la otra.
@@ -198,6 +215,58 @@ async def _llamar(funcion, *args):
     return resultado
 
 
+def _entrada_de_salud(nodo: dict, umbral: int) -> dict:
+    """Un nodo activo como lo ve el monitor. **Solo datos de salud**: nunca el hash del secreto ni el prefijo."""
+    from libraedge.pantalla_del_central import _estado_del_nodo
+
+    minutos = nodo["minutos_sin_verse"]
+    return {
+        "node_id": nodo["node_id"],
+        "sucursal_id": str(nodo["branch_id"]),
+        "estado": _estado_del_nodo(True, minutos, umbral),
+        "minutos_sin_verse": None if minutos is None else round(minutos, 1),
+        "ultima_sincronizacion": nodo["ultima_vez"],
+    }
+
+
+def _cuerpo_de_salud(estado: str, entrada: dict | None, umbral: int, **extra) -> tuple[int, dict]:
+    """El status y el cuerpo: `{estado, palabra_clave, minutos_sin_verse, ultima_sincronizacion, umbral_minutos}`."""
+    sano = estado in ("al_dia", "sin_nodos")
+    cuerpo = {
+        "estado": estado,
+        "palabra_clave": PALABRA_OK if sano else PALABRA_ALERTA,
+        "minutos_sin_verse": entrada["minutos_sin_verse"] if entrada else None,
+        "ultima_sincronizacion": entrada["ultima_sincronizacion"] if entrada else None,
+        "umbral_minutos": umbral,
+        **extra,
+    }
+    return (200 if sano else 503), cuerpo
+
+
+def salud_de_todos(nodos: list[dict], umbral: int) -> tuple[int, dict]:
+    """El resumen de los nodos **activos** (los dados de baja no se vigilan, como en ``aprovisionamiento.vigilar``).
+
+    El estado es el del peor: ``sin_noticias`` si alguno se callo, si no ``nunca`` si alguno todavia no hablo, si no
+    ``al_dia``. Sin nodos activos es ``sin_nodos`` y es 200, como ``vigilar`` (que sale 0): no hay nada que vigilar.
+    ``minutos_sin_verse`` y ``ultima_sincronizacion`` son los del nodo peor, que es el que explica el estado."""
+    entradas = [_entrada_de_salud(nodo, umbral) for nodo in nodos if nodo["activo"]]
+    if not entradas:
+        return _cuerpo_de_salud("sin_nodos", None, umbral, nodos_vigilados=0, nodos=[])
+    gravedad = {"al_dia": 0, "nunca": 1, "sin_noticias": 2}
+    peor = max(entradas, key=lambda e: (gravedad[e["estado"]], e["minutos_sin_verse"] or 0))
+    return _cuerpo_de_salud(peor["estado"], peor, umbral, nodos_vigilados=len(entradas), nodos=entradas)
+
+
+def salud_de_un_nodo(nodos: list[dict], node_id: str, umbral: int) -> tuple[int, dict] | None:
+    """La salud de ``node_id``, o ``None`` si no existe o esta dado de baja (el router contesta 404)."""
+    nodo = next((n for n in nodos if n["node_id"] == node_id and n["activo"]), None)
+    if nodo is None:
+        return None
+    entrada = _entrada_de_salud(nodo, umbral)
+    return _cuerpo_de_salud(entrada["estado"], entrada, umbral, node_id=entrada["node_id"],
+                            sucursal_id=entrada["sucursal_id"])
+
+
 def create_sync_router(abrir_conexion, operation_handler=None,
                        supported_schema_version: int = 1, *, despachador=None,
                        version_esquema=None, prestar_ticket=None):
@@ -253,6 +322,15 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     esquema al dia, recibe el ticket de ARCA vigente del central para facturar
     sin tener la clave. Sin la costura la ruta contesta 501 (despues de
     autenticar). El ticket nunca se loguea. Ver ``libraedge.sync.ticket``.
+
+    ## Desde v0.17: la salud de los nodos para uptime-kuma (ADR-018)
+
+    ``GET /sync/v1/salud`` (resumen de los nodos activos) y ``GET /sync/v1/salud/{node_id}``. 200 si esta al dia, 503 si
+    ``sin_noticias`` o ``nunca``, 404 si el nodo esta dado de baja o no existe. El cuerpo trae ``estado``,
+    ``minutos_sin_verse``, ``ultima_sincronizacion`` y una ``palabra_clave`` estable (``LIBRAEDGE_OK`` /
+    ``LIBRAEDGE_ALERTA``) para el monitor «HTTP + keyword». Se autentican con el token de monitoreo de la instancia
+    (``LIBRAEDGE_TOKEN_MONITOREO``), por ``Authorization: Bearer`` o ``?token=``; **sin la variable las dos rutas
+    contestan 404** (apagadas). ``?umbral=`` son los minutos sin noticias (default: el de ``nodo vigilar``).
     """
     if despachador is not None and operation_handler is not None:
         raise ValueError("pasar despachador u operation_handler, no los dos")
@@ -318,6 +396,68 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             resultado = receptor.accept(operacion)
         return {"operation_id": operacion.operation_id,
                 "result": resultado.result, "error": resultado.error}
+
+    def _autorizar_monitoreo(request, token_de_query: str | None) -> None:
+        """El token de monitoreo de la instancia. 404 si no esta definido, 401 si no coincide.
+
+        🔴 **Se lee del entorno en cada pedido**, no al construir el router: apagar el monitoreo o rotar el token es
+        cambiar la variable y reiniciar, y no depende del orden en que el producto monte las cosas. Sin variable
+        (o vacia) la ruta **no existe**: un 401 diria que hay un monitoreo y cual es la puerta. El 404 es el mismo
+        cuerpo que da FastAPI para una ruta inexistente.
+
+        Se compara con ``hmac.compare_digest`` y en bytes (con ``str`` y un caracter no ASCII levanta ``TypeError``).
+        El token nunca se loguea. ``?token=`` queda en los access logs del proxy: es para el monitor que no puede
+        mandar cabeceras, y la cabecera es lo que hay que preferir."""
+        esperado = os.environ.get(VARIABLE_TOKEN_MONITOREO, "").strip()
+        if not esperado:
+            raise HTTPException(404, detail="Not Found")
+        cabecera = request.headers.get("authorization", "")
+        presentado = cabecera.removeprefix("Bearer ") if cabecera.startswith("Bearer ") else token_de_query
+        if not presentado or not hmac.compare_digest(presentado.strip().encode("utf-8"), esperado.encode("utf-8")):
+            raise HTTPException(401, detail="invalid monitoring token", headers={"WWW-Authenticate": "Bearer"})
+
+    def _umbral(crudo: str | None) -> int:
+        """``?umbral=`` en minutos. Se parsea a mano y **despues** de autenticar: con ``umbral: int`` en la firma,
+        FastAPI contesta 422 antes de entrar, y una ruta apagada dejaria de parecer inexistente."""
+        if crudo is None or not crudo.strip():
+            from libraedge.pantalla_del_central import UMBRAL_MINUTOS
+
+            return UMBRAL_MINUTOS
+        try:
+            minutos = int(crudo)
+        except ValueError:
+            minutos = 0
+        if not 1 <= minutos <= UMBRAL_MAXIMO_MINUTOS:
+            raise HTTPException(422, detail=f"umbral: minutos enteros de 1 a {UMBRAL_MAXIMO_MINUTOS}")
+        return minutos
+
+    def _respuesta_de_salud(status: int, cuerpo: dict):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(cuerpo, status_code=status, headers={"Cache-Control": "no-store"})
+
+    def _nodos_para_vigilar() -> list[dict]:
+        with abrir_conexion() as conexion:
+            nodos = NodeRepository(conexion).nodos_para_vigilar()
+            conexion.commit()  # la lectura abre una transaccion en PostgreSQL: no se la deja abierta
+        return nodos
+
+    @router.get(RUTA_SALUD)
+    def salud(request: Request, token: str | None = None, umbral: str | None = None):
+        """Resumen para el monitor de uptime-kuma. Ver ``create_sync_router``, «Desde v0.17»."""
+        _autorizar_monitoreo(request, token)
+        minutos = _umbral(umbral)
+        return _respuesta_de_salud(*salud_de_todos(_nodos_para_vigilar(), minutos))
+
+    @router.get(RUTA_SALUD + "/{node_id}")
+    def salud_del_nodo(node_id: str, request: Request, token: str | None = None, umbral: str | None = None):
+        """La salud de un nodo. 404 si esta dado de baja o no existe."""
+        _autorizar_monitoreo(request, token)
+        minutos = _umbral(umbral)
+        resultado = salud_de_un_nodo(_nodos_para_vigilar(), node_id, minutos)
+        if resultado is None:
+            raise HTTPException(404, detail="node not found")
+        return _respuesta_de_salud(*resultado)
 
     @router.get("/sync/v1/pull")
     def pull(request: Request, node_id: str, cursor: int = 0, limit: int = 500):

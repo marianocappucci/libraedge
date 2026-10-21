@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from libraedge.db.changelog import cargar_payload, columnas_de_clave, validar_identificador
+from libraedge.db.guarda import marcar_aplicando
 from libraedge.domain.sync import ReferenceChange, ReferenceOperation
 from libraedge.sync import esquema
 
@@ -87,6 +88,15 @@ class MirrorApplier:
     VentaLibra no tiene `id`. Con clave compuesta el upsert y el borrado salen
     de las columnas de la clave en el payload --que trae la fila entera, tambien
     en un `delete`--, no del `row_id`.
+
+    ## Desde v0.17: abre la guarda del espejo (ADR-019)
+
+    Si el nodo instalo `instalar_guarda_de_espejo` en alguna tabla, solo este
+    aplicador puede escribirla: antes de cada cambio fija `libraedge.aplicando`
+    con `SET LOCAL`, que vale hasta el commit de esa transaccion. Hay que fijarla
+    en **cada** `aplicar` y no una vez al construirlo: `PullWorker` commitea
+    despues de cada cambio y el `SET LOCAL` muere con el commit. Sobre una tabla
+    sin guarda no cambia nada, y sobre SQLite es un no-op.
     """
 
     def __init__(self, conn, tablas_permitidas: dict[str, str | tuple[str, ...]]):
@@ -104,6 +114,7 @@ class MirrorApplier:
                 f"tablas que este nodo espeja"
             )
         clave = self._tablas[tabla]
+        marcar_aplicando(self._conn)
 
         if cambio.operation == ReferenceOperation.DELETE:
             if len(clave) == 1:

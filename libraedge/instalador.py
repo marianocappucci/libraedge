@@ -83,6 +83,12 @@ VARIABLES_DE_LA_CARGA = (
     "LIBRAEDGE_TABLAS_ESPEJO",
 )
 
+#: Lo opcional que puede traer la carga (v0.17, ADR-019): las tablas del espejo que el nodo guarda contra escrituras del
+#: producto. Solo viaja si el producto las declara; sin ella el nodo no instala ninguna guarda.
+VARIABLES_OPCIONALES_DE_LA_CARGA = (
+    "LIBRAEDGE_TABLAS_SOLO_LECTURA",
+)
+
 #: Lo que el nodo fija en el entorno del producto, igual en todos los nodos y en Windows y Linux (ADR-016). No son
 #: secretos ni vienen de la carga:
 #:
@@ -301,7 +307,8 @@ def definicion_desde_dict(datos: Mapping, donde: str = "definicion") -> Definici
         bases=_bases(datos.get("bases"), donde), asgi=asgi, puerto=puerto, salud=salud, migraciones=migraciones,
         base_auth=base_auth, extras=tuple(e.strip() for e in extras), variables=dict(variables),
         version_esquema=version_esquema.strip())
-    pisadas = set(definicion.variables) & set(_variables_generadas(definicion))
+    pisadas = set(definicion.variables) & (
+        set(_variables_generadas(definicion)) | set(VARIABLES_OPCIONALES_DE_LA_CARGA))
     if pisadas:
         raise ErrorDeInstalacion(f"{donde}: 'variables' no puede fijar {', '.join(sorted(pisadas))}: las pone el"
                                  " instalador.")
@@ -344,7 +351,7 @@ class Carga:
 
     def resumen(self) -> dict:
         """Lo que se puede mostrar: todo menos el secreto."""
-        return {
+        resumen = {
             "producto": self.producto,
             "node_id": self.entorno["LIBRAEDGE_NODE_ID"],
             "prefijo": self.entorno["LIBRAEDGE_PREFIJO"],
@@ -354,6 +361,10 @@ class Carga:
             "emisor": sorted(self.emisor),
             "avisos": list(self.avisos),
         }
+        solo_lectura = self.entorno.get("LIBRAEDGE_TABLAS_SOLO_LECTURA")
+        if solo_lectura:
+            resumen["tablas_solo_lectura"] = len(solo_lectura.split(","))
+        return resumen
 
 
 def _sin_saltos(nombre: str, valor: str) -> None:
@@ -437,6 +448,26 @@ def validar_emisor(crudo) -> tuple[dict[str, object], list[str]]:
     return _emisor(crudo, avisos), avisos
 
 
+def parsear_tablas_solo_lectura(crudo: str, espejo: Mapping[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """``"productos,categorias"`` -> ``("categorias", "productos")``: nombres SQL validos y **de tablas del espejo**.
+
+    El mismo formato que lee ``libraedge-nodo`` (``cli.tablas_solo_lectura``). Una que el nodo no espeja no se acepta:
+    nadie la escribiria nunca (el producto no puede y el espejo no la trae)."""
+    nombres: set[str] = set()
+    for parte in (crudo or "").split(","):
+        parte = parte.strip()
+        if not parte:
+            continue
+        if not _IDENTIFICADOR_SQL.match(parte):
+            raise ErrorDeInstalacion(f"LIBRAEDGE_TABLAS_SOLO_LECTURA tiene una entrada no valida: {parte!r}.")
+        nombres.add(parte)
+    sobran = sorted(nombres - set(espejo))
+    if sobran:
+        raise ErrorDeInstalacion(
+            f"LIBRAEDGE_TABLAS_SOLO_LECTURA trae tablas que el nodo no espeja: {', '.join(sobran)}.")
+    return tuple(sorted(nombres))
+
+
 def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     """Valida la carga contra el producto que se esta instalando. Los errores nunca muestran el secreto."""
     if not isinstance(datos, Mapping):
@@ -451,7 +482,7 @@ def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     crudo = datos.get("entorno")
     if not isinstance(crudo, Mapping):
         raise ErrorDeInstalacion("La carga no trae 'entorno'.")
-    sobran = sorted(set(crudo) - set(VARIABLES_DE_LA_CARGA))
+    sobran = sorted(set(crudo) - set(VARIABLES_DE_LA_CARGA) - set(VARIABLES_OPCIONALES_DE_LA_CARGA))
     if sobran:
         raise ErrorDeInstalacion(f"La carga trae variables que no le corresponden: {', '.join(sobran)}.")
     entorno: dict[str, str] = {}
@@ -471,7 +502,17 @@ def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     secreto = entorno["LIBRAEDGE_NODE_SECRET"]
     if len(secreto) < 20 or any(c.isspace() for c in secreto):
         raise ErrorDeInstalacion("LIBRAEDGE_NODE_SECRET no parece el que emite el central (corto o con espacios).")
-    parsear_tablas_espejo(entorno["LIBRAEDGE_TABLAS_ESPEJO"])
+    espejo = parsear_tablas_espejo(entorno["LIBRAEDGE_TABLAS_ESPEJO"])
+    for nombre in VARIABLES_OPCIONALES_DE_LA_CARGA:
+        valor = crudo.get(nombre)
+        if valor is None or (isinstance(valor, str) and not valor.strip()):
+            continue  # sin guarda: el nodo se instala igual que en v0.16
+        if not isinstance(valor, str):
+            raise ErrorDeInstalacion(f"{nombre} tiene que ser un texto.")
+        valor = valor.strip()
+        _sin_saltos(nombre, valor)
+        parsear_tablas_solo_lectura(valor, espejo)
+        entorno[nombre] = valor
     avisos: list[str] = []
     emisor = _emisor(datos.get("emisor"), avisos)
     sucursal = datos.get("sucursal") or {}
@@ -521,6 +562,9 @@ def armar_entorno(definicion: Definicion, carga: Carga, *, clave_pg: str, estado
         return valor or generar()
 
     entorno: dict[str, str] = {nombre: carga.entorno[nombre] for nombre in VARIABLES_DE_LA_CARGA}
+    for nombre in VARIABLES_OPCIONALES_DE_LA_CARGA:
+        if carga.entorno.get(nombre):
+            entorno[nombre] = carga.entorno[nombre]
     entorno["LIBRAEDGE_DATABASE_URL"] = url_de_base(clave_pg, definicion.base_del_nodo.nombre)
     entorno["LIBRAEDGE_ESTADO"] = estado
     entorno["LIBRAEDGE_VERSION_ESQUEMA"] = definicion.version_esquema
@@ -664,6 +708,9 @@ def armar_carga(producto: str, entorno_del_alta: Mapping[str, str], central_url:
         "entorno": {nombre: entorno.get(nombre, "") for nombre in VARIABLES_DE_LA_CARGA},
         "sucursal": dict(sucursal or {}),
     }
+    for nombre in VARIABLES_OPCIONALES_DE_LA_CARGA:
+        if (entorno.get(nombre) or "").strip():
+            carga["entorno"][nombre] = entorno[nombre]
     if emisor is not None:
         carga["emisor"] = dict(emisor)
     validada = carga_desde_dict(carga, producto)

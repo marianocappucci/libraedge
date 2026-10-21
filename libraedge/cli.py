@@ -18,6 +18,7 @@ archivo de entorno.
 | `LIBRAEDGE_CENTRAL_URL` | La base del central, sin la ruta |
 | `LIBRAEDGE_DATABASE_URL` | La base del producto, donde vive el outbox |
 | `LIBRAEDGE_TABLAS_ESPEJO` | `tabla:pk` separadas por coma. **Es el reparto de autoridad** |
+| `LIBRAEDGE_TABLAS_SOLO_LECTURA` | Opcional: tablas **del espejo** que el producto no escribe (v0.17, ADR-019) |
 | `LIBRAEDGE_ESTADO` | Donde escribir el estado para que lo lea una UI |
 | `LIBRAEDGE_VERSION_ESQUEMA` | Opcional: `alembic` (default), `modulo:funcion` o `ninguna` |
 
@@ -73,6 +74,21 @@ def tablas_espejo(crudo: str) -> dict[str, str | tuple[str, ...]]:
     return tablas
 
 
+def tablas_solo_lectura(crudo: str | None, espejo) -> tuple[str, ...]:
+    """`"productos,categorias"` -> `("categorias", "productos")`. Vacia o ausente: ninguna (sin guarda).
+
+    Tienen que ser tablas del espejo: una de solo lectura que el central no manda quedaria bloqueada para siempre,
+    sin que el espejo ni el producto pudieran escribirla.
+    """
+    nombres = tuple(sorted({parte.strip() for parte in (crudo or "").split(",") if parte.strip()}))
+    sobran = [nombre for nombre in nombres if nombre not in espejo]
+    if sobran:
+        raise SystemExit(
+            f"LIBRAEDGE_TABLAS_SOLO_LECTURA trae tablas que no estan en LIBRAEDGE_TABLAS_ESPEJO: "
+            f"{', '.join(sobran)}. Una tabla que el nodo no espeja nadie la escribiria.")
+    return nombres
+
+
 def version_esquema_del_nodo(conexion, especificacion: str | None) -> str | None:
     """La version del esquema que el nodo declara, segun `LIBRAEDGE_VERSION_ESQUEMA`.
 
@@ -105,6 +121,7 @@ def construir_nodo():
     """Arma el nodo desde el entorno. Falla temprano y con un mensaje util."""
     from libracore.db import core  # noqa: PLC0415 - solo en el proceso del nodo
 
+    from libraedge.db.guarda import instalar_guarda_de_espejo
     from libraedge.db.repository import NodeRepository
     from libraedge.nodo import Nodo
     from libraedge.sync.http import HttpSyncTransport
@@ -116,11 +133,18 @@ def construir_nodo():
     central = _requerido("LIBRAEDGE_CENTRAL_URL")
     base = _requerido("LIBRAEDGE_DATABASE_URL")
     tablas = tablas_espejo(_requerido("LIBRAEDGE_TABLAS_ESPEJO"))
+    solo_lectura = tablas_solo_lectura(os.environ.get("LIBRAEDGE_TABLAS_SOLO_LECTURA"), tablas)
 
     core.configure(base)
     conexion = core.get_connection()
     repositorio = NodeRepository(conexion)
     version = version_esquema_del_nodo(conexion, os.environ.get("LIBRAEDGE_VERSION_ESQUEMA"))
+    # La guarda del espejo (ADR-019), en cada arranque y despues de las migraciones: el servicio del nodo arranca
+    # cuando la base ya esta migrada. Converge: sin la variable saca las guardas que hubiera de una carga anterior.
+    guardadas = instalar_guarda_de_espejo(conexion, solo_lectura)
+    for faltante in sorted(set(solo_lectura) - set(guardadas)):
+        print(f"AVISO: LIBRAEDGE_TABLAS_SOLO_LECTURA nombra {faltante!r} y esa tabla no esta en la base: "
+              "sin guarda hasta que la cree una migracion.", file=sys.stderr)
     # La lectura del catalogo abre una transaccion en PostgreSQL: se cierra
     # aca para no dejar la conexion del nodo "idle in transaction".
     conexion.commit()

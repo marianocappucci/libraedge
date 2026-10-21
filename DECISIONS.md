@@ -878,3 +878,164 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   El responder llega a las PC principales que ya tienen el nodo cuando se actualicen con el instalador nuevo (un nodo
   anterior no contesta: el puesto pide la IP). Si la red del local filtra broadcast o el puesto está en otra subred, se
   escribe la IP; el puesto la recuerda y, si cambia, vuelve a pedirla.
+
+## ADR-018 — La salud de los nodos para uptime-kuma: `GET /sync/v1/salud` con un token de monitoreo por instancia
+
+- Estado: aceptada (Fase 2 de LibraEdge, decidida por el humano; sale en v0.17.0)
+- Fecha: 2026-10-21
+- Contexto: el monitoreo de nodos existía en dos formas y ninguna le sirve a uptime-kuma: `libraedge-central nodo vigilar`
+  (un comando para el cron del VPS, que sale 1 si un nodo se calló) y el estado `al_dia`/`sin_noticias`/`nunca`/`baja` de la
+  pantalla «Sucursal sin internet» (`GET /api/nodos-offline`, detrás de la sesión de administrador). uptime-kuma ya vigila
+  el resto de la suite y sólo habla HTTP: su monitor «HTTP + keyword» da caído con un status fuera de 2xx o si la palabra
+  clave no está en el cuerpo. Un nodo callado hace horas se veía igual que uno sano en cualquier lugar donde nadie corriera
+  `vigilar` a mano.
+- Qué ya existe (se miró antes de diseñar): `NodeRepository.nodos_para_vigilar` (los datos crudos: `activo`,
+  `ultima_vez`, `minutos_sin_verse`, que alimenta el `last_seen_at` que anota la autenticación de push y pull);
+  `pantalla_del_central._estado_del_nodo` (activo + minutos + umbral → `baja`/`nunca`/`al_dia`/`sin_noticias`) y su
+  `UMBRAL_MINUTOS = 15`, el mismo default que `nodo vigilar --umbral`; y la lógica de `aprovisionamiento.vigilar` (se
+  vigilan sólo los activos; sin nodos activos no hay nada que vigilar y sale 0). No se escribió ninguna lógica de estado
+  nueva: las rutas llaman a `_estado_del_nodo` sobre lo que devuelve `nodos_para_vigilar`.
+- Decisión (en `create_sync_router`, `libraedge/sync/api.py`):
+  1. **Dos rutas**: `GET /sync/v1/salud` (resumen de los nodos **activos**) y `GET /sync/v1/salud/{node_id}`.
+     - Un nodo: **200** si `al_dia`, **503** si `sin_noticias` o `nunca`, **404** si está dado de baja o no existe (el 404 no
+       distingue los dos casos: no hay por qué decir cuál).
+     - El resumen es el del peor nodo (`sin_noticias` > `nunca` > `al_dia`) y trae la lista de nodos. Sin nodos activos es
+       `sin_nodos` con **200**, como `vigilar` (que sale 0): no hay nada que vigilar. Un monitor de «ningún nodo» no
+       es esta ruta.
+  2. **Cuerpo**: `{estado, palabra_clave, minutos_sin_verse, ultima_sincronizacion, umbral_minutos}` (más `node_id` y
+     `sucursal_id` en el de un nodo, y `nodos_vigilados` y `nodos` en el resumen). `minutos_sin_verse` y
+     `ultima_sincronizacion` son `null` para `nunca`: no se inventan. **Palabra clave estable**: `LIBRAEDGE_OK` sólo en las
+     200 y `LIBRAEDGE_ALERTA` sólo en las 503. Son un contrato con el monitor y no se renombran; el monitor puede buscar
+     una o que falte la otra. `Cache-Control: no-store`.
+  3. **Autenticación por token de monitoreo de la instancia**, `LIBRAEDGE_TOKEN_MONITOREO`, por `Authorization: Bearer` o
+     `?token=`, comparado con `hmac.compare_digest` en bytes (con `str` un carácter no ASCII levanta `TypeError`). No se
+     usa el secreto de un nodo: ése es de la PC del local y abriría la salud de *todos* los demás. Un token por instancia
+     y no por nodo: el monitor vigila la instancia.
+     - **Sin la variable (o vacía) las dos rutas contestan 404** con el mismo cuerpo que da FastAPI a una ruta inexistente:
+       están apagadas, no protegidas. Un 401 diría que hay un monitoreo y cuál es la puerta. Se lee del entorno **en cada
+       pedido** (rotar o apagar es cambiar la variable y reiniciar). El 404 va antes que cualquier validación: un `?umbral=`
+       inválido sobre una ruta apagada también da 404, no 422.
+     - Token ausente o equivocado: 401 con `WWW-Authenticate: Bearer`. La cabecera manda sobre la query. El token nunca
+       se loguea ni se devuelve.
+     - `?token=` queda en los access logs del proxy y de uvicorn: está para el monitor que no pueda mandar cabeceras;
+       uptime-kuma sí puede (cabeceras del monitor), y es lo que hay que preferir. Si se usa la query, el token es de sólo
+       lectura de salud: lo peor que filtra es cuántos minutos hace que habló cada nodo.
+  4. **Umbral por `?umbral=`** en minutos enteros de 1 a 10080 (una semana), con el default de `vigilar`
+     (`UMBRAL_MINUTOS`, 15). Se parsea a mano después de autenticar; fuera de rango o no entero, 422. Depende del intervalo
+     de cada instalación (el nodo cicla cada 60 s por defecto) y por eso lo elige quien configura el monitor.
+  5. **Nunca expone secretos del nodo**: nada de `secret_hash`, de prefijo ni de la identidad más allá del `node_id` y la
+     sucursal (los mismos que ya muestra la pantalla del central). Tampoco **cuenta como contacto**: mirar la salud no
+     mueve `last_seen_at`, o el monitor mantendría vivo a un nodo muerto.
+- Descartadas: reusar `GET /api/nodos-offline` (está detrás de la sesión y devuelve el código de vinculación pendiente
+  y más de lo que un monitor necesita); un token por nodo (el monitor vigila la instancia, y N tokens para N monitores no
+  agregan nada); devolver siempre 200 con el estado en el cuerpo (obliga al monitor a depender de la palabra clave y
+  pierde la alerta por status); 401 sin la variable (ver 3); un endpoint de salud del *central* (eso lo hace el `/health`
+  del producto; esto mira si los nodos hablan).
+- Consecuencias: uptime-kuma se configura con un monitor «HTTP(s) - Keyword» por instancia sobre
+  `https://<central>/sync/v1/salud`, cabecera `Authorization: Bearer <token>` y palabra clave `LIBRAEDGE_OK` (opcional: uno por
+  nodo sobre `/salud/<node_id>` para alertar por sucursal). El token se genera por instancia
+  (`openssl rand -hex 32`) y va al `.env` del servicio del producto como `LIBRAEDGE_TOKEN_MONITOREO`; hay que reiniciar para
+  que lo tome. La ruta sólo existe si el producto monta `create_sync_router`; un producto con un `libraedge` anterior a
+  v0.17 contesta 404 (el monitor sale caído, que es lo correcto). Un nodo recién registrado que todavía no se instaló está
+  en `nunca` y da 503 en el resumen: o se instala o se da de baja.
+
+## ADR-019 — La guarda del espejo: en el nodo, las tablas que vienen del central no las escribe el producto
+
+- Estado: aceptada (Fase 2 de LibraEdge, decidida por el humano; sale en v0.17.0). Opt-in por tabla.
+- Fecha: 2026-10-21
+- Contexto: el reparto de autoridad tiene dos mitades. Una la hace cumplir `MirrorApplier`: sólo aplica las tablas de
+  `LIBRAEDGE_TABLAS_ESPEJO`, así que el central no puede escribir una tabla de autoridad del nodo. La otra, que **el
+  producto del nodo no escribe las tablas que espeja**, era una convención. Una escritura del POS sobre `productos` no falla
+  ni se sube (el outbox sólo sube lo que el producto encola): vive en la base del nodo hasta que el próximo cambio del
+  central la pisa, o para siempre si el central nunca la toca, y la diferencia aparece en un arqueo. El diseño pedía que fuera
+  imposible, no desaconsejado.
+- Qué ya existe (se miró antes de diseñar): el trigger del changelog (`db/changelog.py`, `instalar_trigger`/
+  `desinstalar_trigger`/`tablas_publicadas`: PL/pgSQL, solo PostgreSQL, idempotente, converge con la lista); el patrón de
+  declarar tablas en `Aprovisionamiento.tablas_de_referencia` y viajar por `registrar` → carga → `nodo.env`
+  (`LIBRAEDGE_TABLAS_ESPEJO`) → `libraedge-nodo`; y `MirrorApplier`, el único escritor legítimo. La guarda sigue el mismo
+  molde en cada uno.
+- Decisión:
+  1. **`instalar_guarda_de_espejo(conn, tablas)`** (`libraedge/db/guarda.py`) pone en cada tabla un trigger `BEFORE INSERT OR
+     UPDATE OR DELETE ... FOR EACH ROW` (`<tabla>_libraedge_guarda`, función `libraedge_guarda_de_espejo()`) que levanta
+     `solo_en_el_central: la tabla X se espeja del central y no se escribe en el nodo (INSERT rechazado)` con **SQLSTATE
+     `LE001`**, salvo que `current_setting('libraedge.aplicando', true) = '1'`. Devuelve las tablas que quedaron guardadas.
+     - **Idempotente y converge**: se corre en cada arranque; una tabla que sale de la lista pierde su guarda (si no, una
+       tabla que el producto resuelve seguiría bloqueada hasta que alguien tocara el trigger a mano). Una tabla de la lista
+       que no está en la base (una migración todavía no la creó) se saltea y no figura en el resultado: el nodo arranca y lo
+       avisa por stderr.
+     - **El error no es un `IntegrityError`.** La clase `LE` no es estándar y psycopg la levanta como `DatabaseError`
+       pelado; un `except IntegrityError` del producto (para un duplicado, por ejemplo) no se la traga. Los productos no
+       atrapan `DatabaseError`, así que sube como un 500 con un mensaje que dice qué pasó.
+  2. **`MirrorApplier` abre la guarda con `SET LOCAL libraedge.aplicando = '1'`** (`marcar_aplicando`) al empezar **cada**
+     `aplicar`, dentro de su transacción. En cada uno y no una vez: `PullWorker` commitea después de cada cambio (el cursor
+     avanza cambio por cambio, `pull.py`) y el `SET LOCAL` muere con el commit; el test del ciclo completo cubre justo eso.
+     Es un statement más por cambio, sin costo apreciable contra un PostgreSQL local. Sobre una tabla sin guarda no cambia
+     nada.
+  3. **Es opt-in por tabla**, a propósito: la lista de sólo lectura la pasan el producto o el motor y **no son todas las
+     de referencia**. Las altas de clientes en el nodo todavía no están resueltas (`clientes` se espeja y el POS crea
+     clientes en el nodo); guardarla rompería el POS hoy. Se guarda lo que ya está decidido que el nodo no toca (catálogo,
+     precios, usuarios, según cada producto) y la lista crece tabla por tabla a medida que se resuelven. Sin declarar nada,
+     v0.17 se comporta exactamente como v0.16.
+  4. **La costura es `Aprovisionamiento.tablas_solo_lectura`** (nombres, vacío por defecto; tienen que estar en
+     `tablas_de_referencia`, si no `ValueError`: una tabla que nadie espeja quedaría bloqueada para siempre). `registrar` la
+     intersecta con lo que de verdad se espeja y la devuelve en `Alta.solo_lectura`; viaja en la carga como la variable
+     **opcional** `LIBRAEDGE_TABLAS_SOLO_LECTURA` (`instalador.VARIABLES_OPCIONALES_DE_LA_CARGA`: se valida contra
+     `LIBRAEDGE_TABLAS_ESPEJO`, y sólo viaja si no está vacía); y `libraedge-nodo` (`construir_nodo`) la instala **al
+     arrancar**, después de las migraciones. Se instala en el arranque del nodo y no en `publicar` porque `publicar` corre en el
+     **central**, cuya base es la misma del producto y donde el producto sí escribe: una guarda ahí lo dejaría sin trabajar.
+     Arrancar sin la variable desinstala las guardas de una carga anterior.
+  5. **SQLite: no-op.** El nodo real corre PostgreSQL; SQLite queda para tests y para LibraCommerce. No tiene variable de
+     sesión que consultar, y emularla pide una tabla bandera que el aplicador prenda y apague en cada cambio, más código en
+     el camino caliente del espejo para proteger un motor en el que el nodo no corre. Las tres funciones devuelven `()`/no
+     hacen nada sobre SQLite y lo dicen en su docstring en vez de fingir que protegen; los tests de la guarda se saltean en
+     `[sqlite]` diciendo por qué, y un test propio fija que es un no-op.
+- Descartadas: guardar todas las tablas de referencia (rompe el POS, ver 3); `SECURITY DEFINER`/roles de PostgreSQL distintos
+  para el espejo y el producto (el nodo corre con un solo usuario `postgres` embebido, y separar roles es una migración del
+  instalador entera); validar en el producto (el punto es no depender de que cada camino de escritura se acuerde); `TRUNCATE`
+  y `DDL` (no se guardan: las migraciones de esquema tienen que poder tocar la tabla).
+- Consecuencias: **no es una frontera de seguridad**: quien tenga acceso a la base puede hacer `SET libraedge.aplicando = '1'`.
+  Atrapa el error del programador, no a un atacante. **Una migración de datos sobre una tabla guardada falla en el nodo**: tiene
+  que llamar a `libraedge.db.guarda.marcar_aplicando(conn)` antes de escribir (las de esquema no). El central que emite
+  una carga con `LIBRAEDGE_TABLAS_SOLO_LECTURA` a un instalador anterior a v0.17 la ve rechazada («trae variables que no le
+  corresponden»): hay que actualizar el instalador antes de que un producto declare la lista (sin declararla, nada cambia).
+  Lo que el CI no ve: el arranque del servicio del nodo real con el producto encima (se prueba en las VMs con un producto
+  que declare una tabla).
+
+## ADR-020 — El outbox sube en orden causal: ante un fallo de transporte se corta la tanda
+
+- Estado: aceptada (Fase 2 de LibraEdge, decidida por el humano; sale en v0.17.0)
+- Fecha: 2026-10-21
+- Contexto: `OutboxWorker.run_once` hacía `continue` cuando el `push` de una operación levantaba una excepción: la dejaba
+  `retryable_error` y seguía con la siguiente. Una venta depende de lo que la precede en el nodo (el `cliente.alta` que crea
+  al cliente, el `turno.abierto` que abre la caja); con la red intermitente la operación de la que depende falla, la venta sube
+  antes que ella y el central la rechaza por una FK que se habría resuelto sola esperando, o peor, la acepta sin su
+  dependencia. `list_pending_operations` ya ordena por `(node_id, sequence)`: el orden se perdía en el worker.
+- Decisión:
+  1. **Un fallo de transporte o un error reintentable corta la tanda** (`break`): cualquier excepción del `push` (timeout,
+     5xx, el 409 de esquema, `EsquemaIncompatible`). La operación queda `retryable_error` y las que siguen no se tocan (ni
+     gastan un intento): salen en el ciclo siguiente, después de ella. Cortar además ahorra un timeout por cada operación
+     que quedaba en la tanda cuando la red está caída.
+  2. **Un rechazo definitivo (`rejected`, que el nodo guarda como `manual_review`) no traba la cola**: la tanda sigue.
+     Es una *respuesta* del central, no una falla: esperarla no la arregla, y detener la cola detrás de ella dejaría **todas**
+     las ventas posteriores del local sin subir hasta que alguien la resuelva a mano, con el nodo diciendo que está en
+     línea. Nada se pierde: la operación queda entera en el nodo y en `sync_inbox` del central para revisarla
+     (`libraedge-central revision`, `libraedge-nodo revision`).
+     - **El 422 del central también es un rechazo.** `HttpSyncTransport` levantaba cualquier `HTTPError` como excepción, o
+       sea reintentable; el 422 de `/sync/v1/push` (operación mal formada: faltan campos, `sequence` que no es un entero)
+       es una respuesta definitiva y reintentarla no la arregla. Con el `break` habría trabado la cola para siempre, así que
+       ahora el transporte lo devuelve como `PushResult("rejected", ...)` y va a revisión. 401, 404, 409, 5xx y los errores
+       de red siguen siendo reintentables: valen para todas las operaciones, y esperar sí las arregla (credenciales,
+       esquema, el central que vuelve).
+  3. Lo que dependía de una rechazada, el central lo rechaza a su vez (el manejador no encuentra lo que necesita) y va a
+     revisión también. Al resolverlas, `reenviar_operacion` las devuelve a `pending` y salen por secuencia: **hay que reenviar
+     en el orden en que se crearon**; si se reenvía la dependiente sola, vuelve a rechazarse.
+- Descartadas: cortar también ante un rechazo (ver 2); saltear sólo las operaciones del mismo agregado que la fallida
+  (el vínculo `venta → cliente` no es del mismo agregado, y el worker no conoce los payloads); reordenar con un grafo de
+  dependencias (el nodo no sabe qué depende de qué: sólo la secuencia lo dice).
+- Consecuencias: con la red caída, cada ciclo intenta **una** operación en vez de todas, así que `fallidas` de un
+  `ResultadoOutbox` vale como máximo 1 (nadie lo usa como cuenta; `hubo_falla_de_transporte` sigue igual). Una operación
+  que el transporte rechaza siempre con una excepción **traba la cola detrás de ella** (un payload que revienta el `push`
+  antes de salir, por ejemplo; el 422 ya no es de éstos): el nodo queda fuera de línea con `ultimo_error` diciendo cuál, en
+  vez de subir lo de atrás desordenado. **Lo que no cubre:** si el central acepta una venta cuyo manejador no verifica
+  que exista el cliente, un `cliente.alta` rechazado antes no la frena; eso es un contrato de cada manejador del producto,
+  que debe rechazar lo que le falta.

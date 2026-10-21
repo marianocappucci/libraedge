@@ -4,8 +4,8 @@
 ; las otras PC del local; la PC principal es la que tiene el nodo (nodo.iss). Al abrirse, la app busca sola la PC
 ; principal en la red del local (descubrimiento, UDP 47823) y abre el producto desde ella.
 ;
-;     ISCC.exe /DProducto=ventalibra /DVersion=0.16.0 puesto.iss
-;     libraedge-puesto-ventalibra-0.16.0.exe /VERYSILENT /SUPPRESSMSGBOXES     (desatendido)
+;     ISCC.exe /DProducto=ventalibra /DVersion=0.17.0 puesto.iss
+;     libraedge-puesto-ventalibra-0.17.0.exe /VERYSILENT /SUPPRESSMSGBOXES     (desatendido)
 ;
 ; Es el MISMO binario que el de la PC principal (paquete\escritorio\<producto>.exe, lo compila escritorio/armar.py):
 ; instalado aca, sin instalador\producto.json al lado, arranca en modo puesto.
