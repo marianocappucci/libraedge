@@ -1125,3 +1125,44 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   clave compuesta no admiten alta; una referencia sin FK que el producto no declare queda colgada del id provisorio (la
   declaración de `libracore` está fijada contra su esquema, pero el esquema de un producto es suyo); y el nodo no publica
   `sin_reconciliar` en su estado (hoy sólo stderr).
+
+## ADR-022 — Conservar los nodos al recrear la base del central: `nodo conservar` y `nodo restaurar`
+
+- Estado: aceptada (pedido del humano del 2026-10-21; sale en v0.19.0)
+- Fecha: 2026-10-21
+- Contexto: el reset nocturno de las demos (`scripts/reset_demo.sh` de cada producto) hace `DROP SCHEMA`, el arranque reconstruye
+  el esquema y se siembra con `scripts/seed_demo.py`. Se pierden dos cosas de LibraEdge. **`node_identity`**: la PC vinculada a la
+  demo queda huérfana (401) todas las mañanas. **`sync_changelog`**: es un `BIGSERIAL` (la capa de LibraCore traduce
+  `INTEGER PRIMARY KEY AUTOINCREMENT`), así que la base nueva numera desde 1, y el nodo guarda su cursor (`last_server_cursor`) y
+  pide `GET /sync/v1/pull?cursor=<el suyo>`: con cursor 500 y un changelog que llega a 120 no baja nada, **para siempre y sin ningún
+  error**. Registrar el nodo de nuevo no arregla lo segundo, y obligaría a reinstalar la PC.
+- Decisión:
+  1. **`libraedge-central nodo conservar --a <archivo>`** escribe un JSON con las filas **enteras** de `node_identity` (todas las
+     columnas, `secret_hash` incluido: el central nunca tuvo el secreto en claro) y el **cursor máximo** del changelog. Permisos 600
+     desde la creación (`O_EXCL`), no pisa un archivo que exista, no imprime nada de su contenido. Sin nodos escribe igual un
+     archivo válido con la lista vacía, para que quien lo usa no confunda «no había nodos» con «falló». El cursor máximo es el mayor
+     entre la última fila **y la secuencia** (un changelog podado deja la secuencia por encima de su última fila, y el nodo pudo
+     haber llegado hasta ahí).
+  2. **`libraedge-central nodo restaurar --de <archivo>`**, en la base nueva y con la instancia ya arrancada: (a) reinserta los nodos,
+     idempotente por `node_id` (el que ya está no se toca); sólo las columnas que la tabla tiene; (b) lleva la secuencia de
+     `sync_changelog.cursor_id` a **>= el máximo viejo** (`setval` sobre la secuencia que dice `pg_get_serial_sequence`, sólo si
+     está por debajo) y **renumera** lo que la base nueva ya tuviera con cursor <= ese máximo (en el mismo orden): esas filas
+     quedarían por debajo del cursor del nodo y nadie las bajaría; (c) corre `publicar`, que instala los triggers y siembra la
+     referencia **con cursores nuevos, todos mayores que el del nodo**, así que el nodo baja el estado nuevo completo. Con la lista
+     vacía no hace nada salvo avisar; con un archivo que no existe, o que no es de `conservar`, sale 1 con el motivo.
+  3. El archivo lleva `formato: 1`; `restaurar` rechaza uno que no conoce.
+- Descartadas: guardar la **secuencia** con `pg_dump` o dejar `node_identity` y `sync_changelog` fuera del `DROP SCHEMA` (el reset
+  borra el esquema entero y la cadena de migraciones espera una base vacía; dos tablas sobrevivientes son un estado que el arranque
+  no espera); **resetear el cursor del nodo** a 0 desde el central (el central no lleva el cursor de nadie, ADR-002: el nodo es el
+  único que sabe qué aplicó); un **épsilon** fijo para la secuencia (`+1.000.000`): oculta el problema hasta que el changelog crece;
+  registrar el nodo de nuevo (emite un secreto nuevo: hay que tocar la PC).
+- Consecuencias: **MINOR (v0.19.0)**: suma dos subcomandos y API (`conservar`, `restaurar`, `cursor_maximo`), sin tocar el esquema.
+  Los productos que la usan detectan el subcomando (`libraedge-central nodo conservar --help`) para seguir andando con un pin viejo.
+  **Lo que no cubre, y para una demo es aceptable:** (1) una fila que estaba en la base vieja y no está en la nueva siembra **no baja
+  como borrado** al nodo --el changelog nuevo no tiene el `DELETE`--: el nodo la conserva hasta que se lo reinstale; la siembra son
+  `upsert`, y lo que coincide por clave se pisa con el estado nuevo. (2) `libraedge_mapeo` y `libraedge_vinculacion` **no se
+  conservan**: apuntan a ids de la demo vieja (el mapeo de los clientes dados de alta en el nodo, los códigos de vinculación
+  emitidos). Un código de vinculación sin canjear se pierde; una PC ya vinculada no lo necesita. (3) `sync_inbox`
+  (lo que el central recibió) tampoco: la demo nueva no tiene las ventas que subió el nodo ayer. (4) Si entre `conservar` y
+  `restaurar` alguien registró otro nodo con el mismo prefijo de numeración, `restaurar` falla con un error claro y no deja nada a
+  medias. (5) El archivo es un secreto (hashes): quien lo usa lo guarda con permisos 600 y lo borra al terminar.

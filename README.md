@@ -87,9 +87,29 @@ libraedge-central nodo registrar node-1 --sucursal Centro
 libraedge-central nodo estado
 libraedge-central nodo dar-de-baja node-1
 libraedge-central nodo vigilar --umbral 15       # para el cron del VPS: sale 1 si un nodo se callo
+libraedge-central nodo conservar --a nodos.json  # antes de recrear la base (ver abajo)
+libraedge-central nodo restaurar --de nodos.json
 ```
 
 `registrar` imprime una sola vez `LIBRAEDGE_NODE_ID`, `LIBRAEDGE_NODE_SECRET`, `LIBRAEDGE_PREFIJO` (el prefijo de numeración del nodo, `S02`, único por nodo y nunca reusado) y `LIBRAEDGE_TABLAS_ESPEJO`. En el producto, `libraedge.identidad.nodo_actual("VENTALIBRA")` dice si la instancia es un nodo.
+
+### Conservar los nodos al recrear la base (v0.19, ADR-022)
+
+Una base que se recrea de cero (el reset nocturno de las demos) pierde `node_identity` --la PC vinculada queda con 401-- y
+`sync_changelog`, que vuelve a numerar desde 1: un nodo con cursor 500 pide `cursor > 500` y no baja nada nunca más. Para eso:
+
+```bash
+libraedge-central nodo conservar --a nodos.json   # ANTES de borrar; permisos 600, no pisa un archivo que exista
+# ... se recrea la base, arranca la app, se siembra ...
+libraedge-central nodo restaurar --de nodos.json  # reinserta los nodos, sube la numeración del changelog y publica
+```
+
+El archivo tiene las filas de `node_identity` con `secret_hash` (el hash, no el secreto) y el cursor máximo del changelog: es un
+secreto, no se imprime ni se versiona. `restaurar` es idempotente por `node_id`, deja la secuencia del changelog por encima del
+máximo viejo y corre `publicar`, así que el nodo baja la referencia nueva entera. Sin nodos no hace nada; con un archivo que
+no existe sale 1. **Límite:** una fila que estaba en la base vieja y no en la nueva no baja como borrado (el changelog nuevo no
+tiene el `DELETE`): el nodo la conserva. Para una demo es aceptable. `libraedge_mapeo` y `libraedge_vinculacion` no se conservan
+(ids de la base vieja).
 
 ## Fase 2 (v0.17): orden del outbox, salud de los nodos y guarda del espejo
 

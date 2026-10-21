@@ -9,10 +9,12 @@ El aprovisionamiento de nodos (``libraedge.aprovisionamiento``, ADR-008)::
     libraedge-central nodo dar-de-baja <node_id>
     libraedge-central nodo estado
     libraedge-central nodo vigilar [--umbral 15]
+    libraedge-central nodo conservar --a nodos.json
+    libraedge-central nodo restaurar --de nodos.json
 
 Lo del producto sale de ``--aprovisionamiento`` o de
 ``LIBRAEDGE_APROVISIONAMIENTO`` (``modulo:objeto``, un ``Aprovisionamiento``);
-``estado``, ``dar-de-baja`` y ``vigilar`` no lo necesitan. Sin ``--base`` ni
+``estado``, ``dar-de-baja``, ``vigilar`` y ``conservar`` no lo necesitan. Sin ``--base`` ni
 ``LIBRAEDGE_DATABASE_URL``, se usa el ``conectar()`` del aprovisionamiento o
 ``<PREFIJO>_DATABASE_URL``.
 
@@ -162,13 +164,21 @@ def _parser_de_nodo(sub) -> None:
     baja = acciones.add_parser("dar-de-baja", help="revoca un nodo (PC robada o reemplazada)")
     baja.add_argument("node_id")
     acciones.add_parser("estado", help="que hay publicado y que nodos existen")
+    conservar = acciones.add_parser(
+        "conservar", help="guarda los nodos y el cursor del changelog en un archivo (antes de recrear la base)")
+    conservar.add_argument("--a", dest="archivo", required=True,
+                           help="el archivo a crear (permisos 600; no pisa uno que exista; tiene los hashes de los "
+                                "secretos)")
+    restaurar = acciones.add_parser(
+        "restaurar", help="reinserta los nodos de `conservar`, sube el cursor del changelog y vuelve a publicar")
+    restaurar.add_argument("--de", dest="archivo", required=True, help="el archivo que escribio `conservar`")
     vigilar = acciones.add_parser("vigilar", help="sale con 1 si algun nodo activo dejo de dar senales")
     vigilar.add_argument("--umbral", type=int, default=15,
                          help="minutos sin noticias para darlo por callado (default: 15)")
 
 
 #: Lo que no necesita saber nada del producto: solo lee y escribe `node_identity`.
-_SIN_PRODUCTO = {"estado", "dar-de-baja", "vigilar"}
+_SIN_PRODUCTO = {"estado", "dar-de-baja", "vigilar", "conservar"}
 
 
 def _nodo(args, conectar) -> int:
@@ -201,6 +211,10 @@ def _nodo(args, conectar) -> int:
         try:
             if args.accion == "publicar":
                 return ap.publicar(conexion, aprov)
+            if args.accion == "conservar":
+                return ap.conservar(conexion, args.archivo)
+            if args.accion == "restaurar":
+                return ap.restaurar(conexion, aprov, args.archivo)
             preparada = _preparar_carga(args)
             alta = ap.registrar(conexion, aprov, args.node_id, args.sucursal,
                                 interactivo=ap.es_interactivo())

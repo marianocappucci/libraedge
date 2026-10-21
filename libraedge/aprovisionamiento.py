@@ -9,6 +9,8 @@ local, ahora genericos para toda la suite::
     libraedge-central nodo estado                      # que hay publicado y que nodos existen
     libraedge-central nodo dar-de-baja node-1          # PC robada o reemplazada
     libraedge-central nodo vigilar --umbral 15         # sale 1 si un nodo activo se callo
+    libraedge-central nodo conservar --a nodos.json    # los nodos y el cursor del changelog, antes de recrear la base
+    libraedge-central nodo restaurar --de nodos.json   # ... y de vuelta, con la numeracion del changelog por encima
 
 Nacio en ``restolibra/scripts/nodo_offline.py`` (el piloto) y casi todo era
 generico. Lo unico que es del producto entra por una costura chica y
@@ -41,6 +43,8 @@ las devolviera y el nodo se pisara sus propios datos. Las de fuera de alcance
 conexion.
 """
 
+import json
+import os
 import sqlite3
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -705,6 +709,195 @@ def dar_de_baja(conn, node_id: str, salida: Salida = print) -> int:
     conn.commit()
     salida(f"Nodo {node_id!r} dado de baja: su secreto deja de verificar.")
     return 0
+
+
+# ── conservar y restaurar (ADR-022) ─────────────────────────────────────────
+
+#: La version del archivo de `conservar`. `restaurar` rechaza una que no conoce.
+FORMATO_DE_LA_CONSERVA = 1
+
+
+def _columnas_de(conn, tabla: str) -> list[str]:
+    tabla = validar_identificador(tabla)
+    return [fila[1] for fila in conn.execute(f"PRAGMA table_info({tabla})").fetchall()]
+
+
+def _secuencia_del_changelog(conn) -> str | None:
+    """El nombre de la secuencia que numera `sync_changelog.cursor_id` en PostgreSQL (un `BIGSERIAL`: la capa de
+    LibraCore traduce el `INTEGER PRIMARY KEY AUTOINCREMENT`), o ``None`` si no la tiene (SQLite)."""
+    if _es_sqlite(conn):
+        return None
+    fila = conn.execute("SELECT pg_get_serial_sequence('sync_changelog', 'cursor_id')").fetchone()
+    return fila[0] if fila and fila[0] else None
+
+
+def cursor_maximo(conn) -> int:
+    """El mayor cursor que el changelog repartio alguna vez; 0 si nunca repartio ninguno (o no existe).
+
+    🔴 Es el mayor entre la fila mas alta **y la secuencia**: el cursor de un nodo puede ser mayor que el de la ultima
+    fila que queda si el changelog se podo, y la secuencia no retrocede nunca. Con solo el ``MAX`` de la tabla,
+    restaurar sobre un changelog podado dejaria la numeracion por debajo de un cursor que un nodo ya tiene."""
+    if not tabla_existe(conn, "sync_changelog"):
+        return 0
+    maximo = conn.execute("SELECT COALESCE(MAX(cursor_id), 0) FROM sync_changelog").fetchone()[0] or 0
+    secuencia = _secuencia_del_changelog(conn)
+    if secuencia:
+        ultimo, llamada = conn.execute(f"SELECT last_value, is_called FROM {secuencia}").fetchone()
+        if llamada:
+            maximo = max(maximo, int(ultimo))
+    elif _es_sqlite(conn):
+        fila = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'sync_changelog'").fetchone()
+        if fila and fila[0]:
+            maximo = max(maximo, int(fila[0]))
+    return int(maximo)
+
+
+def conservar(conn, ruta: str, salida: Salida = print) -> int:
+    """Escribe en ``ruta`` los nodos registrados y el cursor maximo del changelog, para sobrevivir a una base nueva.
+
+    El archivo se crea con permisos 600 y **no pisa** uno que exista. Tiene las filas **enteras** de ``node_identity``,
+    con ``secret_hash`` (el hash, nunca un secreto en claro: el central no lo tiene) y por eso es un secreto: no se
+    imprime ni se versiona. Sin nodos escribe igual un archivo valido con la lista vacia, asi quien lo usa no distingue
+    «no habia nodos» de «no se pudo conservar».
+    """
+    nodos = []
+    if tabla_existe(conn, "node_identity"):
+        columnas = _columnas_de(conn, "node_identity")
+        for fila in conn.execute(f"SELECT {', '.join(columnas)} FROM node_identity ORDER BY node_id").fetchall():
+            nodos.append({columna: fila[i] for i, columna in enumerate(columnas)})
+    contenido = {
+        "formato": FORMATO_DE_LA_CONSERVA,
+        "conservado_en": datetime.now(UTC).isoformat(),
+        "cursor_maximo": cursor_maximo(conn),
+        "nodos": nodos,
+    }
+    try:
+        descriptor = os.open(ruta, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise ErrorDeAprovisionamiento(
+            f"{ruta} ya existe: no se pisa (puede tener nodos que todavia no se restauraron).") from None
+    except OSError as exc:
+        raise ErrorDeAprovisionamiento(f"no se pudo crear {ruta}: {exc}") from None
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as archivo:
+            json.dump(contenido, archivo, ensure_ascii=False, indent=2)
+            archivo.write("\n")
+    except BaseException:
+        # Un archivo a medias con hashes adentro no le sirve a nadie.
+        try:
+            os.unlink(ruta)
+        except OSError:
+            pass
+        raise
+    salida(f"Conservados {len(nodos)} nodos y el cursor maximo ({contenido['cursor_maximo']}) en {ruta} "
+           "(permisos 600).")
+    return 0
+
+
+def _leer_conserva(ruta: str) -> dict:
+    try:
+        with open(ruta, encoding="utf-8") as archivo:
+            datos = json.load(archivo)
+    except FileNotFoundError:
+        raise ErrorDeAprovisionamiento(f"no existe {ruta}: no hay nada que restaurar.") from None
+    except (OSError, ValueError) as exc:
+        raise ErrorDeAprovisionamiento(f"no se pudo leer {ruta}: {exc}") from None
+    nodos = datos.get("nodos") if isinstance(datos, dict) else None
+    if (not isinstance(datos, dict) or datos.get("formato") != FORMATO_DE_LA_CONSERVA
+            or not isinstance(nodos, list) or not isinstance(datos.get("cursor_maximo"), int)
+            or any(not isinstance(n, dict) or not n.get("node_id") for n in nodos)):
+        raise ErrorDeAprovisionamiento(
+            f"{ruta} no es un archivo de `nodo conservar` (formato {FORMATO_DE_LA_CONSERVA}).")
+    return datos
+
+
+def _reinsertar_nodos(conn, nodos: list[dict], salida: Salida) -> tuple[int, int]:
+    """Devuelve ``(restaurados, que_ya_estaban)``. Idempotente por ``node_id``: lo que existe no se toca."""
+    columnas_de_la_tabla = _columnas_de(conn, "node_identity")
+    restaurados = ya_estaban = 0
+    for nodo in nodos:
+        if conn.execute("SELECT 1 FROM node_identity WHERE node_id = ?", (nodo["node_id"],)).fetchone():
+            ya_estaban += 1
+            continue
+        columnas = [c for c in nodo if c in columnas_de_la_tabla]
+        sobran = sorted(set(nodo) - set(columnas))
+        if sobran:
+            salida(f"  (el nodo {nodo['node_id']!r} trae columnas que esta base no tiene, "
+                   f"se descartan: {', '.join(sobran)})")
+        for columna in columnas:
+            validar_identificador(columna)
+        conn.execute(
+            f"INSERT INTO node_identity ({', '.join(columnas)}) VALUES ({', '.join('?' for _ in columnas)})",
+            tuple(nodo[c] for c in columnas),
+        )
+        restaurados += 1
+    return restaurados, ya_estaban
+
+
+def _subir_cursor_del_changelog(conn, minimo: int) -> int:
+    """Deja la numeracion de `sync_changelog` por encima de ``minimo``: lo proximo que se escriba sale con cursor mayor.
+
+    Devuelve cuantas filas ya existentes se renumeraron. Esas son las que, en una base nueva, quedaron por debajo del
+    cursor que los nodos ya tienen (un trigger que ya andaba, una siembra anterior): con su cursor viejo ningun nodo las
+    bajaria nunca. Se re-escriben en el mismo orden, con cursor nuevo."""
+    secuencia = _secuencia_del_changelog(conn)
+    if secuencia is None:
+        raise ErrorDeAprovisionamiento("restaurar corre en el central, que es PostgreSQL.")
+    ultimo, llamada = conn.execute(f"SELECT last_value, is_called FROM {secuencia}").fetchone()
+    if not llamada or int(ultimo) < minimo:
+        conn.execute("SELECT setval(?, ?)", (secuencia, minimo))
+    bajas = conn.execute(
+        """SELECT cursor_id, table_name, row_id, operation, payload_json, recorded_at
+             FROM sync_changelog WHERE cursor_id <= ? ORDER BY cursor_id""", (minimo,)).fetchall()
+    for fila in bajas:
+        conn.execute("DELETE FROM sync_changelog WHERE cursor_id = ?", (fila[0],))
+        conn.execute(
+            """INSERT INTO sync_changelog (table_name, row_id, operation, payload_json, recorded_at)
+               VALUES (?, ?, ?, ?, ?)""", (fila[1], fila[2], fila[3], fila[4], fila[5]))
+    return len(bajas)
+
+
+def restaurar(conn, aprov: Aprovisionamiento, ruta: str, salida: Salida = print) -> int:
+    """Reinserta los nodos de ``conservar`` en la base nueva y vuelve a publicar la referencia.
+
+    1. Los nodos vuelven con su ``secret_hash``, o sea que el secreto que la PC ya tiene sigue autenticando.
+       Idempotente: un ``node_id`` que ya esta no se toca ni se duplica.
+    2. La numeracion de ``sync_changelog`` pasa a ser mayor que el cursor maximo viejo. 🔴 Sin esto la base nueva
+       numera desde 1 y un nodo con cursor 500 pide ``cursor > 500``: no baja nada, para siempre y sin error.
+    3. ``publicar``: instala los triggers y siembra la referencia, que sale con cursores mayores al de cualquier nodo.
+
+    No se conserva lo que ya no existe: una fila que estaba en la base vieja y no en la nueva **no baja como borrado**
+    (el changelog nuevo no tiene el ``DELETE``), asi que el nodo la sigue teniendo. Para una demo es aceptable.
+    ``libraedge_mapeo`` y ``libraedge_vinculacion`` tampoco se conservan: apuntan a ids de la base vieja.
+    Con la lista vacia no hace nada. Sale con el codigo de ``publicar``.
+    """
+    from libraedge.db.changelog import init_changelog_schema
+
+    datos = _leer_conserva(ruta)
+    if not datos["nodos"]:
+        salida(f"{ruta} no tiene nodos: no hay nada que restaurar.")
+        return 0
+    if _es_sqlite(conn):
+        raise ErrorDeAprovisionamiento("restaurar corre en el central, que es PostgreSQL.")
+    if not tabla_existe(conn, "node_identity"):
+        raise ErrorDeAprovisionamiento(
+            "la base no tiene node_identity: restaurar va despues de que la instancia arranque y cree su esquema.")
+
+    try:
+        restaurados, ya_estaban = _reinsertar_nodos(conn, datos["nodos"], salida)
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise ErrorDeAprovisionamiento(
+            f"no se pudieron reinsertar los nodos ({exc}): se registro alguno con el mismo prefijo?") from None
+    salida(f"Nodos restaurados: {restaurados} (ya estaban: {ya_estaban}).")
+
+    init_changelog_schema(conn)
+    renumeradas = _subir_cursor_del_changelog(conn, datos["cursor_maximo"])
+    conn.commit()
+    salida(f"Numeracion del changelog por encima de {datos['cursor_maximo']}"
+           + (f" ({renumeradas} cambios que ya habia se renumeraron)." if renumeradas else "."))
+    return publicar(conn, aprov, salida)
 
 
 # ── estado y vigilancia ─────────────────────────────────────────────────────
