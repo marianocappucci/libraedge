@@ -412,6 +412,8 @@ jobs:
             if curl -fsS -o "$d/desafio.json" "$base$p/captcha" 2> /dev/null; then prefijo="$p"; break; fi
           done
           [ -n "$prefijo" ] || { echo "El producto no contesta $base/api/captcha ni $base/auth/captcha"; exit 1; }
+          # En un nodo los usuarios son los del central (libraauth ADR-027): sin central, la prueba deja el suyo como el espejo.
+          sudo cat /etc/libraedge-nodo/nodo.env | "$py" -I tests/login_por_http.py sembrar -
           sudo cat /etc/libraedge-nodo/nodo.env | "$py" -I tests/login_por_http.py cuerpo - "$d/desafio.json" "$d/cuerpo.json"
           codigo="$(curl -sS -o "$d/login.json" -D "$d/login.cabeceras" -c "$d/frasco" -H 'Content-Type: application/json' \
             --data-binary @"$d/cuerpo.json" -w '%{http_code}' "$base$prefijo/login")"
@@ -907,6 +909,9 @@ jobs:
             if ($LASTEXITCODE -eq 0) { $prefijo = $p; break }
           }
           if (-not $prefijo) { throw "El producto no contesta $base/api/captcha ni $base/auth/captcha" }
+          # En un nodo los usuarios son los del central (libraauth ADR-027): sin central, la prueba deja el suyo como el espejo.
+          & $py -I tests\login_por_http.py sembrar $archivoEnv
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo sembrar el usuario de la prueba" }
           & $py -I tests\login_por_http.py cuerpo $archivoEnv "$d\desafio.json" "$d\cuerpo.json"
           if ($LASTEXITCODE -ne 0) { throw "No se pudo armar el cuerpo del login" }
           $codigo = & curl.exe -sS -o "$d\login.json" -D "$d\login.cabeceras" -c "$d\frasco" -H "Content-Type: application/json" `

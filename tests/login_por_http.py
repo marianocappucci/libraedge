@@ -10,6 +10,11 @@ admin local, que sale del ``nodo.env``, y el captcha ALTCHA resuelto). El login 
     python -I tests/login_por_http.py cuerpo <nodo.env o -> <desafio.json> <salida.json>
         escribe el cuerpo de ``POST <prefijo>/login`` (usuario, clave y captcha) en <salida.json>, solo para el dueño.
         Con ``-`` el nodo.env llega por la entrada (en Linux es de root: ``sudo cat nodo.env | python ...``).
+    python -I tests/login_por_http.py sembrar <nodo.env o ->
+        deja en la base del nodo el usuario de la prueba **como lo dejaria el espejo** (libraauth ADR-027: en un nodo
+        los usuarios son los del central y no se crea un admin local). En el CI no hay central que los baje, asi que se
+        escribe la fila con ``libraedge.aplicando`` prendido, la marca del ``MirrorApplier``. La clave es la de
+        ``ADMIN_PASSWORD`` del ``nodo.env`` y el hash lo arma libraauth. Si el usuario ya esta, no lo toca.
 
 🔴 La clave nunca pasa por la linea de comandos ni se imprime: entra por archivo o por la entrada y sale a un archivo
 que el workflow borra apenas lo usa.
@@ -50,6 +55,34 @@ def clave_del_admin(texto_env: str) -> str:
     raise SystemExit("El nodo.env no tiene ADMIN_PASSWORD.")
 
 
+def url_de_la_base(texto_env: str) -> str:
+    """La base del producto en el ``nodo.env`` (``<PREFIJO>_DATABASE_URL``; no la de libraedge)."""
+    for linea in texto_env.lstrip("\ufeff").splitlines():
+        nombre, igual, valor = linea.strip().partition("=")
+        nombre = nombre.strip()
+        if igual and nombre.endswith("_DATABASE_URL") and not nombre.startswith("LIBRAEDGE_") and valor.strip():
+            return valor.strip()
+    raise SystemExit("El nodo.env no tiene la base del producto (<PREFIJO>_DATABASE_URL).")
+
+
+def sembrar_usuario(texto_env: str, usuario: str) -> bool:
+    """Escribe el usuario de la prueba en ``usuarios`` como el espejo (ver ``sembrar``). ``True`` si lo creo."""
+    import psycopg
+    from libraauth.hashing import hash_password
+
+    url = url_de_la_base(texto_env)
+    if url.startswith("postgresql+psycopg://"):
+        url = "postgresql://" + url[len("postgresql+psycopg://"):]
+    with psycopg.connect(url) as conn:
+        conn.execute("SELECT set_config('libraedge.aplicando', '1', true)")
+        fila = conn.execute(
+            "INSERT INTO usuarios (username, nombre, email, password_hash, role, activo) "
+            "VALUES (%s, %s, '', %s, 'admin', true) ON CONFLICT (username) DO NOTHING RETURNING id",
+            (usuario, "Admin de la prueba (espejo)", hash_password(clave_del_admin(texto_env))),
+        ).fetchone()
+    return fila is not None
+
+
 def resolver_captcha(desafio: dict) -> str:
     from altcha import Challenge, Payload, solve_challenge
 
@@ -69,6 +102,11 @@ def main(argv: list[str]) -> int:
 
         v = version("libraauth")
         print(f"{v} {'nueva' if es_nueva(v) else 'vieja'}")
+        return 0
+    if len(argv) == 2 and argv[0] == "sembrar":
+        texto = sys.stdin.read() if argv[1] == "-" else open(argv[1], encoding="utf-8-sig").read()
+        creado = sembrar_usuario(texto, os.environ.get("USUARIO_DE_PRUEBA", "admin"))
+        print("Usuario de la prueba sembrado como el espejo." if creado else "El usuario de la prueba ya estaba.")
         return 0
     if len(argv) == 4 and argv[0] == "cuerpo":
         _, entorno, desafio, salida = argv
