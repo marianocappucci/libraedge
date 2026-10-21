@@ -53,6 +53,11 @@ name = "libraedge"
 # 0.13.x -> 0.14.0 (2026-10-20, ADR-014): LibraEdge incluido en todos los planes (sin guarda por defecto, `contratado`
 # siempre true) y el codigo de vinculacion (`create_canje_router`, `libraedge.vinculacion`, `instalador canjear`).
 # Minor: suma API y dos tablas (las crea `init_schema`); la guarda por defecto cambia.
+# 0.16.x -> 0.17.0 (2026-10-21, ADR-018/019/020, Fase 2): la salud de los nodos para uptime-kuma (`GET /sync/v1/salud`,
+# con `LIBRAEDGE_TOKEN_MONITOREO`; apagada sin la variable), la guarda del espejo (`libraedge.db.guarda`, opt-in por
+# tabla con `Aprovisionamiento.tablas_solo_lectura`) y el orden causal del outbox: ante un fallo de transporte
+# `OutboxWorker.run_once` corta la tanda en vez de seguir con la siguiente. Minor: suma API y una variable opcional de la
+# carga; el worker cambia de comportamiento con la red caida (una operacion por ciclo en vez de todas).
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

@@ -20,6 +20,9 @@ declarativa, ``Aprovisionamiento``:
   se lea de la base; si se declara, **se verifica contra la base**: el piloto
   aprendio que una PK escrita a mano se equivoca en silencio (``units`` tiene PK
   ``code``, no ``id``);
+- **cuales de esas tablas el nodo no puede escribir** (``tablas_solo_lectura``, v0.17, ADR-019), opcional y vacio por
+  defecto: el nodo instala en ellas la guarda del espejo (``libraedge.db.guarda``) y solo el espejo las escribe. Es
+  opt-in por tabla porque las altas de clientes en el nodo todavia no estan resueltas;
 - **como listar las sucursales** de la instancia (``id``, ``nombre``, ``activa``);
 - **una guarda del alta**, opcional. Desde v0.14 (ADR-014) LibraEdge es parte del
   sistema e incluido en todos los planes: por defecto no hay guarda (``sin_guarda``).
@@ -144,6 +147,11 @@ class Aprovisionamiento:
     ``verificar_alta(conn, node_id, branch_id)`` levanta ``AltaRechazada``; por defecto
     ``sin_guarda`` (LibraEdge incluido en todos los planes, ADR-014).
     ``conectar()`` es opcional: sin ``--base`` el CLI lo usa antes que el entorno.
+
+    ``tablas_solo_lectura`` (v0.17, ADR-019) son nombres de tablas **de las de referencia** que el nodo no puede
+    escribir desde el producto: ``registrar`` las manda en la carga (``LIBRAEDGE_TABLAS_SOLO_LECTURA``) y
+    ``libraedge-nodo`` les instala la guarda al arrancar. Una que no es de referencia es un error: una tabla que nadie
+    espeja quedaria bloqueada para siempre.
     """
 
     prefijo: str
@@ -151,7 +159,9 @@ class Aprovisionamiento:
     listar_sucursales: Callable[[Any], Iterable]
     verificar_alta: Callable[[Any, str, str], None] = sin_guarda
     conectar: Callable[[], Any] | None = None
+    tablas_solo_lectura: Any = ()
     tablas: tuple[Tabla, ...] = field(init=False)
+    solo_lectura: frozenset[str] = field(init=False)
 
     def __post_init__(self):
         from libraedge.identidad import variable_del_producto
@@ -159,6 +169,14 @@ class Aprovisionamiento:
         variable_del_producto(self.prefijo)  # valida el prefijo
         self.prefijo = self.prefijo.strip().upper()
         self.tablas = normalizar_tablas(self.tablas_de_referencia)
+        declaradas = [self.tablas_solo_lectura] if isinstance(self.tablas_solo_lectura, str) \
+            else list(self.tablas_solo_lectura or ())
+        self.solo_lectura = frozenset(validar_identificador(nombre) for nombre in declaradas)
+        sobran = sorted(self.solo_lectura - self.nombres)
+        if sobran:
+            raise ValueError(
+                f"las tablas de solo lectura {sobran} no estan en las tablas de referencia: el nodo no las espeja, "
+                "asi que nadie las escribiria")
 
     @property
     def nombres(self) -> frozenset[str]:
@@ -584,13 +602,20 @@ class Alta:
     secreto: str
     espejo: dict[str, tuple[str, ...]]
     prefijo: str
+    #: Las del espejo que el nodo guarda contra escrituras del producto (ADR-019). Vacio: sin guarda.
+    solo_lectura: tuple[str, ...] = ()
 
     def entorno_del_nodo(self) -> list[str]:
         """Las lineas que van al archivo de entorno del nodo."""
-        return [f"LIBRAEDGE_NODE_ID={self.node_id}",
-                f"LIBRAEDGE_NODE_SECRET={self.secreto}",
-                f"LIBRAEDGE_PREFIJO={self.prefijo}",
-                f"LIBRAEDGE_TABLAS_ESPEJO={formato_tablas_espejo(self.espejo)}"]
+        lineas = [f"LIBRAEDGE_NODE_ID={self.node_id}",
+                  f"LIBRAEDGE_NODE_SECRET={self.secreto}",
+                  f"LIBRAEDGE_PREFIJO={self.prefijo}",
+                  f"LIBRAEDGE_TABLAS_ESPEJO={formato_tablas_espejo(self.espejo)}"]
+        if self.solo_lectura:
+            # Solo si el producto la declara: un nodo sin guarda no recibe una variable de mas (y un instalador
+            # anterior a v0.17 rechaza las que no conoce).
+            lineas.append(f"LIBRAEDGE_TABLAS_SOLO_LECTURA={','.join(self.solo_lectura)}")
+        return lineas
 
 
 def _validar_node_id(node_id: str) -> str:
@@ -620,7 +645,10 @@ def registrar(conn, aprov: Aprovisionamiento, node_id: str, sucursal: str | None
     secreto = NodeRepository(conn).register_node(node_id, branch_id=elegida.id, prefijo=prefijo)
     espejo = espejo_del_nodo(conn, aprov)
     conn.commit()
-    return Alta(node_id, elegida, secreto, espejo, prefijo)
+    # Solo las que de verdad se espejan en esta base: una de solo lectura que `publicar` no pudo publicar no baja nunca,
+    # y guardarla dejaria al nodo con una tabla que nadie escribe.
+    solo_lectura = tuple(sorted(aprov.solo_lectura & set(espejo)))
+    return Alta(node_id, elegida, secreto, espejo, prefijo, solo_lectura)
 
 
 def dar_de_baja(conn, node_id: str, salida: Salida = print) -> int:
