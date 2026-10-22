@@ -1265,3 +1265,78 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   con esas existencias (el worker no sabe de stock); (2) la bandeja no muestra `carga_inicial`: sólo el estado, `libraedge-
   nodo estado` y la línea de `correr`; (3) la marca vive en la base del nodo: un nodo cuya base se recrea vuelve a cargar
   (correcto: arranca en cero), y uno que conserva la base no (sí con `--forzar`).
+
+## ADR-024 — Descartar una operación en revisión del nodo: `libraedge-nodo revision descartar`
+
+- Estado: aceptada (hueco encontrado en la prueba real del 2026-10-22; sale en v0.21.0)
+- Fecha: 2026-10-22
+- Contexto: una operación del outbox que el central rechaza (`rejected`) queda en `manual_review` del nodo (ADR-020) y de ahí
+  sólo salía por `libraedge-nodo revision reenviar`, es decir, si el central la aceptaba después de resolverla. Si el
+  rechazo es definitivo (la operación es de una prueba, apunta a algo que no existe en el central, el dato ya no importa),
+  quedaba en `manual_review` **para siempre**. No es sólo ruido: en LibraCommerce, mientras haya una operación de stock en
+  `manual_review`, la carga inicial de existencias (ADR-023) espera (`stock_en_revision`) y no corre nunca. En la prueba
+  real hubo que tocar la base de la VM a mano.
+- Decisión:
+  1. **Estado terminal nuevo `discarded`** (`SyncOperationStatus.DISCARDED`; en inglés como `manual_review` y los demás, y
+     igual que el `discarded` del `sync_inbox` del central). **No suma columnas ni migración**: `sync_outbox.status` es
+     `TEXT` sin `CHECK`, así que el estado nuevo entra sin tocar el esquema, y `LIBRAEDGE_VERSION_ESQUEMA`
+     (`version_de_alembic`) no cambia: un nodo v0.21 y un central v0.20 siguen coincidiendo (nada de 409). Los productos que
+     crean `sync_outbox` en su cadena de Alembic tampoco necesitan una migración.
+  2. **`NodeRepository.descartar_operacion(operation_id, motivo)`** y el CLI **`libraedge-nodo revision descartar
+     <operation_id> --motivo "<texto>"`**. Sólo descarta una operación en `manual_review`. Motivo obligatorio y no vacío
+     (`--motivo` es requerido; en blanco, sale 1). Una operación `pending`, `sending`, `retryable_error` o `acknowledged`
+     no se descarta (error claro y sale 1): las primeras todavía pueden salir solas, y una `acknowledged` el central ya la
+     tiene. Una inexistente, también 1.
+  3. **El motivo y el momento van en `last_error`**, que pasa de `<rechazo del central>` a
+     `descartada el <ISO-8601 UTC>: <motivo> | rechazo del central: <rechazo>`. Se prefirió a una columna nueva por lo de
+     arriba (sin esquema), y como se **antepone** y se conserva el rechazo original no se pierde la evidencia de por qué
+     se rechazó. El costo: el momento no es una columna consultable por SQL sino texto; para soporte alcanza. Si algún día
+     hace falta ordenar o filtrar por fecha de descarte, ahí sí corresponde una columna con su `ALTER` en `init_schema`.
+  4. **Idempotente frente a reintentos: descartar dos veces avisa por `stderr` ("ya estaba descartada"), sale 0 y no
+     pisa el motivo original.** Es el caso de un soporte que repite el comando o de un script reintentado; no es un error,
+     y el resultado deseado (la operación cerrada) ya se cumple. Cualquier otro estado distinto de `manual_review` sigue
+     siendo error (1). El `UPDATE` repite el estado en el `WHERE`, así que dos descartes simultáneos no se pisan.
+  5. **`revision listar` sigue mostrando sólo lo que espera a alguien (`manual_review`); `--todas` suma las descartadas**,
+     igual que `libraedge-central revision listar --todas`. Cada línea trae ahora `estado` además de `motivo`; para una
+     descartada, `motivo` es el `last_error` completo (motivo, momento y rechazo original). No se mostraron siempre porque
+     la lista es la bandeja de trabajo de soporte y las descartadas son historia.
+  6. **El worker no la vuelve a mandar y no es pendiente**: `list_pending_operations` sólo mira `pending` y
+     `retryable_error`, `reclamar_operaciones_colgadas` sólo `sending`, y `reenviar_operacion` sólo `manual_review` (una
+     descartada es `LookupError`, no se reabre). Como `Nodo.pendientes()` sale de `list_pending_operations`, ni
+     `EstadoNodo.pendientes`, ni `libraedge-nodo estado`, ni la bandeja la cuentan. Tampoco la contaba ya `manual_review`:
+     lo que cambia es que ahora hay forma de sacarla de la cola de revisión.
+- Procedimiento de soporte:
+  1. Mirar qué hay: `libraedge-nodo revision listar` (en el nodo) y, del lado del central, `libraedge-central revision
+     listar --nodo <node_id>`.
+  2. **Descartar en el nodo sólo cuando el central la rechazó con una razón y no se va a corregir.** Si el rechazo se arregla
+     (se despliega el manejador que faltaba, se carga el dato que chocaba), lo que corresponde es `libraedge-central
+     revision reintentar` y después `libraedge-nodo revision reenviar`, no descartar.
+  3. `libraedge-nodo revision descartar <operation_id> --motivo "<qué pasó y quién lo decidió>"`.
+  4. **Si era un movimiento de stock** (la carga inicial esperaba por `stock_en_revision`): después de descartar,
+     `libraedge-nodo carga-inicial --forzar` realinea el stock del nodo con el central. La fila local del movimiento
+     descartado **queda** en la base del nodo (descartar no deshace nada de lo que la operación hizo en el nodo), y el
+     delta de la carga inicial la compensa (ese cálculo es del producto, ADR-023, no de LibraEdge). Recordar que
+     `--forzar` pisa las existencias del nodo con las del central: antes de forzar, revisar con el producto qué pasa con
+     lo que el nodo vendió o movió desde que la carga quedó esperando.
+  5. **En el central** la operación sigue en `manual_review` de su `sync_inbox` (el nodo no se lo avisa: no hay ruta para
+     eso, y el nodo no la va a mandar nunca más). No se verificó que ahí frene algo (lo que frena la carga inicial es la
+     operación en el outbox **del nodo**), pero queda en `libraedge-central revision listar` para siempre; conviene
+     cerrarla también, con
+     `libraedge-central revision descartar <operation_id> --por <quién> --motivo "<lo mismo>"`. El orden no importa.
+- Descartadas:
+  - **Una columna nueva (`discarded_at`, `discard_reason`)**: cambia el esquema del nodo y de los productos que crean la
+     tabla por Alembic, y exige coordinar versiones de nodo y central sin que haga falta (ver 3).
+  - **Pisar `last_error` con sólo el motivo**: se perdería por qué rechazó el central.
+  - **Que descartar una ya descartada sea un error (sale 1)**: obliga a un script a distinguir «falló» de «ya estaba»
+    leyendo el texto; el aviso con salida 0 es seguro de reintentar.
+  - **Descartar también `pending` / `retryable_error`**: una operación que todavía puede salir se perdería sin que el central
+    la haya visto nunca. Para eso está el outbox: se espera, o se la lleva a revisión con un rechazo real.
+  - **Borrar la fila**: el outbox es la constancia de qué hizo el nodo; el central tiene su `resolucion` para lo mismo.
+  - **Avisarle al central al descartar** (una ruta nueva): es otra superficie autenticada para algo de housekeeping; el
+    comando del central ya existe.
+- Consecuencias: **MINOR (v0.21.0)**: suma un estado, dos métodos del repositorio, una acción del CLI y un flag, y un campo
+  (`estado`) en cada línea de `revision listar`; sin tocar el esquema, la versión de esquema que el nodo declara ni lo que
+  había. Quien lea `revision listar` como JSON línea a línea no se rompe (campo agregado). **Lo que no cubre**: (1) descartar
+  no revierte lo que la operación hizo en el nodo (la venta, el movimiento de stock): sólo la saca de la cola de envío; (2)
+  el momento del descarte es texto en `last_error`, no una columna; (3) no hay "des-descartar": si fue un error, la
+  operación se vuelve a encolar con un `UPDATE` manual o se rehace la operación.

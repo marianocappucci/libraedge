@@ -258,10 +258,16 @@ def main(argv: list[str] | None = None) -> int:
     revision = sub.add_parser(
         "revision", help="las operaciones que el central rechazo (revision manual)")
     revision_sub = revision.add_subparsers(dest="accion", required=True)
-    revision_sub.add_parser("listar", help="lista las operaciones en revision")
+    listar = revision_sub.add_parser("listar", help="lista las operaciones en revision")
+    listar.add_argument("--todas", action="store_true", help="incluir las descartadas")
     reenviar = revision_sub.add_parser(
         "reenviar", help="la vuelve a poner en cola (despues de resolverla en el central)")
     reenviar.add_argument("operation_id")
+    descartar = revision_sub.add_parser(
+        "descartar",
+        help="la cierra sin mandarla nunca mas (el central la rechazo y no se va a corregir)")
+    descartar.add_argument("operation_id")
+    descartar.add_argument("--motivo", required=True, help="por que se descarta (obligatorio, no vacio)")
 
     carga = sub.add_parser(
         "carga-inicial",
@@ -368,26 +374,44 @@ def _carga_inicial_del_nodo(nodo, forzar: bool) -> int:
 
 
 def _revision_del_nodo(args) -> int:
-    """`libraedge-nodo revision listar|reenviar`. Solo necesita la base local."""
+    """`libraedge-nodo revision listar|reenviar|descartar`. Solo necesita la base local.
+
+    `descartar` (v0.21, ADR-024) sale 0 si la dejo en `discarded` **o si ya lo estaba** (avisa por stderr y no pisa el
+    motivo: un reintento no es un error) y 1 si no existe, esta en otro estado o falta el motivo."""
     import json
 
     from libracore.db import core  # noqa: PLC0415 - solo en el proceso del nodo
 
-    from libraedge.db.repository import NodeRepository
+    from libraedge.db.repository import NodeRepository, OperacionYaDescartada
 
     core.configure(_requerido("LIBRAEDGE_DATABASE_URL"))
     conexion = core.get_connection()
     try:
         repositorio = NodeRepository(conexion)
         if args.accion == "listar":
-            for operacion in repositorio.listar_en_revision():
+            operaciones = repositorio.listar_en_revision()
+            if args.todas:
+                operaciones += repositorio.listar_descartadas()
+            for operacion in operaciones:
                 print(json.dumps({
                     "operation_id": operacion.operation_id,
+                    "estado": str(operacion.status),
                     "operation_type": operacion.operation_type,
                     "schema_version": operacion.schema_version,
                     "occurred_at": operacion.occurred_at,
                     "motivo": operacion.last_error,
                 }, ensure_ascii=False))
+            return 0
+        if args.accion == "descartar":
+            try:
+                repositorio.descartar_operacion(args.operation_id, args.motivo)
+            except OperacionYaDescartada as exc:
+                print(f"{exc}: no se toca (el motivo original sigue)", file=sys.stderr)
+                return 0
+            except (LookupError, ValueError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"{args.operation_id}: descartada")
             return 0
         try:
             repositorio.reenviar_operacion(args.operation_id)

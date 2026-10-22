@@ -60,6 +60,29 @@ Toda la configuración viene del entorno, que es lo que el instalador escribe un
 
 El central registra un manejador por `(operation_type, schema_version)` con un `Despachador` y lo pasa a `create_sync_router(get_connection, despachador=...)`. Lo que no tiene manejador, o lo que el manejador rechaza, **no se aplica**: queda entero en `sync_inbox` como `manual_review` y el nodo recibe `rejected`. Se revisa con `libraedge-central revision listar|reintentar|descartar` (con `--por` y, al descartar, `--motivo`); después de reintentarla, `libraedge-nodo revision reenviar <id>` la confirma en el nodo.
 
+### Descartar una operación en revisión del nodo (v0.21, ADR-024)
+
+Lo que el central rechazó queda en `manual_review` del outbox del nodo. Si el rechazo se corrige, se `reintentar` en el
+central y se `reenviar` desde el nodo (arriba). Si **el central la rechazó con una razón y no se va a corregir**, se descarta
+en el nodo, con motivo obligatorio:
+
+```
+libraedge-nodo revision listar [--todas]                       # --todas suma las descartadas (campo "estado")
+libraedge-nodo revision descartar <operation_id> --motivo "<qué pasó y quién lo decidió>"
+```
+
+Pasa a `discarded` (terminal): el worker no la vuelve a mandar, no cuenta como pendiente (`estado`, bandeja) y no se puede
+reenviar. Sólo descarta una operación en `manual_review`: otra, o una inexistente, es un error y sale 1; descartar una ya
+descartada avisa por `stderr`, sale 0 y no pisa el motivo. El motivo y el momento quedan en `last_error`, delante del
+rechazo original; no cambia el esquema del nodo.
+
+- **Si era un movimiento de stock** (en LibraCommerce la carga inicial de existencias espera mientras haya uno en revisión):
+  después de descartar, `libraedge-nodo carga-inicial --forzar` realinea el stock del nodo con el del central. La fila local
+  del movimiento descartado queda, y el delta de la carga la compensa. `--forzar` pisa las existencias del nodo.
+- **En el central** la operación sigue en `manual_review` de su `sync_inbox`: conviene cerrarla también con
+  `libraedge-central revision descartar <operation_id> --por <quién> --motivo "<lo mismo>"`.
+
+
 Con `version_esquema=version_de_alembic` en el router, un nodo cuyo esquema no es el del central recibe **409** en push y pull con la versión que se espera, en vez de romper el espejo con una columna que no tiene. Las operaciones esperan en el outbox hasta que el nodo se actualice.
 
 El espejo admite clave primaria compuesta: `LIBRAEDGE_TABLAS_ESPEJO=party_roles:party_id+role`.

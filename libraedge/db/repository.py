@@ -11,6 +11,10 @@ def _hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
+class OperacionYaDescartada(ValueError):
+    """`descartar_operacion` sobre una operacion ya `discarded`: no es un error, es un reintento (ADR-024)."""
+
+
 class NodeRepository:
     """Node identity and outbox persistence, on SQLite or PostgreSQL.
 
@@ -446,6 +450,61 @@ class NodeRepository:
             (str(SyncOperationStatus.MANUAL_REVIEW),),
         ).fetchall()
         return tuple(self.get_operation(fila[0]) for fila in filas)
+
+    def listar_descartadas(self) -> tuple[OutboxOperation, ...]:
+        """Lo que soporte cerro con `descartar_operacion`, con su `last_error` (motivo, momento y rechazo original)."""
+        filas = self._conn.execute(
+            "SELECT operation_id FROM sync_outbox WHERE status = ? ORDER BY node_id, sequence",
+            (str(SyncOperationStatus.DISCARDED),),
+        ).fetchall()
+        return tuple(self.get_operation(fila[0]) for fila in filas)
+
+    def descartar_operacion(
+        self, operation_id: str, motivo: str, descartada_at: str | None = None
+    ) -> OutboxOperation:
+        """Cierra una operacion en `manual_review` sin mandarla nunca mas: pasa a `discarded` (ADR-024).
+
+        Es la salida de soporte para un rechazo del central que no se va a corregir. Sin ella la operacion quedaba en
+        `manual_review` para siempre, y en LibraCommerce un movimiento de stock ahi frena la carga inicial de stock.
+        No se borra: la fila queda como constancia, y no se pierde el motivo del central.
+
+        No suma columnas (tocar el esquema del nodo es otro riesgo): motivo y momento van en `last_error`, que pasa de
+        `<rechazo del central>` a `descartada el <ISO-8601 UTC>: <motivo> | rechazo del central: <rechazo>`.
+
+        - Motivo vacio o en blanco: `ValueError`, antes de tocar nada.
+        - No existe: `LookupError`.
+        - Esta en otro estado (`pending`, `sending`, `retryable_error`, `acknowledged`): `ValueError`. Una `pending` o
+          `retryable_error` todavia puede salir sola, y una `acknowledged` el central ya la tiene: descartarlas
+          falsearia el outbox.
+        - Ya estaba `discarded`: `OperacionYaDescartada` (un `ValueError`), sin tocar el motivo original, para que un
+          reintento no lo pise.
+
+        El `UPDATE` repite el estado en el `WHERE`: dos descartes a la vez no se pisan.
+        """
+        motivo = (motivo or "").strip()
+        if not motivo:
+            raise ValueError("hace falta un motivo para descartar una operacion")
+        operacion = self.get_operation(operation_id)
+        if operacion is None:
+            raise LookupError(f"no hay ninguna operacion {operation_id!r} en este nodo")
+        if operacion.status == SyncOperationStatus.DISCARDED:
+            raise OperacionYaDescartada(f"la operacion {operation_id!r} ya estaba descartada")
+        if operacion.status != SyncOperationStatus.MANUAL_REVIEW:
+            raise ValueError(
+                f"la operacion {operation_id!r} esta en estado {operacion.status!s}: solo se descarta una en "
+                f"{SyncOperationStatus.MANUAL_REVIEW!s}")
+        momento = descartada_at or datetime.now(UTC).isoformat()
+        cursor = self._escribir(
+            "UPDATE sync_outbox SET status = ?, last_error = ?, next_attempt_at = NULL"
+            " WHERE operation_id = ? AND status = ?",
+            (str(SyncOperationStatus.DISCARDED),
+             f"descartada el {momento}: {motivo} | rechazo del central: {operacion.last_error or '(sin detalle)'}",
+             operation_id, str(SyncOperationStatus.MANUAL_REVIEW)),
+        )
+        self._conn.commit()
+        if cursor is None or cursor.rowcount == 0:
+            raise ValueError(f"la operacion {operation_id!r} cambio de estado mientras se descartaba")
+        return self.get_operation(operation_id)
 
     def reenviar_operacion(self, operation_id: str) -> OutboxOperation | None:
         """Vuelve a poner en cola una operacion en revision manual.

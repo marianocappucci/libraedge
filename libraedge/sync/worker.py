@@ -81,6 +81,10 @@ class OutboxWorker:
         a revision. Al resolverlas, `reenviar_operacion` las devuelve a `pending`
         y salen otra vez por secuencia: hay que reenviar en el orden en que se
         crearon. Ver `DECISIONS.md`, ADR-020.
+
+        Una operacion `discarded` (v0.21, ADR-024: soporte la cerro con motivo
+        porque el rechazo no se corrige) no la ve este metodo: la cola es solo
+        `pending` y `retryable_error`.
         """
         # Antes de nada, rescatar lo que una corrida anterior dejó en `sending`
         # al morirse. Sin esto esas operaciones no las vuelve a mirar nadie: la

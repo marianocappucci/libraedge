@@ -89,6 +89,12 @@ name = "libraedge"
 # nodo cableado (libracommerce v0.71.0) y la sucursal de la PC del local en la demo.
 # 0.20.1 -> 0.20.2 (2026-10-22): sin cambios de codigo. Rearma los instaladores con ContaLibra en libracommerce v0.72.0:
 # en el nodo, el deposito por defecto es el de su sucursal (migracion 0009).
+# 0.20.x -> 0.21.0 (2026-10-22, ADR-024): `libraedge-nodo revision descartar <operation_id> --motivo "..."`. Una operacion que
+# el central rechazo quedaba en `manual_review` del outbox para siempre (solo habia `listar` y `reenviar`), y en LibraCommerce
+# un movimiento de stock ahi frena la carga inicial de existencias. Ahora pasa a `discarded` (terminal): el worker no la
+# manda, no cuenta como pendiente y `listar --todas` la muestra con el motivo. Minor: suma un estado, un subcomando, un flag
+# y el campo `estado` en cada linea de `revision listar`; no toca el esquema (motivo y momento van en `last_error`), asi que
+# la version de esquema que el nodo declara no cambia.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
