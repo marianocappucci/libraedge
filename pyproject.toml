@@ -87,6 +87,8 @@ name = "libraedge"
 # suman la fila de la ruta en su matriz de roles (PUBLICA, secreto del nodo).
 # 0.20.0 -> 0.20.1 (2026-10-22): sin cambios de codigo. Rearma los instaladores con ContaLibra en main con el stock del
 # nodo cableado (libracommerce v0.71.0) y la sucursal de la PC del local en la demo.
+# 0.20.1 -> 0.20.2 (2026-10-22): sin cambios de codigo. Rearma los instaladores con ContaLibra en libracommerce v0.72.0:
+# en el nodo, el deposito por defecto es el de su sucursal (migracion 0009).
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
