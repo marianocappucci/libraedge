@@ -26,6 +26,7 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
 
 - **`cli.py`** (`libraedge-nodo`, console script) — arma el nodo:
   `construir_nodo`, `tablas_espejo`, `main`. Es la entrada operativa.
+  `revision listar|reenviar|descartar` es la revisión manual del outbox del nodo (ADR-024).
 - **`central.py`** (`libraedge-central`) — las herramientas del central: `nodo` (aprovisionamiento)
   y `revision`.
 - **`aprovisionamiento.py`** (`Aprovisionamiento`, `publicar`, `registrar`, `dar_de_baja`, `estado`,

@@ -53,6 +53,9 @@ class SyncOperationStatus(StrEnum):
     ACKNOWLEDGED = "acknowledged"
     RETRYABLE_ERROR = "retryable_error"
     MANUAL_REVIEW = "manual_review"
+    #: Terminal (v0.21, ADR-024): alguien decidio que el rechazo del central no se corrige y la cerro con motivo. No
+    #: vuelve a salir, no cuenta como pendiente y no se puede reenviar. Es solo del outbox del nodo: no suma columnas.
+    DISCARDED = "discarded"
 
 
 class InboxStatus(StrEnum):
