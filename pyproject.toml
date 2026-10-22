@@ -85,6 +85,8 @@ name = "libraedge"
 # `Aprovisionamiento(validar_registro=)`: con problemas en la instancia (depositos sin sucursal) vincular contesta 409.
 # Minor: suma una ruta, un campo del estado y dos costuras opcionales; no toca el esquema ni lo que habia. Los productos
 # suman la fila de la ruta en su matriz de roles (PUBLICA, secreto del nodo).
+# 0.20.0 -> 0.20.1 (2026-10-22): sin cambios de codigo. Rearma los instaladores con ContaLibra en main con el stock del
+# nodo cableado (libracommerce v0.71.0) y la sucursal de la PC del local en la demo.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6
