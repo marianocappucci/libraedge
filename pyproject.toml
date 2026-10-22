@@ -151,7 +151,8 @@ dev = [
     # v1.186.2 -> v1.187.0 (2026-10-20): estado del sistema para la barra del pie (ADR-075). Sin migracion.
     # v1.187.0 -> v1.189.0 (2026-10-21): caja del nodo (ADR-076), cerrar_turno_con y altas de clientes en un nodo (ADR-077); los tests de libraedge que importan libracore usan el motor vigente. Sin migracion.
     # v1.189.0 -> v1.190.0 (2026-10-22): libracore-unir-bases para unir la base core dentro de la del dominio (ADR-078). Sin migracion.
-    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.190.0",
+    # v1.190.0 -> v1.190.1 (2026-10-22): LibraCargo y LibraClub en _UNA_SOLA_BASE (ADR-078). Sin migracion.
+    "libracore @ git+https://github.com/marianocappucci/libracore.git@v1.190.1",
 ]
 server = ["fastapi>=0.115", "uvicorn>=0.34", "httpx2>=0.1"]
 # El icono de bandeja, que solo se instala en la PC del cliente. Va aparte
