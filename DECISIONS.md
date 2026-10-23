@@ -1340,3 +1340,97 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   no revierte lo que la operación hizo en el nodo (la venta, el movimiento de stock): sólo la saca de la cola de envío; (2)
   el momento del descarte es texto en `last_error`, no una columna; (3) no hay "des-descartar": si fue un error, la
   operación se vuelve a encolar con un `UPDATE` manual o se rehace la operación.
+
+## ADR-025 — El ticket de ARCA por servicio (`wsfe` y `wscpe`), y LibraCargo y LibraClub en el instalador y la app de escritorio
+
+- Estado: propuesta
+- Fecha: 2026-10-23
+- Contexto: es el PR 6 del plan «LibraCargo y LibraClub en la versión de escritorio»
+  (`wiki/analyses/libraedge-libracargo-libraclub-2026-10-22.md`). Decisión del humano (2026-10-22): LibraCargo emite sus CPE
+  y sus facturas desde el nodo, y sin internet **quedan en cola y se emiten solas al volver**. libracore v1.191.0 (ADR-079)
+  puso del lado del motor la cola de comprobantes (`libracore.cola_arca`) y le enseñó a `ta_para_el_nodo` a prestar el
+  ticket de dos servicios: `wsfe` (la facturación, con el par de `arca_config`) y `wscpe` (la carta de porte, con el par de
+  `arca_credenciales_servicio`). Faltaba el transporte: `POST /sync/v1/ticket-arca` (ADR-009) no sabía de servicios y la
+  caché del cliente era por emisor. ARCA da **un ticket por certificado y por servicio**, así que servirle a quien pide
+  `wscpe` el de `wsfe` que ya estaba guardado lo hace llamar a ARCA con un ticket que no es el suyo (y ARCA contesta con un
+  error de autenticación que no explica nada). Además LibraCargo y LibraClub son de **una sola base** desde libracore
+  v1.190.1 (ADR-078, `_UNA_SOLA_BASE`): ya no existe `libraclub_core`.
+
+### Parte A — El ticket por servicio
+
+- Decisión:
+  1. **`POST /sync/v1/ticket-arca` recibe `servicio`** (opcional; `null` o ausente es `wsfe`, que es lo que mandan los nodos
+     de v0.21 y anteriores). Se normaliza a minúsculas y tiene que ser un nombre de servicio (`[a-z][a-z0-9_]{0,31}`):
+     cualquier otra cosa es 422 `invalid servicio` **antes** de tocar el prestador. LibraEdge no sabe qué servicios existen;
+     el que decide cuáles se prestan es el producto (el motor tiene `SERVICIOS_PRESTABLES = ("wsfe", "wscpe")`).
+  2. **El prestador recibe `servicio=`** si su firma lo acepta (un parámetro `servicio` o `**kwargs`, que se mira con
+     `inspect.signature` al montar el router). El producto central lo cablea como
+     `lambda emisor_id, servicio="wsfe": ta_para_el_nodo(emisor_id, servicio=servicio, empresa=EMPRESA_ARCA)`
+     (`EMPRESA_ARCA = "agencia"` en LibraCargo; en un producto sin CPE alcanza `prestar_ticket=ta_para_el_nodo`, y pedirle
+     `wscpe` es un `ValueError` porque falta la `empresa`). **Compatible hacia atrás**: un prestador de antes,
+     `prestar_ticket(emisor_id)`, se llama exactamente como antes cuando el servicio es `wsfe`; con cualquier otro servicio
+     la ruta contesta **501 `ticket_no_prestado`** sin llamarlo (pasárselo daría el ticket de `wsfe` con otro nombre).
+  3. **Las respuestas.** `ValueError` del prestador pidiendo un servicio que no es `wsfe` («no se presta»): **501
+     `ticket_no_prestado`**. `NodoSinArca` (o cualquier excepción con `detalle()`): **422**, como hoy. `ValueError` o
+     `LookupError` pidiendo `wsfe` (un emisor que no existe): 422 `ticket_no_disponible`, como en ADR-009 (el motor no levanta
+     `ValueError` por `wsfe`, y cambiarle el mapeo a quien ya lo usaba no aporta nada). Cualquier otra: 502. Nunca se usa el
+     texto de la excepción ni se loguea el ticket; el log dice el servicio.
+  4. **El ticket dice de qué servicio es.** La respuesta lleva `servicio` (los de `wsfe` de un prestador de antes lo
+     reciben del router) y, si el prestador lo trae, `ambiente`: el emisor de CPE llama a ARCA con **ese** ambiente. Si el
+     prestador devuelve el ticket de **otro** servicio, o uno de `wscpe` sin decir su servicio, es **502
+     `ticket_de_otro_servicio`**: no se presta.
+  5. **La caché de `ClienteDeTicket` es por `(emisor_id, servicio)`**, y `olvidar(emisor_id=None, servicio="wsfe")` también;
+     cada servicio vence por su cuenta. Sin `servicio`, `pedir_ticket`, `pedir_ticket_async` y `olvidar` son los de siempre
+     (`wsfe`). El pedido del nodo lleva `servicio` en el cuerpo. **El cliente comprueba qué ticket volvió**: sin `servicio`
+     es de `wsfe` (un central anterior a v0.22 ignora el pedido y no lo dice); si se pidió otro, `TicketRechazado`
+     `ticket_de_otro_servicio` y **no se guarda** (guardarlo serviría el equivocado hasta que venza). El motor repite la
+     comprobación en `ticket_prestado`: dos cinturones.
+  6. **`ClienteDeTicket.para_servicio(sin_conexion=)`** es la `obtener_ta(arca, servicio="wsfe")` que esperan
+     `libracore.nodo_offline.ticket_prestado` y `libracore.cola_arca.ColaDeArca`: pide el ticket de `arca["id"]` y del servicio
+     que se le diga (`ticket_prestado` la llama `obtener_ta(arca)` para `wsfe` y `obtener_ta(arca, servicio="wscpe")` para los
+     demás). `para_numerador` se conserva y es lo mismo (sirve con un solo parámetro).
+  7. **Los errores se traducen como hoy.** `SinConexionConElCentral` y el 409 de esquema → la `SinConexion` del producto
+     (corte: se reintenta al volver); `TicketRechazado` → rechazo (`NodoSinArca` / `RechazoDelCentral`). `TicketRechazado`
+     ahora lleva `rechazo_del_central = True`, la marca con la que el motor (`es_rechazo`) distingue un rechazo de un corte:
+     aunque el producto no la traduzca a mano (como hacía `obtener_ta_del_central` de VentaLibra), `ticket_prestado` la
+     clasifica bien. Pero `ticket_prestado` reemplaza el mensaje de un rechazo que no es `NodoSinArca` por uno genérico
+     («nodo revocado o sin credencial»), y se perdería el motivo del central («no tiene el certificado de wscpe», «actualizá
+     LibraEdge»): por eso `para_servicio(sin_conexion=, rechazo=)` acepta la excepción del producto para el rechazo
+     (`RechazoDelCentral`) y la levanta con el mensaje del central. No cambia nada de lo que ya andaba.
+  8. **La subida del estado de la cola: la operación `cola.pedido`, y su aplicador es del producto.**
+     `ColaDeArca.al_cambiar(payload)` (con `payload = libracore.cola_arca.payload_de_pedido(pedido)`) encola una operación del
+     outbox del nodo; el central la aplica con `libracore.cola_arca.aplicar_pedido_del_nodo(payload, conn=conn)`. No va en
+     LibraEdge: el aplicador necesita `libracore` y LibraEdge no lo importa en runtime (el pin es sólo para tests), y los que
+     tienen el `Despachador` **y** el motor juntos son los productos (en la familia, `libracommerce.erp.offline.registrar_en`
+     hace eso con las operaciones de venta, pero LibraCargo no usa LibraCommerce). LibraEdge no cambia: una operación es un
+     `operation_type` más y el `Despachador` ya registra por `(tipo, versión)`. **El contrato**, para LibraCargo (PR 9) y
+     LibraClub (PR 11):
+     - *Nodo, al encolar:* `OutboxOperation(operation_id=f"{node_id}:{seq}", node_id=node_id, sequence=seq,
+       operation_type="cola.pedido", aggregate_type="cola_arca",
+       aggregate_id=f"{node_id}:cola_arca:{payload['id_en_el_nodo']}", occurred_at=<UTC ISO>, schema_version=1,
+       payload=payload)`, con `seq = repo.next_sequence()` y `NodeRepository(conn).enqueue_operation(op)`. `al_cambiar` corre
+       **después de confirmar** el cambio de la cola (ADR-079, punto 8) y no tiene transacción propia: abre la suya, y si
+       falla se registra y no deshace el comprobante (ya está emitido en ARCA). El outbox sube en orden causal (ADR-020), así
+       que la `revision` N llega antes que la N+1; si llegara desordenada, `aplicar_pedido_del_nodo` sólo pisa con una
+       `revision` mayor. Un `payload` tiene que ser JSON estricto (`json.dumps` lo serializa: el outbox usa
+       `sort_keys=True`).
+     - *Central, al aplicar:* `despachador.registrar("cola.pedido", 1, lambda conn, op: aplicar_pedido_del_nodo(op.payload,
+       conn=conn))`. La `conn` del manejador es la del router (`libracore.db.core.get_connection`): en LibraCargo y LibraClub
+       dominio y motor son la misma base, así que la copia de consulta entra en la misma transacción que el `sync_inbox`.
+       Un `ValueError` (versión de payload que no entiende, o `origen_instancia` vacío) deja la operación en revisión
+       manual, que es lo que tiene que pasar. No suma ninguna ruta ni fila a la matriz de roles: va por `POST /sync/v1/push`.
+- Descartadas (parte A):
+  - **Llamar siempre al prestador con `servicio=` y atrapar el `TypeError` de los viejos**: un `TypeError` de adentro del
+    prestador se leería como «prestador viejo». Se mira la firma.
+  - **Pasarle `servicio` a un prestador que no lo acepta y confiar en el ticket que devuelva**: sin la costura no hay forma de
+    que ese prestador dé el de `wscpe`; contestarle 501 es lo honesto.
+  - **Que la lista de servicios se valide en LibraEdge** (`wsfe`, `wscpe`): cada servicio nuevo obligaría a publicar una versión
+    de LibraEdge; el motor ya tiene su lista cerrada (`SERVICIOS_PRESTABLES`) y es quien tiene que decidir qué se presta.
+  - **`olvidar(emisor_id)` que borre todos los servicios del emisor**: cambia lo que hacía; quien quiere olvidar `wscpe` lo dice.
+  - **Registrar el aplicador de `cola.pedido` en LibraEdge**: lo ataría a `libracore` (ver 8).
+- Consecuencias (parte A): **MINOR (v0.22.0)**. Sin cambio de esquema del nodo ni del central, y sin ruta nueva (la matriz de
+  roles de los productos no cambia: `POST /sync/v1/ticket-arca` ya es «PÚBLICA, secreto del nodo»). Nodo v0.21 con central
+  v0.22: el nodo no manda `servicio`, es `wsfe`, todo igual. Nodo v0.22 con central v0.21: `wsfe` sigue andando (el central
+  ignora el campo); `wscpe` es un `TicketRechazado` `ticket_de_otro_servicio` con «actualizá LibraEdge en el central» (el motor
+  lo deja `esperando` con ese motivo si el producto pasó `rechazo=`, ADR-079): **se despliega primero el central**, como en todo el plan (motores → central →
+  nodos). El ticket sigue siendo una credencial: no se loguea, no va en ningún mensaje, `Cache-Control: no-store`, sólo en memoria.
