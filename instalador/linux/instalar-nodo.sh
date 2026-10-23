@@ -6,7 +6,7 @@
 #
 #     ... | sudo bash -s <producto> /ruta/carga-nodo.json        (con el archivo de carga: soporte)
 #
-# <producto> es restolibra, ventalibra o contalibra. La direccion y el codigo los
+# <producto> es restolibra, ventalibra, contalibra, libracargo o libraclub. La direccion y el codigo los
 # muestra el sistema en «Sucursal sin internet» al dar de alta el nodo (ADR-014):
 # el codigo vale 15 minutos y una sola vez, y se canjea por la carga del nodo por
 # https. El secreto del nodo no pasa nunca por la linea de comandos; el codigo,
@@ -26,7 +26,7 @@
 set -euo pipefail
 
 REPO="https://github.com/marianocappucci/libraedge"
-PRODUCTOS="restolibra ventalibra contalibra"
+PRODUCTOS="restolibra ventalibra contalibra libracargo libraclub"
 
 morir() { echo "ERROR: $*" >&2; exit 1; }
 paso() { echo; echo "== $*"; }

@@ -1,7 +1,7 @@
 # Compila el instalador del nodo de cada producto, lo PRUEBA en Windows y lo
 # publica en el Release del tag (ADR-010).
 #
-# - Con un tag vX.Y.Z: arma, prueba y publica los tres instaladores en el
+# - Con un tag vX.Y.Z: arma, prueba y publica los instaladores de cada producto en el
 #   Release de ese tag, con nombres fijos (libraedge-nodo-<producto>.exe), asi
 #   el link de librasuite.com.ar y el de la pantalla del central no cambian:
 #   https://github.com/marianocappucci/libraedge/releases/latest/download/libraedge-nodo-<producto>.exe
@@ -32,7 +32,7 @@
 # reinstalar encima conserva SECRET_KEY, desinstalar conserva los datos y ningun
 # secreto queda en los logs.
 #
-# La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de los tres productos
+# La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de cada producto
 # en Windows y en Ubuntu 22.04 (la glibc y el WebKitGTK 4.1 mas viejos que se soportan: el mismo binario anda en
 # 24.04 y 26.04), con la compilacion de Rust en cache. Va dentro del .exe y del .deb; se prueba que arranca y
 # carga el producto local (xvfb-run en Ubuntu; en Windows, un arranque cronometrado con el proceso vivo y el
@@ -120,11 +120,11 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: escritorio
         run: cargo test --locked
-      - name: Compilar la app de los tres productos
+      - name: Compilar la app de cada producto
         run: |
           v=0.0.0
           if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
-          python escritorio/armar.py --version "$v" --salida _escritorio restolibra ventalibra contalibra
+          python escritorio/armar.py --version "$v" --salida _escritorio restolibra ventalibra contalibra libracargo libraclub
           ls -l _escritorio
       - uses: actions/upload-artifact@v4
         with:
@@ -139,7 +139,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -151,7 +151,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # PostgreSQL, Python embebido, NSSM y VC++: lo mismo para los tres.
+      # PostgreSQL, Python embebido, NSSM y VC++: lo mismo para todos.
       - uses: actions/cache@v4
         with:
           path: instalador/paquete/.descargas
@@ -181,7 +181,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -245,7 +245,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
         ubuntu: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     env:
       DEB: libraedge-nodo-${{ matrix.producto }}_amd64.deb
@@ -343,7 +343,7 @@ jobs:
           done
       - name: Una carga de otro producto se rechaza sin tocar nada
         run: |
-          otro=$(for p in restolibra ventalibra contalibra; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
+          otro=$(for p in restolibra ventalibra contalibra libracargo libraclub; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
           jq --arg p "$otro" '.producto = $p' instalador/carga-de-prueba.json > "$RUNNER_TEMP/carga-otra.json"
           set +e
           sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga-otra.json" > "$RUNNER_TEMP/instalar-otra.log" 2>&1
@@ -758,7 +758,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
     defaults:
       run:
         shell: pwsh

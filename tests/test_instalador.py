@@ -51,8 +51,25 @@ def _carga(producto="ventalibra", variables=None, **cambios):
 # ── las definiciones del repo ───────────────────────────────────────────────
 
 
-def test_estan_los_tres_productos_de_la_fase_1():
-    assert PRODUCTOS == ["contalibra", "restolibra", "ventalibra"]
+#: Las cadenas de migraciones de cada producto, en el orden de `configure(migraciones=...)` de su
+#: `scripts/panel_admin.py`: el nodo corre las mismas que el central.
+CADENAS_COMUNES = ["libracore-migrar", "libraauth-migrar", "libracommerce-migrar", "alembic"]
+CADENAS = {
+    "contalibra": CADENAS_COMUNES,
+    "restolibra": CADENAS_COMUNES,
+    "ventalibra": CADENAS_COMUNES,
+    # LibraCargo no usa LibraCommerce: tres cadenas. LibraClub (el buffet es de LibraCommerce) corre libracommerce
+    # ANTES de libraauth: es el orden que su panel_admin.py midio sobre una base vacia.
+    "libracargo": ["libracore-migrar", "libraauth-migrar", "alembic"],
+    "libraclub": ["libracore-migrar", "libracommerce-migrar", "libraauth-migrar", "alembic"],
+}
+#: Los que llegaron con LibraCargo y LibraClub (v0.22): de una sola base desde libracore v1.190.1.
+UNA_SOLA_BASE_NUEVA = ["libracargo", "libraclub"]
+
+
+def test_estan_los_productos_con_nodo():
+    assert PRODUCTOS == ["contalibra", "libracargo", "libraclub", "restolibra", "ventalibra"]
+    assert sorted(CADENAS) == PRODUCTOS
 
 
 @pytest.mark.parametrize("producto", PRODUCTOS)
@@ -62,9 +79,8 @@ def test_cada_definicion_del_repo_es_valida(producto):
     assert definicion.prefijo_variables == producto.upper()
     assert definicion.asgi == "app.asgi:app"
     assert definicion.salud == "/health"
-    # Las cuatro cadenas del central (`configure(migraciones=...)` de scripts/panel_admin.py), en orden.
-    assert [m[0] for m in definicion.migraciones] == [
-        "libracore-migrar", "libraauth-migrar", "libracommerce-migrar", "alembic"]
+    # Las cadenas del central (`configure(migraciones=...)` de scripts/panel_admin.py), en orden.
+    assert [m[0] for m in definicion.migraciones] == CADENAS[producto]
     assert all(m[m.index("--prefijo") + 1] == producto for m in definicion.migraciones if "--prefijo" in m)
     # Una base, con las dos variables que escribe el alta de libracore (dominio y core).
     assert [b.nombre for b in definicion.bases] == [producto]
@@ -78,7 +94,8 @@ def test_cada_definicion_del_repo_es_valida(producto):
 
 def test_la_base_de_auth_de_cada_producto():
     auth = {p: ins.leer_definicion(str(CARPETA / "productos" / f"{p}.json")).base_auth for p in PRODUCTOS}
-    assert auth == {"contalibra": "dominio", "restolibra": "dominio", "ventalibra": "core"}
+    assert auth == {"contalibra": "dominio", "libracargo": "dominio", "libraclub": "dominio",
+                    "restolibra": "dominio", "ventalibra": "core"}
 
 
 def test_el_iss_tiene_la_misma_tabla_que_las_definiciones():
@@ -226,13 +243,42 @@ def test_una_definicion_mal_escrita_no_pasa(cambios, error):
         ins.definicion_desde_dict(_definicion(**cambios))
 
 
+@pytest.mark.parametrize("producto", UNA_SOLA_BASE_NUEVA)
+def test_el_nodo_de_libracargo_y_el_de_libraclub_llevan_una_sola_base(producto):
+    """Desde libracore v1.190.1 (`_UNA_SOLA_BASE`) no existe `<producto>_core`: dominio y motor son la misma base, con
+    las dos variables apuntando a ella. La base del nodo es esa, y no hay una segunda."""
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / f"{producto}.json"))
+    assert [(b.nombre, b.nodo) for b in definicion.bases] == [(producto, True)]
+    assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL",
+                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL")
+    assert not any("_core" in b.nombre for b in definicion.bases)
+    assert definicion.plan()["bases"] == [{"nombre": producto, "nodo": True, "variables": [
+        f"{producto.upper()}_DATABASE_URL", f"{producto.upper()}_LIBRACORE_DATABASE_URL"]}]
+    # Y el entorno del nodo apunta las dos variables, y la del outbox, a la misma URL.
+    entorno = ins.armar_entorno(definicion, ins.carga_desde_dict(_carga(producto), producto),
+                                clave_pg="x", estado="e", data_dir="d")
+    urls = {entorno[v] for v in ("LIBRAEDGE_DATABASE_URL", f"{producto.upper()}_DATABASE_URL",
+                                 f"{producto.upper()}_LIBRACORE_DATABASE_URL")}
+    assert len(urls) == 1 and urls.pop().endswith(f"/{producto}")
+    # Sin existencias que traer: si el producto necesita una carga inicial, la declara en `variables`.
+    assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
+
+
+def test_el_instalador_no_declara_las_bases_core_que_ya_no_existen():
+    """`libraclub_core` y `libracargo_core` se unieron al dominio (libracore-unir-bases): ninguna definicion las usa."""
+    for producto in PRODUCTOS:
+        texto = (CARPETA / "productos" / f"{producto}.json").read_text(encoding="utf-8")
+        assert "libraclub_core" not in texto and "libracargo_core" not in texto, producto
+
+
 def test_varias_bases_y_una_marcada_para_el_nodo():
+    """El formato sigue admitiendo varias bases (un producto de otro armado): una, y sólo una, es la del nodo."""
     definicion = ins.definicion_desde_dict(_definicion(bases=[
-        {"nombre": "libraclub", "variables": ["LIBRACLUB_DATABASE_URL"]},
-        {"nombre": "libraclub_core", "variables": ["LIBRACLUB_LIBRACORE_DATABASE_URL"], "nodo": True},
-    ], producto="libraclub", prefijo_variables="LIBRACLUB", base_auth=None, migraciones=[["alembic", "upgrade"]]))
-    assert definicion.base_del_nodo.nombre == "libraclub_core"
-    assert definicion.plan()["bases"][0] == {"nombre": "libraclub", "variables": ["LIBRACLUB_DATABASE_URL"],
+        {"nombre": "ejemplo", "variables": ["EJEMPLO_DATABASE_URL"]},
+        {"nombre": "ejemplo_aparte", "variables": ["EJEMPLO_APARTE_DATABASE_URL"], "nodo": True},
+    ], producto="ejemplo", prefijo_variables="EJEMPLO", base_auth=None, migraciones=[["alembic", "upgrade"]]))
+    assert definicion.base_del_nodo.nombre == "ejemplo_aparte"
+    assert definicion.plan()["bases"][0] == {"nombre": "ejemplo", "variables": ["EJEMPLO_DATABASE_URL"],
                                              "nodo": False}
 
 
@@ -355,7 +401,7 @@ def test_el_entorno_completo_del_nodo():
 
 
 @pytest.mark.parametrize("producto", PRODUCTOS)
-def test_el_nodo_apaga_la_cookie_secure_en_los_tres_productos(producto):
+def test_el_nodo_apaga_la_cookie_secure_en_cada_producto(producto):
     """El nodo sirve el producto por http en la LAN: la cookie de sesion no puede salir `Secure` (libraauth ADR-026).
     Es la misma funcion para Windows y Linux, asi que alcanza con armar el entorno de cada producto."""
     definicion = ins.leer_definicion(str(CARPETA / "productos" / f"{producto}.json"))

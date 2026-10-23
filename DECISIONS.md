@@ -1434,3 +1434,76 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   ignora el campo); `wscpe` es un `TicketRechazado` `ticket_de_otro_servicio` con «actualizá LibraEdge en el central» (el motor
   lo deja `esperando` con ese motivo si el producto pasó `rechazo=`, ADR-079): **se despliega primero el central**, como en todo el plan (motores → central →
   nodos). El ticket sigue siendo una credencial: no se loguea, no va en ningún mensaje, `Cache-Control: no-store`, sólo en memoria.
+
+### Parte B — LibraCargo y LibraClub en el instalador y en la app de escritorio
+
+- Decisión:
+  1. **Una definición por producto**, como ADR-010: `instalador/productos/libracargo.json` y `libraclub.json` (formato
+     `libraedge-producto/1`), con `app_id` nuevos y fijos (los del nodo, y los de puesto en `puesto.iss`), `asgi`
+     `app.asgi:app`, puerto 8000, salud `/health` (los dos la sirven en `main`), `base_auth: dominio` y los mismos `extras`. Las
+     filas de `nodo.iss` y `puesto.iss`, el `PRODUCTOS` de `instalar-nodo.sh` y las cinco matrices del workflow
+     `publicar-instalador.yml` (más la compilación de la app) suman los dos productos. **La app de escritorio (Tauri) no
+     cambia**: `build.rs` toma nombre, puerto, salud, iconos y marca de la definición, así que alcanza con la definición y los
+     archivos de marca.
+  2. **Una sola base, y sólo una.** Cada definición tiene **una** entrada en `bases`, la del nodo (`nodo: true`), con las dos
+     variables que escribe el alta de libracore, `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL`, **con la misma URL**: es lo
+     que ya hace VentaLibra y lo que aceptan los dos productos (LibraCargo exige que, si la variable está, apunte a la del
+     dominio; LibraClub la trata como la del dominio si es la misma). No hay `libraclub_core` ni `libracargo_core`
+     (`libracore-unir-bases`, ADR-078): un test lo ata y el que declaraba `libraclub_core` pasó a usar un producto de juguete,
+     porque lo que prueba es que el formato admite varias bases, no que LibraClub las tenga.
+  3. **Las migraciones son las del `scripts/panel_admin.py` de cada producto, en su orden**, y el nodo corre las mismas que el
+     central. LibraCargo: `libracore-migrar`, `libraauth-migrar --base dominio` y `alembic` (no usa LibraCommerce). LibraClub:
+     `libracore-migrar`, **`libracommerce-migrar` antes de `libraauth-migrar`** (el buffet es de LibraCommerce; es el orden que su
+     `panel_admin.py` midió sobre una base vacía) y `alembic` (tabla `alembic_version_libraclub`). Por eso
+     `test_cada_definicion_del_repo_es_valida` ya no supone las cuatro cadenas de siempre: fija la de cada producto.
+  4. **La marca** de cada uno son los dos SVG de `marcas/` de libra-ui tal cual (`main`, `9af3938`); los `.ico` y los `.png` salen
+     de `armar_icono.py` (Chrome headless), sólo para los dos productos nuevos. Las marcas de los otros tres son de la versión
+     anterior de libra-ui (planas, sin degradé) y no se regeneraron: queda para quien toque esos productos.
+  5. **Sin `LIBRAEDGE_CARGA_INICIAL`** (la de existencias de LibraCommerce, ADR-023): ninguno de los dos trae stock por sucursal. Si
+     el producto necesita una carga inicial propia (las órdenes y la caja de LibraCargo; el buffet de LibraClub), la declara en
+     `variables` de su definición. `test_carga_inicial` distingue los productos con y sin existencias.
+- Lo que tiene que exponer cada producto (**PR 9 de LibraCargo, PR 11 de LibraClub**) para que el nodo sincronice: LibraEdge no
+  depende de nada más, pero **hoy ninguno de los dos tiene** `app/offline.py`, `Aprovisionamiento` ni la dependencia de
+  `libraedge` (ni LibraCargo ni LibraClub la tienen en su `pyproject.toml`; en `develop`, LibraCargo pinea libracore v1.191.0 y
+  LibraClub v1.190.1). El modelo es VentaLibra (`app/offline.py` y `app/routers/sincronizacion_offline.py`):
+  1. **`pyproject.toml`/`uv.lock`:** `libraedge @ git+...@v0.22.0` y libracore v1.191.0 (`cola_arca`; LibraClub todavía está en
+     v1.190.1). El instalador empaqueta lo que dice el `uv.lock` del producto.
+  2. **`app/offline.py`** con `nodo()` (`libraedge.identidad.nodo_actual("LIBRACARGO")`), `en_linea()` (`libracore.nodo_offline.
+     esta_en_linea`), `CONEXION`, y **`aprovisionamiento = Aprovisionamiento(prefijo=..., tablas_de_referencia=..., listar_
+     sucursales=..., verificar_alta=sin_guarda, conectar=...)`** (`LIBRAEDGE_APROVISIONAMIENTO=app.offline:aprovisionamiento`).
+     `conectar` abre `url_de_instancia("<producto>", requerida=True)` (una sola base). `tablas_de_referencia` es el reparto de
+     autoridad: lo que el **nodo** genera (en LibraCargo, órdenes, caja, asientos, facturas y CPE; la cola `cola_arca` es suya y
+     no se espeja) **no** se publica. Nunca se espeja `arca_credenciales_servicio` ni el almacén de claves: el ticket lo presta el
+     central.
+  3. **`app/routers/sincronizacion_offline.py`** con el `despachador` (`LIBRAEDGE_DESPACHADOR=app.routers.sincronizacion_
+     offline:despachador`; las operaciones `cargo.*` / `club.*` de cada producto **y `cola.pedido` v1**) y `router =
+     create_sync_router(get_connection, despachador=..., version_esquema=version_de_alembic, prestar_ticket=...)`. En LibraCargo,
+     `prestar_ticket=lambda emisor_id, servicio="wsfe": ta_para_el_nodo(emisor_id, servicio=servicio, empresa="agencia")`; en
+     LibraClub, `ta_para_el_nodo` a secas (no hay `wscpe`: pedirlo es 501).
+  4. **El montaje en `app/main.py`:** ese router, `create_nodos_router(aprovisionamiento, get_connection)` (la pantalla «Sucursal
+     sin internet») y `create_canje_router(...)` (el código de vinculación), más las filas de la matriz de roles: «PÚBLICA, secreto
+     del nodo» para `libraedge.sync.api.RUTAS_AUTENTICADAS_POR_NODO` y ADMIN para `/api/nodos-offline*`. **Sin esto el instalador
+     instala, pero no hay dónde obtener el código para vincular**: por eso publicar el instalador de estos dos productos antes de
+     sus PR 9 y 11 no expone nada.
+  5. **El cliente del ticket:** `cliente_desde_entorno(version_esquema=...)` y `obtener_ta = cliente.para_servicio(
+     sin_conexion=SinConexion, rechazo=RechazoDelCentral)` para `ColaDeArca` y `numerador_con_ta`. **No** el envoltorio de un solo
+     parámetro de `obtener_ta_del_central` de VentaLibra: la cola llama `obtener_ta(arca, servicio="wscpe")`.
+  6. **La carga inicial,** si hace falta: `LIBRAEDGE_CARGA_INICIAL=modulo:funcion` en `variables` de la definición (un cambio de
+     una línea en este repo) y `create_sync_router(..., carga_inicial=)`, que es síncrona y devuelve un `dict` de una sola
+     respuesta: con ≈4.100 órdenes y movimientos (Suitrans) puede hacer falta paginarla (abierto, ver el plan).
+- Descartadas (parte B):
+  - **Dejar a los dos productos fuera de las matrices hasta sus PR 9 y 11**: el CI del instalador arma el paquete desde `main` del
+    producto, instala, migra, arranca, abre la app y vincula contra un central de prueba (`tests/central_de_prueba.py`, un
+    producto de juguete), nada de lo cual necesita `app/offline.py`. Sumarlos ahora da la primera medición real de las migraciones
+    de LibraClub y de LibraCargo sobre PostgreSQL embebido en Windows, que no se puede hacer a mano acá.
+  - **`continue-on-error` para los nuevos**: un instalador que no pasa no se publica, y eso tiene que verse en rojo.
+  - **Una sola variable de base** (sin `<P>_LIBRACORE_DATABASE_URL`): hoy andaría con los dos productos en `main`, pero el alta de
+    libracore sigue escribiendo las dos y un `main` anterior a libracore v1.190.1 exige la del core. Se puede sacar cuando los
+    productos dejen de leerla (abierto).
+  - **Regenerar los `.ico` de los otros tres productos** con las marcas nuevas: cambia archivos de tres productos que no se
+    tocan en este PR.
+- Consecuencias (parte B): el Release de v0.22.0 trae `libraedge-nodo-libracargo` y `-libraclub` (`.exe`, `.deb`) y los de puesto,
+  y `instalar-nodo.sh` los acepta. **No se probó acá** (Windows, Inno Setup, runners de Ubuntu, Rust): lo que se corrió fueron los
+  tests de las definiciones, de las filas del `.iss` y del workflow y de los iconos; la primera corrida de `Publicar instalador` en
+  el PR es la medición. Mientras LibraCargo y LibraClub no cumplan el contrato de arriba, un nodo instalado es sólo el producto web
+  sobre una PC local, sin nada que sincronizar.

@@ -49,7 +49,7 @@
 ; codigos del sistema.
 
 #ifndef Producto
-  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra nodo.iss
+  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra|libracargo|libraclub nodo.iss
 #endif
 
 #if Producto == "restolibra"
@@ -61,6 +61,12 @@
 #elif Producto == "contalibra"
   #define NombreProducto "ContaLibra"
   #define AppIdProducto  "4BE6AB1D-4F2C-4255-9D16-C119C22D1DFC"
+#elif Producto == "libracargo"
+  #define NombreProducto "LibraCargo"
+  #define AppIdProducto  "A5239B4A-E3B6-4B8F-B075-2A40970AFDAF"
+#elif Producto == "libraclub"
+  #define NombreProducto "LibraClub"
+  #define AppIdProducto  "ED397C8B-C399-4EF8-B829-52A89FAC3251"
 #else
   #error Producto desconocido: agregar productos\<producto>.json y su fila en esta tabla
 #endif

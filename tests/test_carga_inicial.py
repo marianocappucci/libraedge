@@ -746,7 +746,12 @@ def test_el_servicio_con_la_variable_mal_puesta_arranca_igual(nodo_en_postgres, 
 # ── El instalador ───────────────────────────────────────────────────────────
 
 INSTALADOR = Path(__file__).resolve().parent.parent / "instalador"
-PRODUCTOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
+TODOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
+#: Los de LibraCommerce con existencias por sucursal: traen la carga inicial de stock al vincular (ADR-023).
+PRODUCTOS = ["contalibra", "restolibra", "ventalibra"]
+#: LibraCargo y LibraClub (v0.22, ADR-025) no la declaran: no hay existencias que traer. Si su producto necesita una
+#: carga inicial propia (las órdenes y la caja de LibraCargo, el buffet de LibraClub), la declara en `variables`.
+SIN_EXISTENCIAS = ["libracargo", "libraclub"]
 VALOR = "libracommerce.erp.offline_stock:aplicar_carga_inicial"
 
 
@@ -762,8 +767,20 @@ def test_cada_producto_lleva_la_variable_en_su_definicion(producto_):
     assert ins._ASGI.match(VALOR)
 
 
-def test_son_los_tres_productos_de_libracommerce():
-    assert PRODUCTOS == ["contalibra", "restolibra", "ventalibra"]
+def test_los_productos_con_y_sin_existencias_son_todos_los_del_instalador():
+    assert sorted(PRODUCTOS + SIN_EXISTENCIAS) == TODOS
+
+
+@pytest.mark.parametrize("producto_", SIN_EXISTENCIAS)
+def test_los_productos_sin_existencias_no_declaran_la_carga_inicial_de_stock(producto_):
+    """Declararla traería `libracommerce.erp.offline_stock` a un nodo que no tiene `stock_movements` que cargar."""
+    from tests.test_instalador import _carga
+
+    definicion = _definicion(producto_)
+    assert "LIBRAEDGE_CARGA_INICIAL" not in definicion.variables
+    carga = ins.carga_desde_dict(_carga(producto_), producto_)
+    entorno = ins.armar_entorno(definicion, carga, clave_pg="x", estado="e", data_dir="d")
+    assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
 
 
 @pytest.mark.parametrize("producto_", PRODUCTOS)

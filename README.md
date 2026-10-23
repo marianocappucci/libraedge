@@ -258,7 +258,7 @@ lambda conn, op: aplicar_pedido_del_nodo(op.payload, conn=conn))`. El detalle de
 ## El instalador del nodo, uno para todos los productos (ADR-010)
 
 `instalador/` arma un instalador de Windows (Inno Setup) por producto a partir de una definición,
-`instalador/productos/<producto>.json` (hoy RestoLibra, VentaLibra y ContaLibra): `ISCC /DProducto=ventalibra nodo.iss`.
+`instalador/productos/<producto>.json` (hoy RestoLibra, VentaLibra, ContaLibra, LibraCargo y LibraClub): `ISCC /DProducto=ventalibra nodo.iss`.
 Lo que el central emite para un nodo llega como un archivo:
 
 ```bash
@@ -308,7 +308,7 @@ minutos, y devuelve la carga con `Cache-Control: no-store`. El secreto sólo via
 
 ## La versión de escritorio (ADR-015)
 
-[`escritorio/`](escritorio) es la app de escritorio de cada producto («ContaLibra», «VentaLibra», «RestoLibra»),
+[`escritorio/`](escritorio) es la app de escritorio de cada producto («ContaLibra», «VentaLibra», «RestoLibra», «LibraCargo», «LibraClub»),
 en Tauri 2: una ventana propia sobre la copia local del nodo, con el nombre y el ícono del producto, que espera y
 vuelve sola si el producto no responde, vincula el nodo con la dirección y el código (pidiendo permiso de
 administrador: pkexec en Ubuntu, UAC en Windows), recuerda la pantalla completa (F11), conserva la sesión y abre los
