@@ -26,7 +26,7 @@ DEBIAN = sorted((LINUX / "debian").iterdir())
 PRODUCTOS = sorted(p.stem for p in (RAIZ / "instalador" / "productos").glob("*.json"))
 #: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 11 del plan de
 #: LibraCargo y LibraClub). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
-SIN_PUBLICAR = {"libracargo", "libraclub"}
+SIN_PUBLICAR: set[str] = set()
 PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 
 
@@ -647,9 +647,14 @@ def test_instalar_nodo_pasa_el_codigo_a_apt_por_el_entorno():
 
 
 def test_los_sin_publicar_no_entran_al_workflow_todavia():
-    """Hasta los PRs 9 y 11 el Python del nodo de LibraCargo y LibraClub no importa `libraedge`: en las matrices el
-    instalador no pasaria la prueba. Tienen que existir como definicion y faltar del workflow."""
+    """Un producto con definicion que todavia no se publica (su `main` sin `libraedge`) tiene que faltar del workflow.
+    Desde el 2026-10-24 no queda ninguno: LibraCargo y LibraClub se publican."""
     workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
     for producto in SIN_PUBLICAR:
         assert producto in PRODUCTOS
         assert f", {producto}" not in workflow and f" {producto}]" not in workflow
+
+
+def test_libracargo_y_libraclub_se_publican():
+    workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
+    assert "producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]" in workflow
