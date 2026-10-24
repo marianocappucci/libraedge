@@ -195,10 +195,20 @@ def emisor_desde_payload(payload: dict):
     raise ValueError("emisor_id invalido")
 
 
-def detalle_de_error_de_prestamo(exc: Exception) -> tuple[int, dict]:
+def servicio_desde_payload(payload: dict) -> str:
+    """El ``servicio`` de un pedido de ticket, en minúsculas: ``wsfe`` si falta o es ``null``.
+
+    Levanta ``ValueError`` si no es un texto con la forma de un nombre de servicio (``wsfe``, ``wscpe``). Que el
+    servicio exista y se preste lo decide el producto, no esta función."""
+    return _ticket.servicio_valido(payload.get("servicio"))
+
+
+def detalle_de_error_de_prestamo(exc: Exception, servicio: str = _ticket.SERVICIO_FACTURACION) -> tuple[int, dict]:
     """El status y el ``detail`` con que el central contesta si ``prestar_ticket`` levanta.
 
     - Una excepción con ``detalle() -> dict`` (``NodoSinArca`` de libracore): 422 con ese detalle.
+    - ``ValueError`` pidiendo un servicio que no es ``wsfe`` (``ta_para_el_nodo`` lo levanta con un servicio que no
+      presta): 501 ``ticket_no_prestado``. No se arregla reintentando.
     - ``ValueError`` o ``LookupError`` (emisor que no existe): 422, sin el texto de la excepción.
     - Cualquier otra (ARCA no autentica, red): 502. El nodo la lee como «sin conexión» y reintenta.
 
@@ -212,6 +222,8 @@ def detalle_de_error_de_prestamo(exc: Exception) -> tuple[int, dict]:
             datos = None
         if isinstance(datos, dict) and datos.get("codigo"):
             return 422, datos
+    if isinstance(exc, ValueError) and servicio != _ticket.SERVICIO_FACTURACION:
+        return 501, _detalle_sin_servicio(servicio)
     if isinstance(exc, (ValueError, LookupError)):
         return 422, {"codigo": _ticket.CODIGO_NO_DISPONIBLE,
                      "mensaje": "El central no tiene con qué prestar un ticket de ARCA para ese emisor."}
@@ -219,14 +231,32 @@ def detalle_de_error_de_prestamo(exc: Exception) -> tuple[int, dict]:
                  "mensaje": "El central no pudo obtener el ticket de ARCA."}
 
 
-async def _llamar(funcion, *args):
-    """``funcion(*args)``, sea ``async`` o no. La sincrónica corre en un hilo para no frenar el loop."""
+def _detalle_sin_servicio(servicio: str) -> dict:
+    """El ``detail`` del 501: este central no presta el ticket de ese servicio."""
+    return {"codigo": _ticket.CODIGO_SIN_COSTURA,
+            "mensaje": f"Este central no presta el ticket de ARCA del servicio {servicio} a los nodos."}
+
+
+def _acepta_servicio(funcion) -> bool:
+    """¿``funcion`` se puede llamar con ``servicio=``? Un prestador de antes de v0.22, ``f(emisor_id)``, no."""
+    try:
+        parametros = inspect.signature(funcion).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               or (p.name == "servicio" and p.kind in (inspect.Parameter.KEYWORD_ONLY,
+                                                       inspect.Parameter.POSITIONAL_OR_KEYWORD))
+               for p in parametros)
+
+
+async def _llamar(funcion, *args, **kwargs):
+    """``funcion(*args, **kwargs)``, sea ``async`` o no. La sincrónica corre en un hilo para no frenar el loop."""
     from starlette.concurrency import run_in_threadpool
 
     llamada = type(funcion).__call__ if not inspect.isfunction(funcion) else None
     if inspect.iscoroutinefunction(funcion) or inspect.iscoroutinefunction(llamada):
-        return await funcion(*args)
-    resultado = await run_in_threadpool(funcion, *args)
+        return await funcion(*args, **kwargs)
+    resultado = await run_in_threadpool(funcion, *args, **kwargs)
     if inspect.isawaitable(resultado):
         resultado = await resultado
     return resultado
@@ -340,6 +370,16 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     sin tener la clave. Sin la costura la ruta contesta 501 (despues de
     autenticar). El ticket nunca se loguea. Ver ``libraedge.sync.ticket``.
 
+    ## Desde v0.22: el servicio del ticket (ADR-025)
+
+    El cuerpo de ``POST /sync/v1/ticket-arca`` suma ``servicio`` (opcional, ``wsfe`` por omision; ``wscpe`` es el de
+    la carta de porte). ``prestar_ticket(emisor_id, servicio=servicio)`` lo recibe si su firma lo acepta (un
+    parametro ``servicio`` o ``**kwargs``; normalmente ``ta_para_el_nodo``, que el producto cablea con su
+    ``empresa=``). Un prestador anterior, ``prestar_ticket(emisor_id)``, sigue sirviendo para ``wsfe`` (se lo llama
+    como antes) y para cualquier otro servicio la ruta contesta 501 ``ticket_no_prestado``, igual que si el
+    prestador levanta ``ValueError`` (servicio que no presta). El ticket que vuelve dice de que ``servicio`` es: si
+    el prestador devuelve el de otro, 502.
+
     ## Desde v0.17: la salud de los nodos para uptime-kuma (ADR-018)
 
     ``GET /sync/v1/salud`` (resumen de los nodos activos) y ``GET /sync/v1/salud/{node_id}``. 200 si esta al dia, 503 si
@@ -372,6 +412,7 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     from libraedge.sync.receiver import SyncReceiver
 
     router = APIRouter(tags=["sync"])
+    prestador_acepta_servicio = prestar_ticket is not None and _acepta_servicio(prestar_ticket)
 
     def _secreto(request) -> str:
         cabecera = request.headers.get("authorization", "")
@@ -541,6 +582,10 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             emisor_id = emisor_desde_payload(payload)
         except ValueError as exc:
             raise HTTPException(422, detail="invalid emisor_id") from exc
+        try:
+            servicio = servicio_desde_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(422, detail="invalid servicio") from exc
         secreto = _secreto(request)
 
         def _autorizar():
@@ -554,23 +599,43 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             raise HTTPException(501, detail={
                 "codigo": _ticket.CODIGO_SIN_COSTURA,
                 "mensaje": "Este central no presta el ticket de ARCA a los nodos."})
+        # Un prestador anterior a v0.22 (`prestar_ticket(emisor_id)`) sólo sabe de `wsfe`: se lo llama como antes.
+        # Pedirle otro servicio no puede dar el ticket correcto.
+        if prestador_acepta_servicio:
+            llamada = _llamar(prestar_ticket, emisor_id, servicio=servicio)
+        elif servicio == _ticket.SERVICIO_FACTURACION:
+            llamada = _llamar(prestar_ticket, emisor_id)
+        else:
+            logger.warning("Ticket de ARCA: el nodo %s pidio %s y el prestador no acepta `servicio`",
+                           node_id, servicio)
+            raise HTTPException(501, detail=_detalle_sin_servicio(servicio))
         try:
-            ticket = await _llamar(prestar_ticket, emisor_id)
+            ticket = await llamada
         except HTTPException:
             raise
         except Exception as exc:
-            status, detalle = detalle_de_error_de_prestamo(exc)
+            status, detalle = detalle_de_error_de_prestamo(exc, servicio)
             # Sólo el tipo: el texto de una excepción cualquiera podría traer el ticket.
-            logger.warning("Ticket de ARCA: no se pudo prestar al nodo %s (emisor %s): %s",
-                           node_id, emisor_id, type(exc).__name__)
+            logger.warning("Ticket de ARCA: no se pudo prestar al nodo %s (emisor %s, servicio %s): %s",
+                           node_id, emisor_id, servicio, type(exc).__name__)
             raise HTTPException(status, detail=detalle) from None
         if not (isinstance(ticket, dict) and ticket.get("token") and ticket.get("sign")):
             logger.error("Ticket de ARCA: prestar_ticket devolvio algo sin token o sign (nodo %s)", node_id)
             raise HTTPException(502, detail={
                 "codigo": _ticket.CODIGO_ARCA_NO_RESPONDE,
                 "mensaje": "El central no pudo obtener el ticket de ARCA."})
-        logger.info("Ticket de ARCA prestado al nodo %s (emisor %s, vence %s)",
-                    node_id, emisor_id, ticket.get("expiracion"))
+        # El ticket dice de qué servicio es. Uno anterior a v0.22 no lo dice y es de `wsfe`; de cualquier otro servicio,
+        # un ticket sin servicio o de otro servicio no se presta: el nodo llamaría a ARCA con el equivocado.
+        dado = str(ticket.get("servicio") or _ticket.SERVICIO_FACTURACION).strip().lower()
+        if dado != servicio:
+            logger.error("Ticket de ARCA: se pidio %s y prestar_ticket devolvio el de otro servicio (nodo %s)",
+                         servicio, node_id)
+            raise HTTPException(502, detail={
+                "codigo": _ticket.CODIGO_OTRO_SERVICIO,
+                "mensaje": "El central no pudo obtener el ticket de ARCA del servicio pedido."})
+        ticket = {**ticket, "servicio": servicio}
+        logger.info("Ticket de ARCA prestado al nodo %s (emisor %s, servicio %s, vence %s)",
+                    node_id, emisor_id, servicio, ticket.get("expiracion"))
         return JSONResponse(ticket, headers={"Cache-Control": "no-store"})
 
     return router

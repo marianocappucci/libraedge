@@ -95,6 +95,14 @@ name = "libraedge"
 # manda, no cuenta como pendiente y `listar --todas` la muestra con el motivo. Minor: suma un estado, un subcomando, un flag
 # y el campo `estado` en cada linea de `revision listar`; no toca el esquema (motivo y momento van en `last_error`), asi que
 # la version de esquema que el nodo declara no cambia.
+# 0.21.0 -> 0.22.0 (2026-10-23, ADR-025): (A) el ticket de ARCA por servicio: `POST /sync/v1/ticket-arca` recibe `servicio`
+# (`wsfe` por omision, `wscpe` es el de la carta de porte), la cache de `ClienteDeTicket` pasa a ser por `(emisor_id, servicio)`
+# (por emisor, quien pedia `wscpe` recibia el de `wsfe`), `ClienteDeTicket.para_servicio()` es la `obtener_ta(arca, servicio=)` de la
+# cola de comprobantes de libracore v1.191.0 (ADR-079) y un servicio que el prestador no presta es 501 `ticket_no_prestado`;
+# (B) el instalador y la app de escritorio de LibraCargo y LibraClub (`instalador/productos/libracargo.json` y `libraclub.json`,
+# de una sola base). Minor: suma un campo del pedido y del ticket, un metodo y dos productos; no toca el esquema ni la ruta, y un
+# nodo o un central de v0.21 siguen andando para `wsfe`. Se despliega primero el central. No hay CHANGELOG.md: la historia de
+# versiones es este bloque y el DECISIONS.md.
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

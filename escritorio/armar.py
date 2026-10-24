@@ -1,6 +1,6 @@
 """Compila la app de escritorio de uno o varios productos (ADR-015).
 
-    python escritorio/armar.py [--version X.Y.Z] [--salida DIR] contalibra ventalibra restolibra
+    python escritorio/armar.py [--version X.Y.Z] [--salida DIR] contalibra ventalibra restolibra libracargo libraclub
 
 Un solo codigo fuente; el producto se elige al compilar (`LIBRAEDGE_PRODUCTO`, que lee `build.rs`): nombre,
 icono, identificador y la definicion del instalador. Deja en DIR (por defecto `escritorio/salida`):
@@ -9,7 +9,7 @@ icono, identificador y la definicion del instalador. Deja en DIR (por defecto `e
 - Linux:   `libraedge-nodo-<producto>` (el `.deb` lo instala en `/opt/libraedge-nodo/escritorio/`; el nombre es
   el del `.desktop`, asi GNOME agrupa la ventana con el favorito del dock).
 
-Despues de compilar cada uno, corre `--version` y verifica que sea ese producto (los tres se compilan en el
+Despues de compilar cada uno, corre `--version` y verifica que sea ese producto (todos se compilan en el
 mismo `target/`: si cargo no recompilara el crate, saldria el nombre del anterior).
 
 Firma de codigo (todavia no hay certificado): si `LIBRAEDGE_FIRMA_CMD` tiene un comando con `{archivo}` (por

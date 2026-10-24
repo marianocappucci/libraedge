@@ -1,7 +1,7 @@
 # Compila el instalador del nodo de cada producto, lo PRUEBA en Windows y lo
 # publica en el Release del tag (ADR-010).
 #
-# - Con un tag vX.Y.Z: arma, prueba y publica los tres instaladores en el
+# - Con un tag vX.Y.Z: arma, prueba y publica los instaladores de cada producto en el
 #   Release de ese tag, con nombres fijos (libraedge-nodo-<producto>.exe), asi
 #   el link de librasuite.com.ar y el de la pantalla del central no cambian:
 #   https://github.com/marianocappucci/libraedge/releases/latest/download/libraedge-nodo-<producto>.exe
@@ -32,7 +32,10 @@
 # reinstalar encima conserva SECRET_KEY, desinstalar conserva los datos y ningun
 # secreto queda en los logs.
 #
-# La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de los tres productos
+# LibraCargo y LibraClub (ADR-025) tienen su definicion en instalador/productos/, pero entran a las matrices
+# de este workflow recien cuando su `main` traiga `libraedge` y su router de nodos (PRs 9 y 11 del plan): sin eso
+# el Python del nodo no puede importar `libraedge` y el instalador no pasa la prueba.
+# La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de cada producto
 # en Windows y en Ubuntu 22.04 (la glibc y el WebKitGTK 4.1 mas viejos que se soportan: el mismo binario anda en
 # 24.04 y 26.04), con la compilacion de Rust en cache. Va dentro del .exe y del .deb; se prueba que arranca y
 # carga el producto local (xvfb-run en Ubuntu; en Windows, un arranque cronometrado con el proceso vivo y el
@@ -120,7 +123,7 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: escritorio
         run: cargo test --locked
-      - name: Compilar la app de los tres productos
+      - name: Compilar la app de cada producto
         run: |
           v=0.0.0
           if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
@@ -151,7 +154,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # PostgreSQL, Python embebido, NSSM y VC++: lo mismo para los tres.
+      # PostgreSQL, Python embebido, NSSM y VC++: lo mismo para todos.
       - uses: actions/cache@v4
         with:
           path: instalador/paquete/.descargas

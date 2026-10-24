@@ -25,6 +25,10 @@ ESCRITORIO = RAIZ / "escritorio"
 INSTALADOR = RAIZ / "instalador"
 LINUX = INSTALADOR / "linux"
 PRODUCTOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
+#: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 11 del plan de
+#: LibraCargo y LibraClub). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
+SIN_PUBLICAR = {"libracargo", "libraclub"}
+PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 WORKFLOW = RAIZ / ".github" / "workflows" / "publicar-instalador.yml"
 
 
@@ -279,7 +283,7 @@ def test_el_workflow_compila_prueba_y_empaqueta_la_app():
     # Windows: el .exe en el paquete, el arranque cronometrado y el acceso directo a la app.
     assert "instalador/paquete/escritorio" in workflow and "/SINVINCULAR" in workflow
     assert "GET / HTTP/1.1" in workflow
-    for producto in PRODUCTOS:
+    for producto in PUBLICADOS:
         assert producto in workflow
 
 

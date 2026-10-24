@@ -1,5 +1,5 @@
-# La app de escritorio del nodo (ADR-015): UNA por producto («ContaLibra», «VentaLibra», «RestoLibra»), con un
-# solo codigo fuente. El producto se elige al compilar (escritorio/armar.py), no en tiempo de ejecucion: nombre,
+# La app de escritorio del nodo (ADR-015): UNA por producto («ContaLibra», «VentaLibra», «RestoLibra», «LibraCargo»,
+# «LibraClub»), con un solo codigo fuente. El producto se elige al compilar (escritorio/armar.py), no en tiempo de ejecucion: nombre,
 # icono, identificador y binario son los del producto.
 [package]
 name = "libraedge-escritorio"

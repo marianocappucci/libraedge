@@ -2,7 +2,9 @@
 
 **Un solo instalador para todos los productos** (ADR-010, E7 de la fase 1): se compila por producto con
 `ISCC /DProducto=<producto> nodo.iss` y lo propio de cada uno vive en `productos/<producto>.json`. Hoy hay
-definiciones para **RestoLibra, VentaLibra y ContaLibra**.
+definiciones para **RestoLibra, VentaLibra, ContaLibra, LibraCargo y LibraClub** (las dos últimas desde v0.22, ADR-025: el instalador
+y la app de escritorio ya están; el nodo que sincroniza depende de que cada producto exponga su `app/offline.py` y su
+`Aprovisionamiento`, ver el ADR-025).
 
 > ⚠️ **Estado.** La versión anterior, atada a RestoLibra, se probó entera en una VM entre el 2026-08-30 y el
 > 2026-08-31 (historia abajo). **Esta versión parametrizada todavía no corrió en Windows**: lo verificado es el
@@ -51,9 +53,9 @@ de libra-ui (`marcas/<producto>.svg` y `-favicon.svg`) con `python instalador/ar
 
 ## La versión de escritorio: la app del producto (ADR-015)
 
-El acceso directo «<Producto>» abre **la app de escritorio del producto** («ContaLibra», «VentaLibra», «RestoLibra»):
+El acceso directo «<Producto>» abre **la app de escritorio del producto** («ContaLibra», «VentaLibra», «RestoLibra», «LibraCargo», «LibraClub»):
 una ventana propia sobre `http://localhost:<puerto>/`, con el nombre y el ícono del producto. Es la «versión de
-escritorio» de las webs. El código está en [`escritorio/`](../escritorio) (Tauri 2), uno solo para los tres productos;
+escritorio» de las webs. El código está en [`escritorio/`](../escritorio) (Tauri 2), uno solo para todos los productos;
 cada uno se compila aparte con `python escritorio/armar.py <producto>`.
 
 - **Ventana:** se abre maximizada la primera vez y después recuerda tamaño y posición. Abrir el acceso directo con la
@@ -138,9 +140,9 @@ desconocida es un error):
 |---|---|
 | `producto`, `nombre`, `app_id` | id en minúsculas, nombre visible y el GUID de Inno Setup (**fijo para siempre**: es lo que hace que reinstalar actualice). El de RestoLibra es el de siempre. |
 | `prefijo_variables` | `<PRODUCTO>` en mayúsculas: `<PRODUCTO>_DATABASE_URL`, `<PRODUCTO>_ADMIN_PASSWORD` |
-| `bases` | una o varias: `{nombre, variables, nodo}`. Cada variable apunta a esa base; la que lleva `nodo: true` es también `LIBRAEDGE_DATABASE_URL` (donde vive el outbox). Hoy las tres son de una sola base con `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL`, como escribe el alta de libracore. |
-| `base_auth` | el `--base` de `libraauth-migrar` (`dominio` en RestoLibra y ContaLibra, `core` en VentaLibra); se valida contra `migraciones` |
-| `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Hoy cuatro cadenas: libracore, libraauth, libracommerce y la del producto |
+| `bases` | una o varias: `{nombre, variables, nodo}`. Cada variable apunta a esa base; la que lleva `nodo: true` es también `LIBRAEDGE_DATABASE_URL` (donde vive el outbox). Hoy todas son de una sola base con `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL` (la misma URL), como escribe el alta de libracore; LibraCargo y LibraClub dejaron de tener `libracargo_core`/`libraclub_core` aparte (libracore v1.190.1). |
+| `base_auth` | el `--base` de `libraauth-migrar` (`dominio` en todos menos VentaLibra, que usa `core`); se valida contra `migraciones` |
+| `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Cuatro cadenas en los productos de LibraCommerce (libracore, libraauth, libracommerce y la del producto); LibraClub corre libracore, libracommerce, libraauth y la suya, en ese orden, y LibraCargo sólo tres (sin libracommerce) |
 | `asgi`, `puerto`, `salud` | `app.asgi:app`, `8000` y `/health` (la salud tiene que devolver un objeto JSON) |
 | `extras` | requisitos de pip que el nodo suma a los del producto: `tzdata` (zoneinfo en Windows no trae la base de zonas) y `pystray`/`Pillow` (bandeja) |
 | `variables` | variables fijas de más para el `nodo.env`. Hoy `LIBRAEDGE_CARGA_INICIAL` (la carga inicial de existencias, ADR-023). Con la carga **pisan**; al actualizar un nodo ya vinculado (`completar-entorno --definicion`) se agregan sólo si faltan, y en Windows se vuelven a cargar en NSSM |

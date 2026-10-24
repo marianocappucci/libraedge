@@ -226,10 +226,39 @@ numerar = numerador_con_ta(cliente.para_numerador(sin_conexion=SinConexion), emi
 
 Sólo nodos activos (401 si no), 409 si el esquema difiere, 501 si el central no pasó `prestar_ticket`. El ticket se guarda en memoria hasta 10 minutos antes de vencer y nunca se loguea. Sin red o con ARCA caída en el central: `SinConexionConElCentral` (la venta va a la bandeja); el central sin ARCA para ese emisor: `TicketRechazado` (`codigo` `nodo_sin_arca`).
 
+### El ticket por servicio: `wsfe` y `wscpe` (v0.22, ADR-025)
+
+ARCA da un ticket por certificado **y por servicio**: el de la facturación (`wsfe`) no sirve para la carta de porte
+(`wscpe`). El cuerpo de `POST /sync/v1/ticket-arca` suma `servicio` (opcional; sin él es `wsfe`, como siempre) y el ticket
+que vuelve dice de cuál es (`servicio`) y en qué `ambiente`. El producto central cablea el prestador con su `empresa` (el
+nombre con el que cargó el par de `wscpe`; `agencia` en LibraCargo):
+
+```python
+router = create_sync_router(
+    get_connection, despachador=..., version_esquema=version_de_alembic,
+    prestar_ticket=lambda emisor_id, servicio="wsfe": ta_para_el_nodo(emisor_id, servicio=servicio, empresa=EMPRESA_ARCA))
+```
+
+Un `ValueError` del prestador (servicio que no presta) es **501 `ticket_no_prestado`**; `NodoSinArca`, 422; y un prestador de
+antes, `prestar_ticket(emisor_id)`, sigue sirviendo para `wsfe` (para otro servicio, 501). En el nodo, la caché de
+`ClienteDeTicket` es **por `(emisor_id, servicio)`** y `para_servicio()` es la `obtener_ta(arca, servicio=)` que esperan
+`ticket_prestado` y la cola de comprobantes del motor (`libracore.cola_arca`, ADR-079):
+
+```python
+cliente = cliente_desde_entorno(version_esquema=...)
+obtener_ta = cliente.para_servicio(sin_conexion=SinConexion, rechazo=RechazoDelCentral)   # wsfe por omisión
+cola = ColaDeArca(producto="libracargo", ..., obtener_ta=obtener_ta, al_cambiar=encolar_cola_pedido)
+cliente.pedir_ticket(None, "wscpe")      # o directo: el ticket de la CPE, sin emisor
+```
+
+El estado de la cola sube al central como la operación `cola.pedido` (versión 1, `aggregate_type="cola_arca"`, el payload es
+`libracore.cola_arca.payload_de_pedido(pedido)`); su aplicador es del producto: `despachador.registrar("cola.pedido", 1,
+lambda conn, op: aplicar_pedido_del_nodo(op.payload, conn=conn))`. El detalle del contrato, en el ADR-025.
+
 ## El instalador del nodo, uno para todos los productos (ADR-010)
 
 `instalador/` arma un instalador de Windows (Inno Setup) por producto a partir de una definición,
-`instalador/productos/<producto>.json` (hoy RestoLibra, VentaLibra y ContaLibra): `ISCC /DProducto=ventalibra nodo.iss`.
+`instalador/productos/<producto>.json` (hoy RestoLibra, VentaLibra, ContaLibra, LibraCargo y LibraClub): `ISCC /DProducto=ventalibra nodo.iss`.
 Lo que el central emite para un nodo llega como un archivo:
 
 ```bash
@@ -279,7 +308,7 @@ minutos, y devuelve la carga con `Cache-Control: no-store`. El secreto sólo via
 
 ## La versión de escritorio (ADR-015)
 
-[`escritorio/`](escritorio) es la app de escritorio de cada producto («ContaLibra», «VentaLibra», «RestoLibra»),
+[`escritorio/`](escritorio) es la app de escritorio de cada producto («ContaLibra», «VentaLibra», «RestoLibra», «LibraCargo», «LibraClub»),
 en Tauri 2: una ventana propia sobre la copia local del nodo, con el nombre y el ícono del producto, que espera y
 vuelve sola si el producto no responde, vincula el nodo con la dirección y el código (pidiendo permiso de
 administrador: pkexec en Ubuntu, UAC en Windows), recuerda la pantalla completa (F11), conserva la sesión y abre los
