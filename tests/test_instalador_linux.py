@@ -658,3 +658,12 @@ def test_los_sin_publicar_no_entran_al_workflow_todavia():
 def test_libracargo_y_libraclub_se_publican():
     workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
     assert "producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]" in workflow
+
+
+@pytest.mark.parametrize("producto", ["libracargo", "libraclub"])
+def test_alembic_del_producto_encuentra_la_base(producto):
+    """El `migrations/env.py` de LibraCargo y LibraClub lee `DATABASE_URL` a secas: sin ella,
+    `alembic upgrade head` corta la instalacion con «Falta DATABASE_URL» (libraedge#169)."""
+    definicion = ins.leer_definicion(str(RAIZ / "instalador" / "productos" / f"{producto}.json"))
+    assert ("alembic", "upgrade", "head") in definicion.migraciones
+    assert "DATABASE_URL" in definicion.base_del_nodo.variables
