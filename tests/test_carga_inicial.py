@@ -774,7 +774,7 @@ def test_los_productos_con_y_sin_existencias_son_todos_los_del_instalador():
 
 @pytest.mark.parametrize("producto_", SIN_EXISTENCIAS)
 def test_los_productos_sin_existencias_declaran_su_carga_propia_y_no_la_de_stock(producto_):
-    """La de `libracommerce.erp.offline_stock` traería existencias a un nodo que no tiene `stock_movements` que cargar."""
+    """La de `libracommerce.erp.offline_stock` traería existencias a un nodo sin `stock_movements` que cargar."""
     from tests.test_instalador import _carga
 
     definicion = _definicion(producto_)
