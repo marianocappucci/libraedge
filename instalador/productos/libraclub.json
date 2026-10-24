@@ -1,6 +1,6 @@
 {
   "formato": "libraedge-producto/1",
-  "_nota": "Una sola base desde libracore v1.190.1 (_UNA_SOLA_BASE, ADR-078): LIBRACLUB_DATABASE_URL y LIBRACLUB_LIBRACORE_DATABASE_URL llevan la MISMA URL (la segunda se acepta; si fuera otra base el respaldo lleva las dos). Auth con --base dominio. Migraciones = las de scripts/panel_admin.py de libraclub, EN ESE ORDEN: libracore, libracommerce (el buffet), libraauth y la propia (alembic_version_libraclub). Sin LIBRAEDGE_CARGA_INICIAL: lo declara el producto si el buffet necesita existencias. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "_nota": "Una sola base desde libracore v1.190.1 (_UNA_SOLA_BASE, ADR-078): LIBRACLUB_DATABASE_URL y LIBRACLUB_LIBRACORE_DATABASE_URL llevan la MISMA URL (la segunda se acepta; si fuera otra base el respaldo lleva las dos). Auth con --base dominio. Migraciones = las de scripts/panel_admin.py de libraclub, EN ESE ORDEN: libracore, libracommerce (el buffet), libraauth y la propia (alembic_version_libraclub). LIBRAEDGE_CARGA_INICIAL trae las existencias del buffet al vincular (libraclub ADR-023: el central expone carga_inicial_del_central). El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
   "producto": "libraclub",
   "nombre": "LibraClub",
   "app_id": "ED397C8B-C399-4EF8-B829-52A89FAC3251",
@@ -51,5 +51,8 @@
     "pystray>=0.19",
     "Pillow>=10"
   ],
+  "variables": {
+    "LIBRAEDGE_CARGA_INICIAL": "libracommerce.erp.offline_stock:aplicar_carga_inicial"
+  },
   "version_esquema": "alembic"
 }
