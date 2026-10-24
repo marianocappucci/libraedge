@@ -84,8 +84,10 @@ def test_cada_definicion_del_repo_es_valida(producto):
     assert all(m[m.index("--prefijo") + 1] == producto for m in definicion.migraciones if "--prefijo" in m)
     # Una base, con las dos variables que escribe el alta de libracore (dominio y core).
     assert [b.nombre for b in definicion.bases] == [producto]
+    # LibraCargo y LibraClub suman `DATABASE_URL`: es la que lee su migrations/env.py en `alembic upgrade head`.
     assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL",
-                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL")
+                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL",
+                                                  *(("DATABASE_URL",) if producto in UNA_SOLA_BASE_NUEVA else ()))
     assert "tzdata" in definicion.extras  # zoneinfo en Windows no trae la base de zonas
     plan = definicion.plan()
     assert json.loads(json.dumps(plan)) == plan
@@ -250,15 +252,15 @@ def test_el_nodo_de_libracargo_y_el_de_libraclub_llevan_una_sola_base(producto):
     definicion = ins.leer_definicion(str(CARPETA / "productos" / f"{producto}.json"))
     assert [(b.nombre, b.nodo) for b in definicion.bases] == [(producto, True)]
     assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL",
-                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL")
+                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL", "DATABASE_URL")
     assert not any("_core" in b.nombre for b in definicion.bases)
     assert definicion.plan()["bases"] == [{"nombre": producto, "nodo": True, "variables": [
-        f"{producto.upper()}_DATABASE_URL", f"{producto.upper()}_LIBRACORE_DATABASE_URL"]}]
-    # Y el entorno del nodo apunta las dos variables, y la del outbox, a la misma URL.
+        f"{producto.upper()}_DATABASE_URL", f"{producto.upper()}_LIBRACORE_DATABASE_URL", "DATABASE_URL"]}]
+    # Y el entorno del nodo apunta las tres variables, y la del outbox, a la misma URL.
     entorno = ins.armar_entorno(definicion, ins.carga_desde_dict(_carga(producto), producto),
                                 clave_pg="x", estado="e", data_dir="d")
     urls = {entorno[v] for v in ("LIBRAEDGE_DATABASE_URL", f"{producto.upper()}_DATABASE_URL",
-                                 f"{producto.upper()}_LIBRACORE_DATABASE_URL")}
+                                 f"{producto.upper()}_LIBRACORE_DATABASE_URL", "DATABASE_URL")}
     assert len(urls) == 1 and urls.pop().endswith(f"/{producto}")
     # LibraClub trae el stock del buffet al vincular (su ADR-023); LibraCargo no tiene existencias que traer.
     esperada = {"libraclub": "libracommerce.erp.offline_stock:aplicar_carga_inicial",
