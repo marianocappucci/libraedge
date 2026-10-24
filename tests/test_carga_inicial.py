@@ -747,11 +747,12 @@ def test_el_servicio_con_la_variable_mal_puesta_arranca_igual(nodo_en_postgres, 
 
 INSTALADOR = Path(__file__).resolve().parent.parent / "instalador"
 TODOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
-#: Los de LibraCommerce con existencias por sucursal: traen la carga inicial de stock al vincular (ADR-023).
-PRODUCTOS = ["contalibra", "restolibra", "ventalibra"]
-#: LibraCargo y LibraClub (v0.22, ADR-025) no la declaran: no hay existencias que traer. Si su producto necesita una
-#: carga inicial propia (las órdenes y la caja de LibraCargo, el buffet de LibraClub), la declara en `variables`.
-SIN_EXISTENCIAS = ["libracargo", "libraclub"]
+#: Los de LibraCommerce con existencias por sucursal: traen la carga inicial de stock al vincular (ADR-023). LibraClub
+#: la suma por el stock del buffet (libraclub ADR-023, 2026-10-24).
+PRODUCTOS = ["contalibra", "libraclub", "restolibra", "ventalibra"]
+#: LibraCargo (v0.22, ADR-025) no la declara: no hay existencias que traer. Si necesita una carga inicial propia (las
+#: órdenes y la caja), la declara en `variables`.
+SIN_EXISTENCIAS = ["libracargo"]
 VALOR = "libracommerce.erp.offline_stock:aplicar_carga_inicial"
 
 
