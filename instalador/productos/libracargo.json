@@ -1,6 +1,6 @@
 {
   "formato": "libraedge-producto/1",
-  "_nota": "Una sola base desde libracore v1.190.1 (_UNA_SOLA_BASE): LIBRACARGO_DATABASE_URL y LIBRACARGO_LIBRACORE_DATABASE_URL llevan la MISMA URL (la segunda se acepta, y es la que escriben las instancias y libracore.provisioning; con otra base el producto no arranca). Auth con --base dominio. Migraciones = las de scripts/panel_admin.py de libracargo (tres cadenas, sin libracommerce). Sin LIBRAEDGE_CARGA_INICIAL: no hay existencias; si la carga inicial de ordenes y caja la pide el producto, la declara con `variables`. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "_nota": "Una sola base desde libracore v1.190.1 (_UNA_SOLA_BASE): LIBRACARGO_DATABASE_URL y LIBRACARGO_LIBRACORE_DATABASE_URL llevan la MISMA URL (la segunda se acepta, y es la que escriben las instancias y libracore.provisioning; con otra base el producto no arranca). Auth con --base dominio. Migraciones = las de scripts/panel_admin.py de libracargo (tres cadenas, sin libracommerce). LIBRAEDGE_CARGA_INICIAL es la carga propia del producto (ordenes, caja y terceros; libracargo ADR-056), no la de existencias de LibraCommerce. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
   "producto": "libracargo",
   "nombre": "LibraCargo",
   "app_id": "A5239B4A-E3B6-4B8F-B075-2A40970AFDAF",
@@ -45,5 +45,8 @@
     "pystray>=0.19",
     "Pillow>=10"
   ],
+  "variables": {
+    "LIBRAEDGE_CARGA_INICIAL": "app.servicios.carga_inicial:aplicar_carga_inicial"
+  },
   "version_esquema": "alembic"
 }

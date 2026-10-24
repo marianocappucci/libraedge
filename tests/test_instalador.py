@@ -261,10 +261,9 @@ def test_el_nodo_de_libracargo_y_el_de_libraclub_llevan_una_sola_base(producto):
                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL")}
     assert len(urls) == 1 and urls.pop().endswith(f"/{producto}")
     # LibraClub trae el stock del buffet al vincular (su ADR-023); LibraCargo no tiene existencias que traer.
-    if producto == "libraclub":
-        assert entorno["LIBRAEDGE_CARGA_INICIAL"] == "libracommerce.erp.offline_stock:aplicar_carga_inicial"
-    else:
-        assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
+    esperada = {"libraclub": "libracommerce.erp.offline_stock:aplicar_carga_inicial",
+                "libracargo": "app.servicios.carga_inicial:aplicar_carga_inicial"}[producto]
+    assert entorno["LIBRAEDGE_CARGA_INICIAL"] == esperada
 
 
 def test_el_instalador_no_declara_las_bases_core_que_ya_no_existen():
