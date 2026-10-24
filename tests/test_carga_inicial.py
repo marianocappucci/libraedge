@@ -750,9 +750,9 @@ TODOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
 #: Los de LibraCommerce con existencias por sucursal: traen la carga inicial de stock al vincular (ADR-023). LibraClub
 #: la suma por el stock del buffet (libraclub ADR-023, 2026-10-24).
 PRODUCTOS = ["contalibra", "libraclub", "restolibra", "ventalibra"]
-#: LibraCargo (v0.22, ADR-025) no la declara: no hay existencias que traer. Si necesita una carga inicial propia (las
-#: órdenes y la caja), la declara en `variables`.
-SIN_EXISTENCIAS = ["libracargo"]
+#: LibraCargo trae su carga propia (órdenes, caja, terceros; su ADR-056), no la de existencias de LibraCommerce.
+CARGA_PROPIA = {"libracargo": "app.servicios.carga_inicial:aplicar_carga_inicial"}
+SIN_EXISTENCIAS = list(CARGA_PROPIA)
 VALOR = "libracommerce.erp.offline_stock:aplicar_carga_inicial"
 
 
@@ -773,15 +773,16 @@ def test_los_productos_con_y_sin_existencias_son_todos_los_del_instalador():
 
 
 @pytest.mark.parametrize("producto_", SIN_EXISTENCIAS)
-def test_los_productos_sin_existencias_no_declaran_la_carga_inicial_de_stock(producto_):
-    """Declararla traería `libracommerce.erp.offline_stock` a un nodo que no tiene `stock_movements` que cargar."""
+def test_los_productos_sin_existencias_declaran_su_carga_propia_y_no_la_de_stock(producto_):
+    """La de `libracommerce.erp.offline_stock` traería existencias a un nodo que no tiene `stock_movements` que cargar."""
     from tests.test_instalador import _carga
 
     definicion = _definicion(producto_)
-    assert "LIBRAEDGE_CARGA_INICIAL" not in definicion.variables
+    assert definicion.variables == {"LIBRAEDGE_CARGA_INICIAL": CARGA_PROPIA[producto_]}
+    assert ins._ASGI.match(CARGA_PROPIA[producto_])
     carga = ins.carga_desde_dict(_carga(producto_), producto_)
     entorno = ins.armar_entorno(definicion, carga, clave_pg="x", estado="e", data_dir="d")
-    assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
+    assert entorno["LIBRAEDGE_CARGA_INICIAL"] == CARGA_PROPIA[producto_] != VALOR
 
 
 @pytest.mark.parametrize("producto_", PRODUCTOS)
