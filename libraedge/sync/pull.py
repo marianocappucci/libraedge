@@ -29,6 +29,7 @@ from libraedge.db.changelog import cargar_payload, columnas_de_clave, validar_id
 from libraedge.db.guarda import marcar_aplicando
 from libraedge.domain.sync import ReferenceChange, ReferenceOperation
 from libraedge.mapeo import TABLA as TABLA_MAPEO
+from libraedge.mapeo import TABLA_TEXTO as TABLA_MAPEO_TEXTO
 from libraedge.sync import esquema, reconciliacion
 
 
@@ -110,6 +111,13 @@ class MirrorApplier:
     espejo**: se deshace (`SAVEPOINT`), queda anotado en `sin_reconciliar` y en stderr, y el barrido del final de cada
     ciclo (`reconciliar_pendientes`) lo reintenta; lo peor que pasa es que la fila provisoria sigue un rato junto a la
     definitiva. Sin `altas` el aplicador es el de v0.17.
+
+    ## Desde v0.23: ids provisorios de texto (ADR-026)
+
+    Una tabla de ids de texto (libragenda: un uuid, un `p-042`) da de alta con un id provisorio `"-N"` y su mapeo baja
+    por **`libraedge_mapeo_texto`**, que el producto espeja ademas de `libraedge_mapeo`. El aplicador reapunta con
+    textos las filas de esa tabla y con enteros las de la otra: la tabla del mapeo de la que baja la fila dice el tipo,
+    y el barrido (`reconciliar_pendientes`) lo lee del catalogo (`reconciliacion.clave_es_entera`).
     """
 
     def __init__(self, conn, tablas_permitidas: dict[str, str | tuple[str, ...]], *, node_id: str | None = None,
@@ -134,7 +142,7 @@ class MirrorApplier:
                 if len(self._tablas[tabla]) != 1:
                     raise ValueError(f"la tabla {tabla!r} tiene alta en el nodo y una clave compuesta: no se admite")
         #: `{(tabla, id_provisorio): motivo}` de lo que no se pudo reapuntar. Vacio cuando todo esta al dia.
-        self.sin_reconciliar: dict[tuple[str, int], str] = {}
+        self.sin_reconciliar: dict[tuple[str, int | str], str] = {}
 
     def aplicar(self, cambio: ReferenceChange) -> None:
         tabla = cambio.table_name
@@ -146,7 +154,7 @@ class MirrorApplier:
         clave = self._tablas[tabla]
         marcar_aplicando(self._conn)
 
-        if tabla == TABLA_MAPEO and self._altas:
+        if tabla in (TABLA_MAPEO, TABLA_MAPEO_TEXTO) and self._altas:
             self._aplicar_mapeo(cambio, clave)
             return
 
@@ -191,16 +199,22 @@ class MirrorApplier:
     # ── las altas del nodo (ADR-021) ────────────────────────────────────────
 
     def _aplicar_mapeo(self, cambio: ReferenceChange, clave: tuple[str, ...]) -> None:
-        """Una fila del mapeo: la guarda y reapunta, si es de este nodo y de una tabla con alta. Si no, la ignora."""
+        """Una fila del mapeo: la guarda y reapunta, si es de este nodo y de una tabla con alta. Si no, la ignora.
+
+        El mapeo de enteros (`libraedge_mapeo`) reapunta con enteros; el de texto (`libraedge_mapeo_texto`, v0.23), con
+        textos: cada tabla de ids trae sus filas por el mapeo de su tipo."""
         payload = cambio.payload or {}
         if cambio.operation == ReferenceOperation.DELETE or payload.get("node_id") != self._node_id:
             return
         if payload.get("tabla") not in self._altas:
             return
-        self._upsert(TABLA_MAPEO, clave, cambio)
-        self._reconciliar(payload["tabla"], int(payload["id_nodo"]), int(payload["id_central"]))
+        self._upsert(cambio.table_name, clave, cambio)
+        if cambio.table_name == TABLA_MAPEO_TEXTO:
+            self._reconciliar(payload["tabla"], str(payload["id_nodo"]), str(payload["id_central"]))
+        else:
+            self._reconciliar(payload["tabla"], int(payload["id_nodo"]), int(payload["id_central"]))
 
-    def _reconciliar(self, tabla: str, provisorio: int, definitivo: int) -> None:
+    def _reconciliar(self, tabla: str, provisorio: int | str, definitivo: int | str) -> None:
         alta = self._altas[tabla]
         try:
             with reconciliacion.savepoint(self._conn):
@@ -229,14 +243,20 @@ class MirrorApplier:
         marcar_aplicando(self._conn)
         for tabla in self._altas:
             clave = self._tablas[tabla][0]
+            if reconciliacion.clave_es_entera(self._conn, tabla, clave):
+                mapeo, como = TABLA_MAPEO, int
+            elif TABLA_MAPEO_TEXTO in self._tablas:
+                mapeo, como = TABLA_MAPEO_TEXTO, str
+            else:
+                continue    # una tabla de ids de texto sin su mapeo en el espejo: no hay nada que reintentar
             filas = self._conn.execute(
-                f"SELECT m.id_nodo, m.id_central FROM {TABLA_MAPEO} m WHERE m.node_id = ? AND m.tabla = ?"
+                f"SELECT m.id_nodo, m.id_central FROM {mapeo} m WHERE m.node_id = ? AND m.tabla = ?"
                 f" AND EXISTS (SELECT 1 FROM {tabla} t WHERE t.{clave} = m.id_nodo) ORDER BY m.id_nodo DESC",
                 (self._node_id, tabla),
             ).fetchall()
             for id_nodo, id_central in ((f[0], f[1]) for f in filas):
-                self._reconciliar(tabla, int(id_nodo), int(id_central))
-                hechos += (tabla, int(id_nodo)) not in self.sin_reconciliar
+                self._reconciliar(tabla, como(id_nodo), como(id_central))
+                hechos += (tabla, como(id_nodo)) not in self.sin_reconciliar
         self._conn.commit()
         return hechos
 

@@ -27,7 +27,8 @@ declarativa, ``Aprovisionamiento``:
   opt-in por tabla porque no todas las de referencia se guardan;
 - **en cuales el nodo da de alta filas** (``altas_en_nodo``, v0.18, ADR-021), opcional y vacio por defecto: el nodo les
   pone un id provisorio negativo, el central le asigna el definitivo (``libraedge_mapeo``) y el espejo reapunta lo que
-  referenciaba al provisorio. Declararlas suma ``libraedge_mapeo`` al espejo solo;
+  referenciaba al provisorio. Declararlas suma ``libraedge_mapeo`` al espejo solo (y ``libraedge_mapeo_texto`` si alguna
+  es de ids de texto, ``AltaEnNodo(..., id_de_texto=True)``, v0.23);
 - **como listar las sucursales** de la instancia (``id``, ``nombre``, ``activa``);
 - **una guarda del alta**, opcional. Desde v0.14 (ADR-014) LibraEdge es parte del
   sistema e incluido en todos los planes: por defecto no hay guarda (``sin_guarda``).
@@ -58,7 +59,9 @@ from typing import Any
 from libraedge.altas import AltaEnNodo, formatear_altas, normalizar_altas
 from libraedge.db.changelog import columnas_de_clave, validar_identificador
 from libraedge.mapeo import CLAVE as CLAVE_DEL_MAPEO
+from libraedge.mapeo import CLAVE_TEXTO as CLAVE_DEL_MAPEO_DE_TEXTO
 from libraedge.mapeo import TABLA as TABLA_DEL_MAPEO
+from libraedge.mapeo import TABLA_TEXTO as TABLA_DEL_MAPEO_DE_TEXTO
 
 Salida = Callable[[str], None]
 
@@ -180,7 +183,8 @@ class Aprovisionamiento:
 
     ``altas_en_nodo`` (v0.18, ADR-021) son las tablas **de las de referencia** donde el nodo da de alta filas con un id
     provisorio negativo (``AltaEnNodo``, el nombre, o ``(tabla, referencias)``; ver ``libraedge.altas``). Suma
-    ``libraedge_mapeo`` a las tablas de referencia y a las de solo lectura (en el nodo solo la escribe el espejo), y
+    ``libraedge_mapeo`` a las tablas de referencia y a las de solo lectura (en el nodo solo la escribe el espejo; con
+    una alta ``id_de_texto=True``, v0.23, suma tambien ``libraedge_mapeo_texto``), y
     ``registrar`` manda la declaracion en la carga (``LIBRAEDGE_ALTAS_EN_NODO``). No hace por si sola que el nodo asigne
     ids provisorios ni suba el alta: eso es del producto (``libracore.altas_en_nodo``).
 
@@ -231,10 +235,22 @@ class Aprovisionamiento:
                 self.tablas = tuple(sorted((*self.tablas, Tabla(TABLA_DEL_MAPEO, CLAVE_DEL_MAPEO)),
                                            key=lambda t: t.nombre))
             self.solo_lectura = self.solo_lectura | {TABLA_DEL_MAPEO}
+            if self.hay_ids_de_texto:
+                # Las tablas de ids de texto (v0.23, ADR-026) bajan su mapeo por otra tabla: la de enteros no lo guarda.
+                if TABLA_DEL_MAPEO_DE_TEXTO not in self.nombres:
+                    self.tablas = tuple(sorted(
+                        (*self.tablas, Tabla(TABLA_DEL_MAPEO_DE_TEXTO, CLAVE_DEL_MAPEO_DE_TEXTO)),
+                        key=lambda t: t.nombre))
+                self.solo_lectura = self.solo_lectura | {TABLA_DEL_MAPEO_DE_TEXTO}
 
     @property
     def nombres(self) -> frozenset[str]:
         return frozenset(t.nombre for t in self.tablas)
+
+    @property
+    def hay_ids_de_texto(self) -> bool:
+        """Si alguna de las altas es de una tabla de ids de texto (``AltaEnNodo(..., id_de_texto=True)``)."""
+        return any(a.id_de_texto for a in self.altas)
 
 
 def normalizar_tablas(declaradas) -> tuple[Tabla, ...]:
@@ -718,7 +734,10 @@ def registrar(conn, aprov: Aprovisionamiento, node_id: str, sucursal: str | None
     if aprov.altas:
         # Una alta que el central no puede publicar (la tabla o el mapeo no estan en la base) dejaria al nodo con filas
         # provisorias que nunca se reapuntan: mejor no registrar el nodo que registrarlo mal. Antes de escribir nada.
-        faltan = sorted(({a.tabla for a in aprov.altas} | {TABLA_DEL_MAPEO}) - set(espejo))
+        necesarias = {a.tabla for a in aprov.altas} | {TABLA_DEL_MAPEO}
+        if aprov.hay_ids_de_texto:
+            necesarias.add(TABLA_DEL_MAPEO_DE_TEXTO)
+        faltan = sorted(necesarias - set(espejo))
         if faltan:
             raise ErrorDeAprovisionamiento(
                 f"las altas en el nodo piden publicar {', '.join(faltan)} y el central no las publica (no estan en "
