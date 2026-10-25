@@ -27,7 +27,7 @@ LINUX = INSTALADOR / "linux"
 PRODUCTOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
 #: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 10 del plan de
 #: GestioLibra y MedLibra). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
-SIN_PUBLICAR = {"gestiolibra", "medlibra"}
+SIN_PUBLICAR: set[str] = set()  # GestioLibra y MedLibra se publican desde el 2026-10-25 (su `main` trae libraedge)
 PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 WORKFLOW = RAIZ / ".github" / "workflows" / "publicar-instalador.yml"
 
