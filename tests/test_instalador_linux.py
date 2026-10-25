@@ -26,7 +26,7 @@ DEBIAN = sorted((LINUX / "debian").iterdir())
 PRODUCTOS = sorted(p.stem for p in (RAIZ / "instalador" / "productos").glob("*.json"))
 #: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 10 del plan de
 #: GestioLibra y MedLibra). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
-SIN_PUBLICAR = {"gestiolibra", "medlibra"}
+SIN_PUBLICAR: set[str] = set()  # GestioLibra y MedLibra se publican desde el 2026-10-25 (su `main` trae libraedge)
 PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 
 
@@ -647,22 +647,20 @@ def test_instalar_nodo_pasa_el_codigo_a_apt_por_el_entorno():
 
 
 def test_los_sin_publicar_no_entran_al_workflow_todavia():
-    """Un producto con definicion que todavia no se publica (su `main` sin `libraedge`) tiene que faltar del workflow:
-    GestioLibra y MedLibra hasta que lo traigan sus `main` (PRs 9 y 10 del plan). Sin eso el Python del nodo no puede
-    importar `libraedge` y el instalador no pasa la prueba. Ni en las matrices ni en la lista de `armar.py`."""
+    """Un producto con definicion que todavia no se publica (su `main` sin `libraedge`) tiene que faltar del workflow.
+    Desde el 2026-10-25 no queda ninguno: GestioLibra y MedLibra se publican."""
     workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
-    assert SIN_PUBLICAR == {"gestiolibra", "medlibra"}
     for producto in SIN_PUBLICAR:
         assert producto in PRODUCTOS
         assert producto not in workflow
-    # Y lo publicado sigue siendo lo de antes: las matrices no cambian.
-    assert workflow.count("producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]") == 4
-    assert "contalibra libracargo libraclub\n" in workflow
 
 
-def test_libracargo_y_libraclub_se_publican():
+def test_los_siete_productos_se_publican():
     workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
-    assert "producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]" in workflow
+    matriz = "producto: [restolibra, ventalibra, contalibra, libracargo, libraclub, gestiolibra, medlibra]"
+    assert workflow.count(matriz) == 4
+    assert "contalibra libracargo libraclub gestiolibra medlibra\n" in workflow
+    assert sorted(matriz.split("[")[1].rstrip("]").split(", ")) == PRODUCTOS
 
 
 @pytest.mark.parametrize("producto", ["libracargo", "libraclub", "gestiolibra", "medlibra"])

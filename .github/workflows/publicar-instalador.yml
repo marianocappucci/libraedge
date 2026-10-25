@@ -33,9 +33,7 @@
 # secreto queda en los logs.
 #
 # LibraCargo y LibraClub (ADR-025) entraron a las matrices el 2026-10-24, con `libraedge` y su router de nodos en su `main`.
-# GestioLibra y MedLibra (ADR-027) tienen su definicion en instalador/productos/, pero entran a las matrices recien cuando
-# su `main` traiga `libraedge` y su router de nodos (PRs 9 y 10 del plan): sin eso el Python del nodo no puede importar
-# `libraedge` y el instalador no pasa la prueba. Un test fija que sus ids en minuscula no aparecen en este archivo.
+# GestioLibra y MedLibra (ADR-027) entraron el 2026-10-25, cuando su `main` trajo `libraedge` y su router de nodos.
 # La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de cada producto
 # en Windows y en Ubuntu 22.04 (la glibc y el WebKitGTK 4.1 mas viejos que se soportan: el mismo binario anda en
 # 24.04 y 26.04), con la compilacion de Rust en cache. Va dentro del .exe y del .deb; se prueba que arranca y
@@ -128,7 +126,7 @@ jobs:
         run: |
           v=0.0.0
           if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; fi
-          python escritorio/armar.py --version "$v" --salida _escritorio restolibra ventalibra contalibra libracargo libraclub
+          python escritorio/armar.py --version "$v" --salida _escritorio restolibra ventalibra contalibra libracargo libraclub gestiolibra medlibra
           ls -l _escritorio
       - uses: actions/upload-artifact@v4
         with:
@@ -143,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub, gestiolibra, medlibra]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -185,7 +183,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub, gestiolibra, medlibra]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -249,7 +247,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub, gestiolibra, medlibra]
         ubuntu: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     env:
       DEB: libraedge-nodo-${{ matrix.producto }}_amd64.deb
@@ -347,7 +345,7 @@ jobs:
           done
       - name: Una carga de otro producto se rechaza sin tocar nada
         run: |
-          otro=$(for p in restolibra ventalibra contalibra libracargo libraclub; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
+          otro=$(for p in restolibra ventalibra contalibra libracargo libraclub gestiolibra medlibra; do [ "$p" = "${{ matrix.producto }}" ] || { echo "$p"; break; }; done)
           jq --arg p "$otro" '.producto = $p' instalador/carga-de-prueba.json > "$RUNNER_TEMP/carga-otra.json"
           set +e
           sudo libraedge-nodo-instalar "$RUNNER_TEMP/carga-otra.json" > "$RUNNER_TEMP/instalar-otra.log" 2>&1
@@ -762,7 +760,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]
+        producto: [restolibra, ventalibra, contalibra, libracargo, libraclub, gestiolibra, medlibra]
     defaults:
       run:
         shell: pwsh
