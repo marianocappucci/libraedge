@@ -1,6 +1,7 @@
 """Compila la app de escritorio de uno o varios productos (ADR-015).
 
     python escritorio/armar.py [--version X.Y.Z] [--salida DIR] contalibra ventalibra restolibra libracargo libraclub
+        gestiolibra medlibra
 
 Un solo codigo fuente; el producto se elige al compilar (`LIBRAEDGE_PRODUCTO`, que lee `build.rs`): nombre,
 icono, identificador y la definicion del instalador. Deja en DIR (por defecto `escritorio/salida`):

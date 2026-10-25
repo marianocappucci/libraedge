@@ -54,6 +54,7 @@ def _carga(producto="ventalibra", variables=None, **cambios):
 #: Las cadenas de migraciones de cada producto, en el orden de `configure(migraciones=...)` de su
 #: `scripts/panel_admin.py`: el nodo corre las mismas que el central.
 CADENAS_COMUNES = ["libracore-migrar", "libraauth-migrar", "libracommerce-migrar", "alembic"]
+CADENAS_DE_LIBRAGENDA = ["libragenda-migrar", "libraauth-migrar", "libracore-migrar", "alembic"]
 CADENAS = {
     "contalibra": CADENAS_COMUNES,
     "restolibra": CADENAS_COMUNES,
@@ -62,13 +63,20 @@ CADENAS = {
     # ANTES de libraauth: es el orden que su panel_admin.py midio sobre una base vacia.
     "libracargo": ["libracore-migrar", "libraauth-migrar", "alembic"],
     "libraclub": ["libracore-migrar", "libracommerce-migrar", "libraauth-migrar", "alembic"],
+    # GestioLibra y MedLibra (v0.24, ADR-027): LibraGenda va SIEMPRE primero (las revisiones propias tienen FK a sus
+    # tablas); sin libracommerce.
+    "gestiolibra": CADENAS_DE_LIBRAGENDA,
+    "medlibra": CADENAS_DE_LIBRAGENDA,
 }
 #: Los que llegaron con LibraCargo y LibraClub (v0.22): de una sola base desde libracore v1.190.1.
 UNA_SOLA_BASE_NUEVA = ["libracargo", "libraclub"]
+#: Los de LibraGenda (v0.24): una sola base y **sin** `<P>_LIBRACORE_DATABASE_URL`, que ya no existe (libracore
+#: v1.194.0).
+DE_LIBRAGENDA = ["gestiolibra", "medlibra"]
 
 
 def test_estan_los_productos_con_nodo():
-    assert PRODUCTOS == ["contalibra", "libracargo", "libraclub", "restolibra", "ventalibra"]
+    assert PRODUCTOS == ["contalibra", "gestiolibra", "libracargo", "libraclub", "medlibra", "restolibra", "ventalibra"]
     assert sorted(CADENAS) == PRODUCTOS
 
 
@@ -84,10 +92,14 @@ def test_cada_definicion_del_repo_es_valida(producto):
     assert all(m[m.index("--prefijo") + 1] == producto for m in definicion.migraciones if "--prefijo" in m)
     # Una base, con las dos variables que escribe el alta de libracore (dominio y core).
     assert [b.nombre for b in definicion.bases] == [producto]
-    # LibraCargo y LibraClub suman `DATABASE_URL`: es la que lee su migrations/env.py en `alembic upgrade head`.
-    assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL",
-                                                  f"{producto.upper()}_LIBRACORE_DATABASE_URL",
-                                                  *(("DATABASE_URL",) if producto in UNA_SOLA_BASE_NUEVA else ()))
+    # LibraCargo y LibraClub suman `DATABASE_URL`: es la que lee su migrations/env.py en `alembic upgrade head`. Los de
+    # LibraGenda, que la leen ellos y `libragenda-migrar`, la traen en lugar de la del core.
+    if producto in DE_LIBRAGENDA:
+        esperadas = (f"{producto.upper()}_DATABASE_URL", "DATABASE_URL")
+    else:
+        esperadas = (f"{producto.upper()}_DATABASE_URL", f"{producto.upper()}_LIBRACORE_DATABASE_URL",
+                     *(("DATABASE_URL",) if producto in UNA_SOLA_BASE_NUEVA else ()))
+    assert definicion.base_del_nodo.variables == esperadas
     assert "tzdata" in definicion.extras  # zoneinfo en Windows no trae la base de zonas
     plan = definicion.plan()
     assert json.loads(json.dumps(plan)) == plan
@@ -96,8 +108,10 @@ def test_cada_definicion_del_repo_es_valida(producto):
 
 def test_la_base_de_auth_de_cada_producto():
     auth = {p: ins.leer_definicion(str(CARPETA / "productos" / f"{p}.json")).base_auth for p in PRODUCTOS}
-    assert auth == {"contalibra": "dominio", "libracargo": "dominio", "libraclub": "dominio",
-                    "restolibra": "dominio", "ventalibra": "core"}
+    # GestioLibra y MedLibra corren `libraauth-migrar --base core` como su `scripts/panel_admin.py` (sin la variable
+    # del core cae a la base del dominio, que es la unica): `base_auth` dice lo mismo que el comando.
+    assert auth == {"contalibra": "dominio", "gestiolibra": "core", "libracargo": "dominio", "libraclub": "dominio",
+                    "medlibra": "core", "restolibra": "dominio", "ventalibra": "core"}
 
 
 def test_el_iss_tiene_la_misma_tabla_que_las_definiciones():
@@ -111,6 +125,27 @@ def test_el_iss_tiene_la_misma_tabla_que_las_definiciones():
     # El de RestoLibra es el de siempre: cambiarlo instalaria una segunda copia al lado de la vieja.
     assert filas["restolibra"][1] == "F4887308-2B5A-4D5A-B694-1F85F48CBA4B"
     assert len({a for _, a in filas.values()}) == len(filas)
+
+
+def test_el_asistente_de_medlibra_avisa_que_la_historia_clinica_queda_en_la_pc():
+    """MedLibra guarda la historia clinica completa en la PC (su ADR-45, decision del humano: disco cifrado y clave
+    de Windows). El instalador no cifra nada: lo dice, en lenguaje simple, en una pagina del asistente antes de
+    instalar."""
+    iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
+    # Sale de la fila de MedLibra y de ninguna otra: el aviso es de un solo producto.
+    assert iss.count("InfoBeforeFile=") == 1
+    bloque = iss[iss.index('#if Producto == "medlibra"\n;'):]
+    assert bloque.splitlines()[3] == "InfoBeforeFile=avisos\\medlibra.txt"
+    assert bloque.splitlines()[4] == "#endif"
+    assert sorted(p.name for p in (CARPETA / "avisos").iterdir()) == ["medlibra.txt"]
+    aviso = (CARPETA / "avisos" / "medlibra.txt").read_text(encoding="utf-8")
+    assert aviso.isascii()  # ISCC lo lee con la pagina de codigos del sistema
+    for frase in ("historia clinica", "BitLocker", "usuario", "clave", "respaldos", "NO estan cifrados",
+                  "NO borra los", "dar de baja", "NO las hace ni las comprueba"):
+        assert frase in aviso, frase
+    # Y la documentacion del instalador lo cuenta.
+    readme = (CARPETA / "README.md").read_text(encoding="utf-8")
+    assert "avisos/medlibra.txt" in readme and "BitLocker" in readme
 
 
 def test_el_iss_copia_todos_los_scripts():
@@ -268,11 +303,45 @@ def test_el_nodo_de_libracargo_y_el_de_libraclub_llevan_una_sola_base(producto):
     assert entorno["LIBRAEDGE_CARGA_INICIAL"] == esperada
 
 
+@pytest.mark.parametrize("producto", DE_LIBRAGENDA)
+def test_el_nodo_de_gestiolibra_y_el_de_medlibra_llevan_una_sola_base_y_cuatro_cadenas(producto):
+    """GestioLibra (ADR-036) y MedLibra (ADR-045): una sola base, con `<P>_DATABASE_URL` y `DATABASE_URL` en la misma
+    URL (la segunda la leen `libragenda-migrar` y `alembic`), sin variable del core; las cuatro cadenas de su
+    `scripts/panel_admin.py` en ese orden, y sin la carga inicial de existencias."""
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / f"{producto}.json"))
+    assert [(b.nombre, b.nodo) for b in definicion.bases] == [(producto, True)]
+    assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL", "DATABASE_URL")
+    assert definicion.migraciones == (
+        ("libragenda-migrar", "upgrade"),
+        ("libraauth-migrar", "upgrade", "--prefijo", producto, "--base", "core"),
+        ("libracore-migrar", "upgrade", "--prefijo", producto),
+        ("alembic", "upgrade", "head"),
+    )
+    assert definicion.base_auth == "core"
+    assert (definicion.asgi, definicion.puerto, definicion.salud) == ("app.asgi:app", 8000, "/health")
+    assert definicion.version_esquema == "alembic"
+    assert definicion.variables == {} and "tzdata" in definicion.extras
+    entorno = ins.armar_entorno(definicion, ins.carga_desde_dict(_carga(producto), producto),
+                                clave_pg="x", estado="e", data_dir="d")
+    urls = {entorno[v] for v in ("LIBRAEDGE_DATABASE_URL", f"{producto.upper()}_DATABASE_URL", "DATABASE_URL")}
+    assert len(urls) == 1 and urls.pop().endswith(f"/{producto}")
+    assert f"{producto.upper()}_LIBRACORE_DATABASE_URL" not in entorno
+    assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
+
+
+def test_los_app_id_de_gestiolibra_y_medlibra_son_los_de_siempre():
+    """Cambiar un `app_id` instala una segunda copia al lado de la anterior en vez de actualizar."""
+    ids = {p: ins.leer_definicion(str(CARPETA / "productos" / f"{p}.json")).app_id for p in DE_LIBRAGENDA}
+    assert ids == {"gestiolibra": "92CA33E6-2E22-4600-9671-62965FD45123",
+                   "medlibra": "27AB2E64-E863-49A2-B3BB-315FFD349C7B"}
+
+
 def test_el_instalador_no_declara_las_bases_core_que_ya_no_existen():
     """`libraclub_core` y `libracargo_core` se unieron al dominio (libracore-unir-bases): ninguna definicion las usa."""
     for producto in PRODUCTOS:
         texto = (CARPETA / "productos" / f"{producto}.json").read_text(encoding="utf-8")
         assert "libraclub_core" not in texto and "libracargo_core" not in texto, producto
+        assert "gestiolibra_core" not in texto and "medlibra_core" not in texto, producto
 
 
 def test_varias_bases_y_una_marcada_para_el_nodo():

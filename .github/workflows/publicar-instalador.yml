@@ -33,6 +33,9 @@
 # secreto queda en los logs.
 #
 # LibraCargo y LibraClub (ADR-025) entraron a las matrices el 2026-10-24, con `libraedge` y su router de nodos en su `main`.
+# GestioLibra y MedLibra (ADR-027) tienen su definicion en instalador/productos/, pero entran a las matrices recien cuando
+# su `main` traiga `libraedge` y su router de nodos (PRs 9 y 10 del plan): sin eso el Python del nodo no puede importar
+# `libraedge` y el instalador no pasa la prueba. Un test fija que sus ids en minuscula no aparecen en este archivo.
 # La version de escritorio (ADR-015): el job `escritorio` compila la app (Tauri 2, escritorio/) de cada producto
 # en Windows y en Ubuntu 22.04 (la glibc y el WebKitGTK 4.1 mas viejos que se soportan: el mismo binario anda en
 # 24.04 y 26.04), con la compilacion de Rust en cache. Va dentro del .exe y del .deb; se prueba que arranca y
