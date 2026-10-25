@@ -108,10 +108,10 @@ def test_cada_definicion_del_repo_es_valida(producto):
 
 def test_la_base_de_auth_de_cada_producto():
     auth = {p: ins.leer_definicion(str(CARPETA / "productos" / f"{p}.json")).base_auth for p in PRODUCTOS}
-    # GestioLibra y MedLibra corren `libraauth-migrar --base core` como su `scripts/panel_admin.py` (sin la variable
-    # del core cae a la base del dominio, que es la unica): `base_auth` dice lo mismo que el comando.
-    assert auth == {"contalibra": "dominio", "gestiolibra": "core", "libracargo": "dominio", "libraclub": "dominio",
-                    "medlibra": "core", "restolibra": "dominio", "ventalibra": "core"}
+    # GestioLibra (ADR-037) y MedLibra (ADR-046) migran `libraauth-migrar --base dominio` desde 2026-10-25: `base_auth`
+    # dice lo mismo que el comando. Sólo VentaLibra sigue en `core`.
+    assert auth == {"contalibra": "dominio", "gestiolibra": "dominio", "libracargo": "dominio", "libraclub": "dominio",
+                    "medlibra": "dominio", "restolibra": "dominio", "ventalibra": "core"}
 
 
 def test_el_iss_tiene_la_misma_tabla_que_las_definiciones():
@@ -313,11 +313,11 @@ def test_el_nodo_de_gestiolibra_y_el_de_medlibra_llevan_una_sola_base_y_cuatro_c
     assert definicion.base_del_nodo.variables == (f"{producto.upper()}_DATABASE_URL", "DATABASE_URL")
     assert definicion.migraciones == (
         ("libragenda-migrar", "upgrade"),
-        ("libraauth-migrar", "upgrade", "--prefijo", producto, "--base", "core"),
+        ("libraauth-migrar", "upgrade", "--prefijo", producto, "--base", "dominio"),
         ("libracore-migrar", "upgrade", "--prefijo", producto),
         ("alembic", "upgrade", "head"),
     )
-    assert definicion.base_auth == "core"
+    assert definicion.base_auth == "dominio"
     assert (definicion.asgi, definicion.puerto, definicion.salud) == ("app.asgi:app", 8000, "/health")
     assert definicion.version_esquema == "alembic"
     assert definicion.variables == {} and "tzdata" in definicion.extras
