@@ -49,7 +49,7 @@
 ; codigos del sistema.
 
 #ifndef Producto
-  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra|libracargo|libraclub nodo.iss
+  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra|libracargo|libraclub|gestiolibra|medlibra nodo.iss
 #endif
 
 #if Producto == "restolibra"
@@ -67,6 +67,12 @@
 #elif Producto == "libraclub"
   #define NombreProducto "LibraClub"
   #define AppIdProducto  "ED397C8B-C399-4EF8-B829-52A89FAC3251"
+#elif Producto == "gestiolibra"
+  #define NombreProducto "GestioLibra"
+  #define AppIdProducto  "92CA33E6-2E22-4600-9671-62965FD45123"
+#elif Producto == "medlibra"
+  #define NombreProducto "MedLibra"
+  #define AppIdProducto  "27AB2E64-E863-49A2-B3BB-315FFD349C7B"
 #else
   #error Producto desconocido: agregar productos\<producto>.json y su fila en esta tabla
 #endif
@@ -104,6 +110,11 @@ CloseApplications=force
 ; y el de "Agregar o quitar programas", que Windows lee del archivo instalado.
 SetupIconFile=libraedge.ico
 UninstallDisplayIcon={app}\libraedge.ico
+#if Producto == "medlibra"
+; La PC guarda la historia clinica completa (medlibra ADR-045, decision del humano): el asistente lo dice, en lenguaje
+; simple, antes de instalar. En una instalacion desatendida esta pagina no sale.
+InfoBeforeFile=avisos\medlibra.txt
+#endif
 #ifdef Firmar
 SignTool=firma
 SignedUninstaller=yes

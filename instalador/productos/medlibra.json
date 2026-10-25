@@ -1,0 +1,54 @@
+{
+  "formato": "libraedge-producto/1",
+  "_nota": "Una sola base (libracore _UNA_SOLA_BASE desde v1.194.0, ADR-083): MEDLIBRA_DATABASE_URL y DATABASE_URL llevan la MISMA URL; ya no hay MEDLIBRA_LIBRACORE_DATABASE_URL. DATABASE_URL es la que leen libragenda-migrar y migrations/env.py en 'alembic upgrade head'. Migraciones = las de scripts/panel_admin.py de medlibra, EN ESE ORDEN: libragenda primero (las revisiones propias tienen FK a sus tablas), despues libraauth, libracore y la propia. Auth con --base core, como las deja el panel_admin.py del producto (medido el 2026-10-25): sin la variable del core cae a la base del dominio, que es la unica; base_auth tiene que decir lo mismo que el comando. MedLibra ADR-045 (modo sin conexion); la PC guarda la historia clinica completa, ver instalador/avisos/medlibra.txt. Sin LIBRAEDGE_CARGA_INICIAL: no tiene existencias que traer. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "producto": "medlibra",
+  "nombre": "MedLibra",
+  "app_id": "27AB2E64-E863-49A2-B3BB-315FFD349C7B",
+  "prefijo_variables": "MEDLIBRA",
+  "bases": [
+    {
+      "nombre": "medlibra",
+      "variables": [
+        "MEDLIBRA_DATABASE_URL",
+        "DATABASE_URL"
+      ],
+      "nodo": true
+    }
+  ],
+  "asgi": "app.asgi:app",
+  "puerto": 8000,
+  "salud": "/health",
+  "base_auth": "core",
+  "migraciones": [
+    [
+      "libragenda-migrar",
+      "upgrade"
+    ],
+    [
+      "libraauth-migrar",
+      "upgrade",
+      "--prefijo",
+      "medlibra",
+      "--base",
+      "core"
+    ],
+    [
+      "libracore-migrar",
+      "upgrade",
+      "--prefijo",
+      "medlibra"
+    ],
+    [
+      "alembic",
+      "upgrade",
+      "head"
+    ]
+  ],
+  "extras": [
+    "tzdata",
+    "pystray>=0.19",
+    "Pillow>=10"
+  ],
+  "variables": {},
+  "version_esquema": "alembic"
+}

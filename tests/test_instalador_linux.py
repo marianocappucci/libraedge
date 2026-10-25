@@ -24,9 +24,9 @@ SCRIPTS = sorted(LINUX.glob("*.sh"))
 UNIDADES = sorted((LINUX / "systemd").iterdir())
 DEBIAN = sorted((LINUX / "debian").iterdir())
 PRODUCTOS = sorted(p.stem for p in (RAIZ / "instalador" / "productos").glob("*.json"))
-#: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 11 del plan de
-#: LibraCargo y LibraClub). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
-SIN_PUBLICAR: set[str] = set()
+#: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 10 del plan de
+#: GestioLibra y MedLibra). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
+SIN_PUBLICAR = {"gestiolibra", "medlibra"}
 PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 
 
@@ -647,12 +647,17 @@ def test_instalar_nodo_pasa_el_codigo_a_apt_por_el_entorno():
 
 
 def test_los_sin_publicar_no_entran_al_workflow_todavia():
-    """Un producto con definicion que todavia no se publica (su `main` sin `libraedge`) tiene que faltar del workflow.
-    Desde el 2026-10-24 no queda ninguno: LibraCargo y LibraClub se publican."""
+    """Un producto con definicion que todavia no se publica (su `main` sin `libraedge`) tiene que faltar del workflow:
+    GestioLibra y MedLibra hasta que lo traigan sus `main` (PRs 9 y 10 del plan). Sin eso el Python del nodo no puede
+    importar `libraedge` y el instalador no pasa la prueba. Ni en las matrices ni en la lista de `armar.py`."""
     workflow = (RAIZ / ".github" / "workflows" / "publicar-instalador.yml").read_text(encoding="utf-8")
+    assert SIN_PUBLICAR == {"gestiolibra", "medlibra"}
     for producto in SIN_PUBLICAR:
         assert producto in PRODUCTOS
-        assert f", {producto}" not in workflow and f" {producto}]" not in workflow
+        assert producto not in workflow
+    # Y lo publicado sigue siendo lo de antes: las matrices no cambian.
+    assert workflow.count("producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]") == 4
+    assert "contalibra libracargo libraclub\n" in workflow
 
 
 def test_libracargo_y_libraclub_se_publican():
@@ -660,10 +665,11 @@ def test_libracargo_y_libraclub_se_publican():
     assert "producto: [restolibra, ventalibra, contalibra, libracargo, libraclub]" in workflow
 
 
-@pytest.mark.parametrize("producto", ["libracargo", "libraclub"])
+@pytest.mark.parametrize("producto", ["libracargo", "libraclub", "gestiolibra", "medlibra"])
 def test_alembic_del_producto_encuentra_la_base(producto):
     """El `migrations/env.py` de LibraCargo y LibraClub lee `DATABASE_URL` a secas: sin ella,
-    `alembic upgrade head` corta la instalacion con «Falta DATABASE_URL» (libraedge#169)."""
+    `alembic upgrade head` corta la instalacion con «Falta DATABASE_URL» (libraedge#169). GestioLibra y MedLibra la
+    suman por lo mismo, y porque `libragenda-migrar` tambien la lee."""
     definicion = ins.leer_definicion(str(RAIZ / "instalador" / "productos" / f"{producto}.json"))
     assert ("alembic", "upgrade", "head") in definicion.migraciones
     assert "DATABASE_URL" in definicion.base_del_nodo.variables

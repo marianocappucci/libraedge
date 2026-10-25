@@ -2,7 +2,7 @@
 
 Pasos en orden para probar el instalador parametrizado (ADR-010) con **VentaLibra**, sin interfaz gráfica: lo de
 Linux se corre en el WSL y lo de Windows **dentro de la VM** con `VBoxManage guestcontrol`. Cada paso dice qué
-resultado esperar; si no da eso, parar y mirar el log que se indica. Para RestoLibra, ContaLibra, LibraCargo o LibraClub es lo mismo cambiando
+resultado esperar; si no da eso, parar y mirar el log que se indica. Para RestoLibra, ContaLibra, LibraCargo, LibraClub, GestioLibra o MedLibra es lo mismo cambiando
 `ventalibra` por el producto (y `"producto"` en la carga de prueba).
 
 La carga de prueba (`carga-de-prueba.json`) apunta a un central que no existe (`https://central-de-prueba.invalid`):

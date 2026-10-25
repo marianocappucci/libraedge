@@ -16,7 +16,7 @@
 ; Los textos van SIN acentos: sin BOM, ISCC lee este archivo con la pagina de codigos del sistema.
 
 #ifndef Producto
-  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra|libracargo|libraclub puesto.iss
+  #error Falta el producto: ISCC /DProducto=restolibra|ventalibra|contalibra|libracargo|libraclub|gestiolibra|medlibra puesto.iss
 #endif
 
 #if Producto == "restolibra"
@@ -39,6 +39,14 @@
   #define NombreProducto "LibraClub"
   #define AppIdPuesto      "BF9DDF2E-ABE6-46C5-BB4A-6C17A60FBFE7"
   #define AppIdNodo      "ED397C8B-C399-4EF8-B829-52A89FAC3251"
+#elif Producto == "gestiolibra"
+  #define NombreProducto "GestioLibra"
+  #define AppIdPuesto      "C3CAAA83-DDD8-48B8-8C84-36D2C2CFEE34"
+  #define AppIdNodo      "92CA33E6-2E22-4600-9671-62965FD45123"
+#elif Producto == "medlibra"
+  #define NombreProducto "MedLibra"
+  #define AppIdPuesto      "CE39D4BF-462A-4A72-97A2-4F40FDC15186"
+  #define AppIdNodo      "27AB2E64-E863-49A2-B3BB-315FFD349C7B"
 #else
   #error Producto desconocido: agregar productos\<producto>.json y su fila en esta tabla
 #endif

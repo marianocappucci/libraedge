@@ -1,0 +1,30 @@
+IMPORTANTE: LA HISTORIA CLINICA QUEDA EN ESTA PC
+
+Para que el consultorio siga atendiendo cuando se corta internet, esta PC
+guarda una COPIA COMPLETA de la historia clinica de los pacientes: fichas,
+notas, recetas, pedidos de estudio y consentimientos.
+
+Son datos de salud. Antes de usar la PC en el consultorio, quien la instala
+tiene que dejar hechas estas cosas (el instalador NO las hace ni las comprueba):
+
+1. Cifrar el disco. En Windows se llama BitLocker (Configuracion > Privacidad
+   y seguridad > Cifrado de dispositivo, o BitLocker en el Panel de control).
+   Guardar la clave de recuperacion en un lugar seguro, fuera de esta PC.
+
+2. Que cada persona entre a Windows con su propio usuario y su clave.
+   Nada de usuarios compartidos ni de PC sin clave.
+
+3. Dejar la PC dentro del consultorio, no en un lugar de paso. Nada de llevarla
+   a otro lado ni de usarla para otra cosa.
+
+4. Cuidar los respaldos. Los respaldos automaticos del nodo
+   (C:\ProgramData\LibraEdge\respaldos) tambien tienen la historia clinica y
+   NO estan cifrados por el instalador. Si se hace una segunda copia en un
+   pendrive o en otra PC, que ese lugar tambien este cifrado.
+
+5. Al dar de baja o cambiar esta PC: desinstalar el programa NO borra los
+   datos, quedan en C:\ProgramData\LibraEdge. Antes de entregarla, venderla o
+   tirarla hay que borrar esos datos (o el disco entero) y avisar para dar de baja
+   el nodo en el sistema.
+
+Si algo de esto no se puede cumplir, avisar antes de seguir.

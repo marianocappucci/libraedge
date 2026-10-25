@@ -25,9 +25,9 @@ ESCRITORIO = RAIZ / "escritorio"
 INSTALADOR = RAIZ / "instalador"
 LINUX = INSTALADOR / "linux"
 PRODUCTOS = sorted(p.stem for p in (INSTALADOR / "productos").glob("*.json"))
-#: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 11 del plan de
-#: LibraCargo y LibraClub). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
-SIN_PUBLICAR: set[str] = set()
+#: Los que todavia no se publican: tienen definicion, pero su `main` no trae `libraedge` (PRs 9 y 10 del plan de
+#: GestioLibra y MedLibra). Al publicarlos se sacan de aca y el workflow los suma a sus matrices.
+SIN_PUBLICAR = {"gestiolibra", "medlibra"}
 PUBLICADOS = [p for p in PRODUCTOS if p not in SIN_PUBLICAR]
 WORKFLOW = RAIZ / ".github" / "workflows" / "publicar-instalador.yml"
 
@@ -285,6 +285,9 @@ def test_el_workflow_compila_prueba_y_empaqueta_la_app():
     assert "GET / HTTP/1.1" in workflow
     for producto in PUBLICADOS:
         assert producto in workflow
+    # La app de los sin publicar tambien sale de su definicion, pero no se compila en el CI hasta que entren.
+    for producto in SIN_PUBLICAR:
+        assert producto not in workflow
 
 
 def test_actualizar_sin_vincular_un_nodo_vinculado_vuelve_a_arrancar_los_servicios():

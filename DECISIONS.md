@@ -1575,3 +1575,50 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   producto (libragenda, PR 8 a 10): `reapuntar` mueve la fila hija con la clave primaria igual a la FK (probado), pero si el nodo
   ya tiene una fila `patients` con el id definitivo, la clave primaria debería chocar y el reapuntado quedar en
   `sin_reconciliar` con su aviso (inferido, **no probado**: a verificar con la ficha real de MedLibra).
+
+## ADR-027 — GestioLibra y MedLibra en el instalador y la app de escritorio
+
+- Estado: propuesta
+- Fecha: 2026-10-25
+- Contexto: es el PR 12 del plan «GestioLibra, MedLibra y LibraDesk en la versión de escritorio»
+  (`wiki/analyses/libraedge-gestiolibra-medlibra-libradesk-2026-10-24.md`). Los dos productos adoptan el nodo en sus ramas
+  `feat/modo-sin-conexion` (ADR-036 de GestioLibra y ADR-045 de MedLibra, PRs 9 y 10) sobre `libraedge` v0.23.0 (ADR-026, los ids
+  de texto). Esta es la parte que les toca a ellos acá: la definición del instalador, la app de escritorio, los íconos y, para
+  MedLibra, el aviso de que la PC guarda la historia clínica.
+- Qué ya existe (se miró antes): el molde de LibraCargo y LibraClub (ADR-025, parte B; libraedge#164, #167 a #169): una definición
+  en `instalador/productos/`, una fila con `AppId` nuevo en `nodo.iss` y en `puesto.iss`, `PRODUCTOS` de `instalar-nodo.sh`, las
+  marcas de libra-ui y sus íconos, y la app de escritorio, que sale de la definición y no cambia.
+- Decisión:
+  1. **`instalador/productos/gestiolibra.json` y `medlibra.json`**, de una sola base: `<P>_DATABASE_URL` y `DATABASE_URL` con la
+     misma URL (la segunda la leen `libragenda-migrar` y `migrations/env.py` en `alembic upgrade head`). **Sin**
+     `<P>_LIBRACORE_DATABASE_URL`: ya no existe (`_UNA_SOLA_BASE` desde libracore v1.194.0, ADR-083). Sin `LIBRAEDGE_CARGA_INICIAL`
+     (no tienen existencias). `app.asgi:app`, puerto 8000, `/health`, `version_esquema: alembic`, extras como los otros.
+  2. **Cuatro cadenas, las de `scripts/panel_admin.py` de cada producto, en ese orden:** `libragenda-migrar upgrade` (primero: las
+     revisiones propias tienen claves foráneas a las tablas de LibraGenda), `libraauth-migrar upgrade --prefijo <p> --base core`,
+     `libracore-migrar upgrade --prefijo <p>` y `alembic upgrade head`. `base_auth` es **`core`**, no `dominio`: el validador de la
+     definición exige que diga lo mismo que el `--base` del comando, y el comando es `core` porque así lo dejó el `panel_admin.py`
+     de los dos productos (medido el 2026-10-25: con `--base core` la instancia que todavía tiene la variable del core migra la
+     suya y, sin ella, cae a la del dominio; con `--base dominio` migraría siempre el dominio). En el nodo no hay variable del core,
+     así que el destino es el mismo (la única base). El ADR-045 de MedLibra decía `dominio`; la fuente es su `panel_admin.py`.
+  3. **`app_id` nuevos** (uno por producto, para siempre) y `AppIdPuesto` nuevos en `puesto.iss`. Marcas e íconos desde libra-ui
+     v0.181.0 (`marcas/gestiolibra*.svg` y `medlibra*.svg`), armados con `armar_icono.py`.
+  4. **Todavía no se publican.** Las dos apps no están en `main` (su `main` no trae `libraedge`): entran a las definiciones y a los
+     tests, **no** a las matrices de `publicar-instalador.yml` ni a la lista de `armar.py` del workflow, porque sin `libraedge`
+     el Python del nodo no puede importarlo y el instalador no pasa la prueba (el mismo motivo de libraedge#164). `SIN_PUBLICAR`
+     de los tests de Linux y de escritorio los nombra, y un test fija que sus ids no aparecen en el workflow. Al publicarlos se
+     sacan de `SIN_PUBLICAR` y se suman a las cinco matrices y a la lista de `armar.py`.
+  5. **MedLibra: la historia clínica queda en la PC** (decisión del humano, 2026-10-21 y 2026-10-25; ADR-045 de MedLibra: disco
+     cifrado y clave de Windows). El instalador **no implementa cifrado ni lo comprueba**. Lo que sí hace es decirlo: una página
+     del asistente de Windows antes de instalar (`InfoBeforeFile=avisos\medlibra.txt` en la fila de MedLibra de `nodo.iss`), en
+     lenguaje simple: cifrar el disco (BitLocker), un usuario de Windows con clave por persona, la PC dentro del consultorio,
+     respaldos en discos cifrados, y que desinstalar **no** borra los datos (quedan en `C:\ProgramData\LibraEdge`: hay que borrarlos
+     antes de entregar la PC). Está documentado en `instalador/README.md`. En una instalación desatendida la página no se muestra.
+- Descartadas: comprobar BitLocker desde `instalar.ps1` y negarse a instalar sin él (cambia el comportamiento de un instalador que
+  corre desatendido en VMs y CI, y el humano pidió el aviso, no la obligación); cifrar la base o los respaldos del nodo (otra
+  decisión de arquitectura, no de este PR); un aviso por producto para los demás (no guardan historia clínica).
+- Consecuencias: **MINOR (v0.24.0, a decidir al taggear)**: suma dos productos y una página del asistente; no toca el esquema ni
+  ninguna ruta. **No se probó acá** (Windows, Inno Setup, runners de Ubuntu, Rust): lo que se corrió fueron los tests de las
+  definiciones, de las filas de los `.iss`, del workflow, de los íconos y del aviso; la compilación de `nodo.iss` con
+  `InfoBeforeFile` y la prueba en VM del instalador de MedLibra (PR 12 del plan) siguen abiertas. Para publicarlos falta que
+  GestioLibra y MedLibra lleguen a su `main` (con libraedge v0.23.0 y su router de nodos); **no** verificado: que `dar-de-baja`
+  borre la base local de la PC.

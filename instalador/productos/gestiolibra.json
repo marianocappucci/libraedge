@@ -1,0 +1,54 @@
+{
+  "formato": "libraedge-producto/1",
+  "_nota": "Una sola base (libracore _UNA_SOLA_BASE desde v1.194.0, ADR-083): GESTIOLIBRA_DATABASE_URL y DATABASE_URL llevan la MISMA URL; ya no hay GESTIOLIBRA_LIBRACORE_DATABASE_URL. DATABASE_URL es la que leen libragenda-migrar y migrations/env.py en 'alembic upgrade head'. Migraciones = las de scripts/panel_admin.py de gestiolibra, EN ESE ORDEN: libragenda primero (las revisiones propias tienen FK a sus tablas), despues libraauth, libracore y la propia. Auth con --base core, como las deja el panel_admin.py del producto (medido el 2026-10-25): sin la variable del core cae a la base del dominio, que es la unica; base_auth tiene que decir lo mismo que el comando. GestioLibra ADR-036 (modo sin conexion). Sin LIBRAEDGE_CARGA_INICIAL: no tiene existencias que traer. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "producto": "gestiolibra",
+  "nombre": "GestioLibra",
+  "app_id": "92CA33E6-2E22-4600-9671-62965FD45123",
+  "prefijo_variables": "GESTIOLIBRA",
+  "bases": [
+    {
+      "nombre": "gestiolibra",
+      "variables": [
+        "GESTIOLIBRA_DATABASE_URL",
+        "DATABASE_URL"
+      ],
+      "nodo": true
+    }
+  ],
+  "asgi": "app.asgi:app",
+  "puerto": 8000,
+  "salud": "/health",
+  "base_auth": "core",
+  "migraciones": [
+    [
+      "libragenda-migrar",
+      "upgrade"
+    ],
+    [
+      "libraauth-migrar",
+      "upgrade",
+      "--prefijo",
+      "gestiolibra",
+      "--base",
+      "core"
+    ],
+    [
+      "libracore-migrar",
+      "upgrade",
+      "--prefijo",
+      "gestiolibra"
+    ],
+    [
+      "alembic",
+      "upgrade",
+      "head"
+    ]
+  ],
+  "extras": [
+    "tzdata",
+    "pystray>=0.19",
+    "Pillow>=10"
+  ],
+  "variables": {},
+  "version_esquema": "alembic"
+}

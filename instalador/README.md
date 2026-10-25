@@ -2,9 +2,20 @@
 
 **Un solo instalador para todos los productos** (ADR-010, E7 de la fase 1): se compila por producto con
 `ISCC /DProducto=<producto> nodo.iss` y lo propio de cada uno vive en `productos/<producto>.json`. Hoy hay
-definiciones para **RestoLibra, VentaLibra, ContaLibra, LibraCargo y LibraClub** (las dos últimas desde v0.22, ADR-025: el instalador
-y la app de escritorio ya están; el nodo que sincroniza depende de que cada producto exponga su `app/offline.py` y su
-`Aprovisionamiento`, ver el ADR-025).
+definiciones para **RestoLibra, VentaLibra, ContaLibra, LibraCargo, LibraClub, GestioLibra y MedLibra** (LibraCargo y LibraClub desde v0.22,
+ADR-025; GestioLibra y MedLibra desde v0.24, ADR-027: el instalador y la app de escritorio ya están; el nodo que sincroniza depende de
+que cada producto exponga su `app/offline.py` y su `Aprovisionamiento`, ver esos ADR). **GestioLibra y MedLibra todavía no están en las
+matrices de `publicar-instalador.yml`** (su `main` no trae `libraedge`): se compilan a mano hasta que entren.
+
+> 🔴 **MedLibra guarda la historia clínica completa en la PC** (decisión del humano, ADR-045 de MedLibra: disco cifrado y clave de
+> Windows). El asistente de Windows lo avisa en una página antes de instalar, en lenguaje simple (`avisos/medlibra.txt`, que sale
+> de `InfoBeforeFile` en la fila de MedLibra de `nodo.iss`; en una instalación desatendida no se muestra). **El instalador no cifra
+> nada ni comprueba que el disco lo esté**: quien instala tiene que dejar hecho (1) el cifrado del disco con BitLocker, con la clave de
+> recuperación guardada fuera de la PC, (2) un usuario de Windows por persona, con clave, (3) la PC dentro del consultorio, (4) los
+> respaldos (`C:\ProgramData\LibraEdge\respaldos` y la segunda copia de `-DestinoSecundario`) en discos cifrados, y (5) borrar los datos
+> (`C:\ProgramData\LibraEdge`: desinstalar **no** los borra) o el disco entero antes de entregar, vender o tirar la PC, y dar de baja el
+> nodo en el sistema. En Ubuntu (el `.deb`) rige lo mismo con el disco cifrado con LUKS y `/var/lib/libraedge-nodo/`; ahí todavía no hay
+> aviso en el instalador. Que `dar-de-baja` borre la base local no está verificado.
 
 > ⚠️ **Estado.** La versión anterior, atada a RestoLibra, se probó entera en una VM entre el 2026-08-30 y el
 > 2026-08-31 (historia abajo). **Esta versión parametrizada todavía no corrió en Windows**: lo verificado es el
@@ -140,12 +151,12 @@ desconocida es un error):
 |---|---|
 | `producto`, `nombre`, `app_id` | id en minúsculas, nombre visible y el GUID de Inno Setup (**fijo para siempre**: es lo que hace que reinstalar actualice). El de RestoLibra es el de siempre. |
 | `prefijo_variables` | `<PRODUCTO>` en mayúsculas: `<PRODUCTO>_DATABASE_URL`, `<PRODUCTO>_ADMIN_PASSWORD` |
-| `bases` | una o varias: `{nombre, variables, nodo}`. Cada variable apunta a esa base; la que lleva `nodo: true` es también `LIBRAEDGE_DATABASE_URL` (donde vive el outbox). Hoy todas son de una sola base con `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL` (la misma URL), como escribe el alta de libracore; LibraCargo y LibraClub dejaron de tener `libracargo_core`/`libraclub_core` aparte (libracore v1.190.1). |
-| `base_auth` | el `--base` de `libraauth-migrar` (`dominio` en todos menos VentaLibra, que usa `core`); se valida contra `migraciones` |
-| `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Cuatro cadenas en los productos de LibraCommerce (libracore, libraauth, libracommerce y la del producto); LibraClub corre libracore, libracommerce, libraauth y la suya, en ese orden, y LibraCargo sólo tres (sin libracommerce) |
+| `bases` | una o varias: `{nombre, variables, nodo}`. Cada variable apunta a esa base; la que lleva `nodo: true` es también `LIBRAEDGE_DATABASE_URL` (donde vive el outbox). Hoy todas son de una sola base con `<P>_DATABASE_URL` y `<P>_LIBRACORE_DATABASE_URL` (la misma URL), como escribe el alta de libracore; LibraCargo y LibraClub dejaron de tener `libracargo_core`/`libraclub_core` aparte (libracore v1.190.1) y suman `DATABASE_URL` (la lee su `migrations/env.py`). GestioLibra y MedLibra llevan sólo `<P>_DATABASE_URL` y `DATABASE_URL` (la misma URL; ya no existe la del core, libracore v1.194.0). |
+| `base_auth` | el `--base` de `libraauth-migrar` (`core` en VentaLibra, GestioLibra y MedLibra, `dominio` en los demás); se valida contra `migraciones`. Con una base única `core` cae a la del dominio |
+| `migraciones` | los comandos, en orden: **los mismos** de `configure(migraciones=...)` en `scripts/panel_admin.py` del producto. Cuatro cadenas en los productos de LibraCommerce (libracore, libraauth, libracommerce y la del producto); LibraClub corre libracore, libracommerce, libraauth y la suya, en ese orden, y LibraCargo sólo tres (sin libracommerce). GestioLibra y MedLibra corren cuatro con `libragenda-migrar` **primero** (sus revisiones tienen claves foráneas a las tablas de LibraGenda): libragenda, libraauth, libracore y la suya |
 | `asgi`, `puerto`, `salud` | `app.asgi:app`, `8000` y `/health` (la salud tiene que devolver un objeto JSON) |
 | `extras` | requisitos de pip que el nodo suma a los del producto: `tzdata` (zoneinfo en Windows no trae la base de zonas) y `pystray`/`Pillow` (bandeja) |
-| `variables` | variables fijas de más para el `nodo.env`. Hoy `LIBRAEDGE_CARGA_INICIAL` (la carga inicial de existencias, ADR-023). Con la carga **pisan**; al actualizar un nodo ya vinculado (`completar-entorno --definicion`) se agregan sólo si faltan, y en Windows se vuelven a cargar en NSSM |
+| `variables` | variables fijas de más para el `nodo.env`. Hoy `LIBRAEDGE_CARGA_INICIAL` (la carga inicial de existencias, ADR-023; GestioLibra y MedLibra no la llevan). Con la carga **pisan**; al actualizar un nodo ya vinculado (`completar-entorno --definicion`) se agregan sólo si faltan, y en Windows se vuelven a cargar en NSSM |
 | `version_esquema` | `LIBRAEDGE_VERSION_ESQUEMA` (`alembic`) |
 
 La tabla de `nodo.iss` (nombre y `AppId` por producto) tiene que coincidir con los `.json`: lo verifica un test.
@@ -294,6 +305,7 @@ conexión con el central» en aviso (carga de prueba o local sin internet).
 |---|---|
 | `nodo.iss` | Inno Setup: copia los archivos, corre `instalar.ps1`, devuelve su código; la desinstalación |
 | `productos/*.json` | una definición por producto |
+| `avisos/<producto>.txt` | el texto de una página del asistente de Windows, antes de instalar (hoy sólo `medlibra.txt`, la historia clínica en la PC) |
 | `armar_paquete.sh` | arma `paquete/` desde Linux |
 | `instalar.ps1` | lo único que ejecuta el `.iss`; orquesta lo de abajo con transcript |
 | `preparar_postgres.ps1` | clave, `initdb`, servicio y bases |

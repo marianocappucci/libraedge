@@ -753,6 +753,8 @@ PRODUCTOS = ["contalibra", "libraclub", "restolibra", "ventalibra"]
 #: LibraCargo trae su carga propia (órdenes, caja, terceros; su ADR-056), no la de existencias de LibraCommerce.
 CARGA_PROPIA = {"libracargo": "app.servicios.carga_inicial:aplicar_carga_inicial"}
 SIN_EXISTENCIAS = list(CARGA_PROPIA)
+#: GestioLibra y MedLibra no tienen existencias ni carga propia que traer (su ADR-036 y ADR-045): sin la variable.
+SIN_CARGA = ["gestiolibra", "medlibra"]
 VALOR = "libracommerce.erp.offline_stock:aplicar_carga_inicial"
 
 
@@ -769,7 +771,20 @@ def test_cada_producto_lleva_la_variable_en_su_definicion(producto_):
 
 
 def test_los_productos_con_y_sin_existencias_son_todos_los_del_instalador():
-    assert sorted(PRODUCTOS + SIN_EXISTENCIAS) == TODOS
+    assert sorted(PRODUCTOS + SIN_EXISTENCIAS + SIN_CARGA) == TODOS
+
+
+@pytest.mark.parametrize("producto_", SIN_CARGA)
+def test_los_de_libragenda_no_declaran_carga_inicial(producto_):
+    """Sin `LIBRAEDGE_CARGA_INICIAL` el nodo no corre ninguna carga al vincular; declarar la de existencias traeria un
+    `stock_movements` que estos productos no tienen."""
+    from tests.test_instalador import _carga
+
+    definicion = _definicion(producto_)
+    assert definicion.variables == {}
+    carga = ins.carga_desde_dict(_carga(producto_), producto_)
+    entorno = ins.armar_entorno(definicion, carga, clave_pg="x", estado="e", data_dir="d")
+    assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
 
 
 @pytest.mark.parametrize("producto_", SIN_EXISTENCIAS)
