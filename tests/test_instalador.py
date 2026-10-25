@@ -94,8 +94,11 @@ def test_cada_definicion_del_repo_es_valida(producto):
     assert [b.nombre for b in definicion.bases] == [producto]
     # LibraCargo y LibraClub suman `DATABASE_URL`: es la que lee su migrations/env.py en `alembic upgrade head`. Los de
     # LibraGenda, que la leen ellos y `libragenda-migrar`, la traen en lugar de la del core.
+    # VentaLibra lleva sólo la suya: ventalibra#693 hace que su core caiga al dominio, y no lee `DATABASE_URL`.
     if producto in DE_LIBRAGENDA:
         esperadas = (f"{producto.upper()}_DATABASE_URL", "DATABASE_URL")
+    elif producto == "ventalibra":
+        esperadas = ("VENTALIBRA_DATABASE_URL",)
     else:
         esperadas = (f"{producto.upper()}_DATABASE_URL", f"{producto.upper()}_LIBRACORE_DATABASE_URL",
                      *(("DATABASE_URL",) if producto in UNA_SOLA_BASE_NUEVA else ()))
@@ -329,6 +332,29 @@ def test_el_nodo_de_gestiolibra_y_el_de_medlibra_llevan_una_sola_base_y_cuatro_c
     assert "LIBRAEDGE_CARGA_INICIAL" not in entorno
 
 
+def test_el_nodo_de_ventalibra_lleva_una_sola_variable_de_base_y_ninguna_del_core():
+    """ventalibra#693 (ADR-094): sin `VENTALIBRA_LIBRACORE_DATABASE_URL` el core de VentaLibra es la base del dominio, y
+    las cuatro cadenas (`libracore-migrar`, `libraauth-migrar --base core`, `libracommerce-migrar`, `alembic`) resuelven
+    esa misma base. Con la variable apuntando a la misma base no pasaba nada, pero la definición dejaba creer que sin
+    ella la app cae a un SQLite. Tampoco `DATABASE_URL`: VentaLibra no la lee (su `migrations/env.py` usa
+    `url_de_instancia("ventalibra")`)."""
+    definicion = ins.leer_definicion(str(CARPETA / "productos" / "ventalibra.json"))
+    assert [(b.nombre, b.nodo, b.variables) for b in definicion.bases] == [
+        ("ventalibra", True, ("VENTALIBRA_DATABASE_URL",))]
+    # como migra su scripts/panel_admin.py; con una base única cae a la del dominio
+    assert definicion.base_auth == "core"
+    assert "_nota" in json.loads((CARPETA / "productos" / "ventalibra.json").read_text(encoding="utf-8"))
+    entorno = ins.armar_entorno(definicion, ins.carga_desde_dict(_carga("ventalibra"), "ventalibra"),
+                                clave_pg="x", estado="e", data_dir="d")
+    assert entorno["VENTALIBRA_DATABASE_URL"] == entorno["LIBRAEDGE_DATABASE_URL"]
+    assert not [k for k in entorno if "LIBRACORE" in k], sorted(entorno)
+    assert "DATABASE_URL" not in entorno
+    assert ins.revisar_entorno(definicion, entorno) == []
+    # y el ejemplo que se le muestra a quien arma el nodo a mano dice lo mismo
+    ejemplo = (CARPETA / "nodo.env.ejemplo").read_text(encoding="utf-8")
+    assert "VENTALIBRA_DATABASE_URL=" in ejemplo and "LIBRACORE" not in ejemplo
+
+
 def test_los_app_id_de_gestiolibra_y_medlibra_son_los_de_siempre():
     """Cambiar un `app_id` instala una segunda copia al lado de la anterior en vez de actualizar."""
     ids = {p: ins.leer_definicion(str(CARPETA / "productos" / f"{p}.json")).app_id for p in DE_LIBRAGENDA}
@@ -458,7 +484,6 @@ def test_el_entorno_completo_del_nodo():
         "LIBRAEDGE_ESTADO": "C:\\Program Files\\LibraEdge\\estado.json",
         "LIBRAEDGE_VERSION_ESQUEMA": "alembic",
         "VENTALIBRA_DATABASE_URL": url,
-        "VENTALIBRA_LIBRACORE_DATABASE_URL": url,
         "DATA_DIR": "C:\\ProgramData\\LibraEdge\\app",
         "SECRET_KEY": "generado-0",
         "ADMIN_PASSWORD": "generado-1",

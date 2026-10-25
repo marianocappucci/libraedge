@@ -1,6 +1,6 @@
 {
   "formato": "libraedge-producto/1",
-  "_nota": "Una sola base, pero VENTALIBRA_LIBRACORE_DATABASE_URL es obligatoria: sin ella app/main.py cae a un SQLite en ./data. Auth con --base core (que resuelve a la misma base). Migraciones = las de scripts/panel_admin.py de ventalibra. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
+  "_nota": "Una sola base y una sola variable: VENTALIBRA_DATABASE_URL. Ya no hay VENTALIBRA_LIBRACORE_DATABASE_URL: desde ventalibra#693 (ADR-094) app/main.py resuelve el core con la base del dominio cuando falta, y libracore-migrar, libracommerce-migrar y libraauth-migrar --base core hacen lo mismo (libracore _UNA_SOLA_BASE). Tampoco DATABASE_URL a secas, a diferencia de los demas: VentaLibra no la lee (migrations/env.py usa url_de_instancia('ventalibra'), que mira VENTALIBRA_DATABASE_URL y el historico VENTALIBRA_DB_PATH). Pide una app con ventalibra#693: una anterior, sin la variable del core, caeria a un SQLite en ./data. Auth con --base core (que resuelve a la misma base; asi migra el producto en scripts/panel_admin.py y base_auth tiene que decir lo mismo). Migraciones = las de scripts/panel_admin.py de ventalibra. El app_id no se cambia nunca: es lo que hace que una reinstalacion actualice.",
   "producto": "ventalibra",
   "nombre": "VentaLibra",
   "app_id": "ED40FA78-DE81-4F77-8006-2930D4ADBCAB",
@@ -9,8 +9,7 @@
     {
       "nombre": "ventalibra",
       "variables": [
-        "VENTALIBRA_DATABASE_URL",
-        "VENTALIBRA_LIBRACORE_DATABASE_URL"
+        "VENTALIBRA_DATABASE_URL"
       ],
       "nodo": true
     }
