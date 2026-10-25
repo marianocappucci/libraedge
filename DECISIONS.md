@@ -1594,12 +1594,13 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
      `<P>_LIBRACORE_DATABASE_URL`: ya no existe (`_UNA_SOLA_BASE` desde libracore v1.194.0, ADR-083). Sin `LIBRAEDGE_CARGA_INICIAL`
      (no tienen existencias). `app.asgi:app`, puerto 8000, `/health`, `version_esquema: alembic`, extras como los otros.
   2. **Cuatro cadenas, las de `scripts/panel_admin.py` de cada producto, en ese orden:** `libragenda-migrar upgrade` (primero: las
-     revisiones propias tienen claves foráneas a las tablas de LibraGenda), `libraauth-migrar upgrade --prefijo <p> --base core`,
-     `libracore-migrar upgrade --prefijo <p>` y `alembic upgrade head`. `base_auth` es **`core`**, no `dominio`: el validador de la
-     definición exige que diga lo mismo que el `--base` del comando, y el comando es `core` porque así lo dejó el `panel_admin.py`
-     de los dos productos (medido el 2026-10-25: con `--base core` la instancia que todavía tiene la variable del core migra la
-     suya y, sin ella, cae a la del dominio; con `--base dominio` migraría siempre el dominio). En el nodo no hay variable del core,
-     así que el destino es el mismo (la única base). El ADR-045 de MedLibra decía `dominio`; la fuente es su `panel_admin.py`.
+     revisiones propias tienen claves foráneas a las tablas de LibraGenda), `libraauth-migrar upgrade --prefijo <p> --base dominio`,
+     `libracore-migrar upgrade --prefijo <p>` y `alembic upgrade head`. `base_auth` es **`dominio`**: el validador de la
+     definición exige que diga lo mismo que el `--base` del comando, y desde gestiolibra ADR-037 y medlibra ADR-046 (2026-10-25)
+     los dos productos migran libraauth con `--base dominio` en su `panel_admin.py`. Antes se había puesto `core` (con `--base core`
+     la instancia que todavía tiene la variable del core migra la suya y, sin ella, cae a la del dominio); con la base única no
+     hay variable del core y el destino es el mismo, pero la definición dice lo que dicen los productos. Sólo VentaLibra queda
+     con `core`.
   3. **`app_id` nuevos** (uno por producto, para siempre) y `AppIdPuesto` nuevos en `puesto.iss`. Marcas e íconos desde libra-ui
      v0.181.0 (`marcas/gestiolibra*.svg` y `medlibra*.svg`), armados con `armar_icono.py`.
   4. **Todavía no se publican.** Las dos apps no están en `main` (su `main` no trae `libraedge`): entran a las definiciones y a los
