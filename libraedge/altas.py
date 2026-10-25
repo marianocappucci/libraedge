@@ -57,10 +57,15 @@ class Referencia:
 
 @dataclass(frozen=True)
 class AltaEnNodo:
-    """Una tabla con alta en el nodo y las referencias sin FK que apuntan a sus filas."""
+    """Una tabla con alta en el nodo y las referencias sin FK que apuntan a sus filas.
+
+    `id_de_texto` (v0.23, ADR-026) es para una tabla cuyos ids son **texto** (libragenda: un uuid, un `p-042`): su id
+    provisorio es `"-N"` y su mapeo es `libraedge_mapeo_texto`, que `Aprovisionamiento` suma al espejo. Es una
+    declaracion del **central**: no viaja en `LIBRAEDGE_ALTAS_EN_NODO`, porque el nodo ve el tipo en la base."""
 
     tabla: str
     referencias: tuple[Referencia, ...] = ()
+    id_de_texto: bool = False
 
     def __post_init__(self):
         validar_identificador(self.tabla)

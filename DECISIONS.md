@@ -1507,3 +1507,71 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   tests de las definiciones, de las filas del `.iss` y del workflow y de los iconos; la primera corrida de `Publicar instalador` en
   el PR es la medición. Mientras LibraCargo y LibraClub no cumplan el contrato de arriba, un nodo instalado es sólo el producto web
   sobre una PC local, sin nada que sincronizar.
+
+## ADR-026 — Ids provisorios de texto: `"-N"` y `libraedge_mapeo_texto`
+
+- Estado: propuesta
+- Fecha: 2026-10-25
+- Contexto: es el PR 7 del plan «GestioLibra, MedLibra y LibraDesk en la versión de escritorio»
+  (`wiki/analyses/libraedge-gestiolibra-medlibra-libradesk-2026-10-24.md`). Las altas en el nodo (ADR-021) usan un id provisorio
+  **entero negativo** y el central lo traduce al definitivo con `libraedge_mapeo`. libragenda (GestioLibra y MedLibra) tiene ids
+  de **texto**: un uuid en `clients`, y `p-042` en los pacientes de MedLibra (que además es a la vez clave primaria y clave
+  foránea de `clients.id`). El mismo mecanismo tiene que servir para texto sin tocar a los cinco productos que ya usan el de
+  enteros (ContaLibra, RestoLibra, VentaLibra, LibraCargo y LibraClub). La guarda del espejo (ADR-019) ya dejaba pasar un texto
+  `-N` (compara el texto con `^-[0-9]+$`).
+- Qué ya existe (se miró antes de diseñar): `libraedge/mapeo.py` (`es_provisorio`, `traducir_id`, `anotar_mapeo`),
+  `sync/reconciliacion.py` (que hacía `int()` sobre los dos ids), `MirrorApplier` y su barrido, la declaración por
+  `Aprovisionamiento` → `registrar` → carga, y **cómo usan el mapeo los productos**: LibraCargo y LibraClub lo importan
+  (`anotar_mapeo`, `traducir_id`, `es_provisorio`, `siguiente_id_provisorio`) **y además lo leen con SQL propio**
+  (`libracargo:app/servicios/emisores.py:136`, `SELECT id_central FROM libraedge_mapeo WHERE ... AND id_nodo = :id` con un
+  entero; `libraclub:app/servicios/caja.py:483`, `... WHERE id_central IN (?, ?, ...)` con enteros, dentro de un
+  `except Exception` que devuelve «sin equivalentes»).
+- Decisión:
+  1. **El id provisorio de texto es `"-N"`** (un `-` y un número sin ceros a la izquierda, hasta 18 cifras). `es_provisorio`
+     lo acepta además del entero negativo; `es_provisorio_de_texto` y `tabla_del_mapeo` dicen cuál es. Los enteros siguen
+     exactamente igual (el test existente `test_es_provisorio` cambió una sola línea: `"-1"` ya no es «no provisorio»).
+     `siguiente_id_provisorio(conn, texto=True)` da `"-1"`, `"-2"`, ... de **la misma secuencia** `local_sequences` (una sola
+     por base: un número no se reusa aunque cambie la forma).
+  2. **El mapeo de texto es otra tabla, `libraedge_mapeo_texto(node_id, tabla, id_nodo TEXT, id_central TEXT, creado_at)`**,
+     misma clave `(node_id, tabla, id_nodo)`, que crea `init_schema()` (central y nodo, sin migración del producto). Qué mapeo
+     se usa lo dice **el tipo del id que se pide**: `traducir_id(conn, nodo, tabla, -3)` va a `libraedge_mapeo` y devuelve un
+     `int`; `traducir_id(conn, nodo, tabla, "-3")` va a `libraedge_mapeo_texto` y devuelve un `str`. Un texto que no es `"-N"`
+     (un uuid, un `p-042`) es un id del central y vuelve igual. `anotar_mapeo` hace lo mismo (idempotente; un mapeo distinto
+     para el mismo id es `MapeoEnConflicto`); el `id_central` de un mapeo de texto es un texto no vacío y no provisorio.
+  3. **El reapuntado deja de convertir.** `reapuntar(conn, tabla, provisorio, definitivo)` recibe los ids del tipo de la clave
+     (enteros o textos) y los pasa tal cual: PostgreSQL no compara un entero con una columna de texto, y el `int()` de antes
+     rompía las tablas de texto. Valida con `es_provisorio` el primero y que el segundo no lo sea. Las claves foráneas (incluida
+     la que es a la vez clave primaria, `patients.id`) y las referencias sin FK se reapuntan igual. `clave_es_entera(conn,
+     tabla, clave)` lee el tipo de la columna del catálogo.
+  4. **El espejo baja los dos mapeos.** `MirrorApplier` reapunta con enteros las filas que bajan por `libraedge_mapeo` y con
+     textos las que bajan por `libraedge_mapeo_texto` (la tabla de la que viene la fila dice el tipo). El barrido de
+     `reconciliar_pendientes` elige el mapeo por el tipo de la clave de cada tabla con alta; si el nodo no espeja el mapeo de
+     texto, salta las tablas de texto.
+  5. **Se declara por alta:** `AltaEnNodo("clients", referencias, id_de_texto=True)`. `Aprovisionamiento` suma entonces
+     `libraedge_mapeo_texto` al espejo y a las de solo lectura (y `libraedge_mapeo`, como siempre), y `registrar` se niega a
+     registrar el nodo si el central no puede publicarla. El indicador **no viaja** en `LIBRAEDGE_ALTAS_EN_NODO`: el nodo ve el
+     tipo en su base. Sin `id_de_texto`, el espejo y la carga son los de v0.22.
+- Desvío del diseño propuesto, y por qué: **`libraedge_mapeo` no pasa a `TEXT`.** El plan proponía guardar el id como texto en la
+  misma tabla con una migración aditiva. No es aditiva para quien la lee con SQL propio: con `id_nodo` e `id_central` en `TEXT`,
+  PostgreSQL contesta `operator does not exist: text = smallint` a las dos consultas de arriba (medido contra PostgreSQL 16.15 con
+  la capa de LibraCore; con la tabla de enteros pasada a `TEXT` fallan además los tests existentes de `test_mapeo.py` en PostgreSQL), y la de
+  LibraClub lo hace **en silencio** (según su código, el `except Exception` devuelve un solo id y los cobros de la reserva con
+  id provisorio dejan de verse como suyos). Agregar una columna de texto nulable a la misma tabla evita eso pero cambia la forma de **cada** fila
+  espejada (`to_jsonb(NEW)` incluye la columna nueva): un nodo de v0.22 la rechazaría con `column does not exist` en el
+  primer mapeo que baje, y el central se actualiza antes que las PC. Una tabla aparte no cambia un byte de lo que existe, no
+  cambia el payload de nadie, y se desarma con un `DROP`.
+- Descartadas: pasar `libraedge_mapeo` a `TEXT` con `ALTER ... USING id_nodo::text` (rompe a LibraCargo y LibraClub, ver arriba;
+  exigiría cambiar sus consultas en el mismo tag de pin); una columna `id_central_texto` en la misma tabla (el payload nuevo
+  rompe los nodos de antes); convertir los ids por la forma (`"57"` → `57`) para decidir el tipo (un id de texto puede ser
+  numérico; el catálogo y la tabla de origen lo dicen sin adivinar); un indicador en `LIBRAEDGE_ALTAS_EN_NODO` (cambia el
+  formato de la carga, que el instalador valida con un parser propio, para algo que el nodo ya ve en su base).
+- Consecuencias: **MINOR (v0.23.0)**: suma API (`es_provisorio_de_texto`, `tabla_del_mapeo`, `TABLA_TEXTO`, `clave_es_entera`,
+  `siguiente_id_provisorio(texto=)`, `AltaEnNodo.id_de_texto`) y una tabla; **sin declarar `id_de_texto`, el comportamiento es el
+  de v0.22** y los cinco productos no cambian. Una diferencia deliberada: `traducir_id` con un texto que **no** es `"-N"` lo
+  devuelve tal cual (antes lo pasaba por `int()`, así que `"57"` daba `57`); ningún producto pasa textos de enteros, pero
+  quien lo hiciera tiene que pasar el entero. Volver a v0.22 deja `libraedge_mapeo_texto` sin leer (`DROP TABLE` la saca; los
+  mapeos de texto se pierden, pero esos productos no existen en v0.22). **Lo que no cubre:** que el central deduplique, asigne
+  el id definitivo (uuid, el próximo `p-NNN`) y reapunte `patients.id` cuando la ficha definitiva **ya bajó por el espejo** es del
+  producto (libragenda, PR 8 a 10): `reapuntar` mueve la fila hija con la clave primaria igual a la FK (probado), pero si el nodo
+  ya tiene una fila `patients` con el id definitivo, la clave primaria debería chocar y el reapuntado quedar en
+  `sin_reconciliar` con su aviso (inferido, **no probado**: a verificar con la ficha real de MedLibra).

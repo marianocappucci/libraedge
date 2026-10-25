@@ -45,8 +45,9 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
     `desinstalar_trigger`, `sembrar`, `listar_cambios`), con validación de
     identificadores. Es lo que llena el outbox sin que el producto tenga que
     llamar a nadie.
-- **`mapeo.py`** (`siguiente_id_provisorio`, `anotar_mapeo`, `traducir_id`, `SinMapeo`) — el id provisorio negativo de las altas
-  del nodo y la tabla `libraedge_mapeo` con la que el central las traduce (ADR-021).
+- **`mapeo.py`** (`siguiente_id_provisorio`, `anotar_mapeo`, `traducir_id`, `es_provisorio`, `SinMapeo`) — el id provisorio
+  negativo de las altas del nodo y la tabla `libraedge_mapeo` con la que el central las traduce (ADR-021). Desde v0.23 el id
+  provisorio también puede ser el texto `"-N"` (tablas de ids de texto) y su mapeo es `libraedge_mapeo_texto` (ADR-026).
 - **`altas.py`** (`AltaEnNodo`, `Referencia`, `parsear_altas`, `formatear_altas`) — las tablas con alta en el nodo y lo que las
   referencia sin FK; viaja por la carga como `LIBRAEDGE_ALTAS_EN_NODO`.
 - **`domain/sync.py`** — el modelo de la sincronización, puro:

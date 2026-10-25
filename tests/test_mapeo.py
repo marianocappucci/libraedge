@@ -55,7 +55,9 @@ def test_la_secuencia_provisoria_no_toca_la_del_outbox(conn):
 def test_es_provisorio():
     assert es_provisorio(-1) and es_provisorio(-250)
     assert not es_provisorio(0) and not es_provisorio(57) and not es_provisorio(None)
-    assert not es_provisorio("-1") and not es_provisorio(True)
+    assert not es_provisorio(True)
+    # Desde v0.23 el texto "-N" tambien lo es (ADR-026); el detalle esta en test_mapeo_de_texto.py.
+    assert es_provisorio("-1")
 
 
 # ── el mapeo ────────────────────────────────────────────────────────────────

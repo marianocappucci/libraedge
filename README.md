@@ -168,6 +168,21 @@ Aprovisionamiento(..., tablas_de_referencia=[..., "clients", "parties"],
 `registrar` la manda en la carga (`LIBRAEDGE_ALTAS_EN_NODO`) y suma `libraedge_mapeo` al espejo; una tabla con alta puede además
 estar en `tablas_solo_lectura`: la guarda deja pasar sus filas provisorias. Sin declarar nada, v0.18 se comporta como v0.17.
 
+## Fase 2 (v0.23): ids provisorios de texto (ADR-026)
+
+Una tabla de ids de **texto** (libragenda: un uuid, un `p-042`) da de alta en el nodo con el id provisorio **`"-N"`**
+(`siguiente_id_provisorio(conn, texto=True)`) y el central lo mapea en **`libraedge_mapeo_texto`**, una tabla aparte con
+las mismas columnas en `TEXT`. `es_provisorio`, `traducir_id` y `anotar_mapeo` entienden las dos formas: **un entero va al
+mapeo de enteros y devuelve un entero** (nada cambia para los cinco productos de hoy, que además leen `libraedge_mapeo` con
+SQL propio), un `"-N"` va al de texto y devuelve un texto. Se declara por alta:
+
+```python
+Aprovisionamiento(..., altas_en_nodo=[AltaEnNodo("clients", id_de_texto=True), "branches"])
+```
+
+`id_de_texto=True` suma `libraedge_mapeo_texto` al espejo y a las de solo lectura; el reapuntado (`reapuntar`) pasa los ids tal
+cual, sin `int()`. Sin declararlo, v0.23 se comporta como v0.22.
+
 ## La carga inicial de existencias (v0.20, ADR-023)
 
 Un nodo recién vinculado arranca con el stock en cero: las existencias son de autoridad del nodo y no bajan por el espejo.
