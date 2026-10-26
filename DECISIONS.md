@@ -1626,7 +1626,7 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
 
 ## ADR-028 — El nodo cierra solo lo que quedó en revisión y se resolvió en el central: `POST /sync/v1/estado-operaciones`
 
-- Estado: propuesta
+- Estado: aceptada (pedido del humano, 2026-10-26)
 - Fecha: 2026-10-26
 - Contexto: cuando el central rechaza una operación del nodo, la guarda entera en `sync_inbox` como `manual_review` y el nodo
   marca su copia del outbox igual (ADR-007, ADR-020). Alguien la resuelve en el central: `libraedge.sync.revision.reintentar`
