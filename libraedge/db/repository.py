@@ -451,6 +451,26 @@ class NodeRepository:
         ).fetchall()
         return tuple(self.get_operation(fila[0]) for fila in filas)
 
+    def ids_en_revision(self, despues_de: str | None = None, limite: int = 50) -> list[str]:
+        """Los `operation_id` en `manual_review`, de a una tanda y en un orden total (ADR-028).
+
+        Es lo que el nodo le pregunta al central para enterarse de que alguien la resolvio. El orden es por
+        `operation_id` --no por `sequence`-- porque es un orden total y estable: la tanda siguiente arranca
+        `despues_de` el ultimo id de la anterior y recorre **todas** las que hay, en vez de repetir siempre las
+        primeras `limite`. Solo lee: no toca ninguna operacion.
+        """
+        sql = "SELECT operation_id FROM sync_outbox WHERE status = ?"
+        parametros: list = [str(SyncOperationStatus.MANUAL_REVIEW)]
+        if despues_de is not None:
+            sql += " AND operation_id > ?"
+            parametros.append(despues_de)
+        sql += " ORDER BY operation_id LIMIT ?"
+        parametros.append(max(1, int(limite)))
+        ids = [fila[0] for fila in self._conn.execute(sql, tuple(parametros)).fetchall()]
+        # La lectura abre una transaccion en PostgreSQL y lo que sigue es una consulta de red: no se la deja abierta.
+        self._conn.commit()
+        return ids
+
     def listar_descartadas(self) -> tuple[OutboxOperation, ...]:
         """Lo que soporte cerro con `descartar_operacion`, con su `last_error` (motivo, momento y rechazo original)."""
         filas = self._conn.execute(
@@ -514,6 +534,11 @@ class NodeRepository:
         contesta `duplicate` y el nodo la confirma. Solo toca operaciones en
         `manual_review`; levanta `LookupError` si no hay ninguna con ese id en
         ese estado.
+
+        Desde v0.25 (ADR-028) no hace falta correrlo a mano: el nodo le pregunta
+        al central por lo que tiene en revision
+        (`libraedge.sync.cierre_de_revision`) y, si la aplicaron, llama a esto.
+        El comando `libraedge-nodo revision reenviar` queda para forzarlo.
         """
         cursor = self._escribir(
             "UPDATE sync_outbox SET status = ?, next_attempt_at = NULL"

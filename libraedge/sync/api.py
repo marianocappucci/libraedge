@@ -14,6 +14,10 @@ de la instancia.
 
 Desde v0.20 ``create_sync_router`` suma ``GET /sync/v1/carga-inicial``: las existencias de la sucursal del nodo, que el
 nodo trae una vez al vincularse (ADR-023). Se autentica con el secreto del nodo, como push y pull.
+
+Desde v0.25 ``create_sync_router`` suma ``POST /sync/v1/estado-operaciones``: el estado que el central tiene de unas
+operaciones del nodo, para que el nodo cierre solo las que estaban en revision y ya se resolvieron (ADR-028). Solo
+lee. Se autentica con el secreto del nodo.
 """
 
 import hmac
@@ -25,7 +29,9 @@ import os
 from libraedge.db.changelog import listar_cambios
 from libraedge.domain.sync import OutboxOperation
 from libraedge.sync import carga_inicial as _carga_inicial
+from libraedge.sync import cierre_de_revision as _cierre
 from libraedge.sync import esquema
+from libraedge.sync import revision as _revision
 from libraedge.sync import ticket as _ticket
 from libraedge.sync.pull import serializar_cambio
 
@@ -52,6 +58,7 @@ RUTAS_AUTENTICADAS_POR_NODO = (
     ("GET", "/sync/v1/pull"),
     ("POST", _ticket.RUTA),
     ("GET", _carga_inicial.RUTA),
+    ("POST", _cierre.RUTA),
 )
 
 #: Lo que un push tiene que traer. Vive afuera de las dos fabricas para que no
@@ -398,6 +405,15 @@ def create_sync_router(abrir_conexion, operation_handler=None,
     elige. La conexion es la del request. El ``dict`` viaja con los ``Decimal`` como texto (como la bajada). Sin la
     costura la ruta contesta 501 (despues de autenticar): el nodo lo lee como «este producto no tiene carga inicial».
     Es una ruta autenticada por el secreto del nodo, como push y pull: ver ``RUTAS_AUTENTICADAS_POR_NODO``.
+
+    ## Desde v0.25: el estado de las operaciones (ADR-028)
+
+    ``POST /sync/v1/estado-operaciones`` ``{"node_id", "operation_ids": [..]}`` (de 1 a 200) contesta
+    ``{"operaciones": {id: {"estado": "applied" | "manual_review" | "discarded", "motivo"}}}`` con lo que ``sync_inbox``
+    tiene de las operaciones **de ese nodo**; lo que no tiene no figura. **Solo lee**: no hay costura que cablear ni
+    manejador que se llame. Es lo que usa el nodo para cerrar solo lo que quedo en revision y alguien resolvio en el
+    central. Un central anterior a v0.25 contesta 404 y el nodo sigue como antes. Es una ruta autenticada por el
+    secreto del nodo: ver ``RUTAS_AUTENTICADAS_POR_NODO``.
     """
     if carga_inicial is not None and inspect.iscoroutinefunction(carga_inicial):
         raise ValueError("carga_inicial es sincronica: recibe la conexion del request, que no es de un loop")
@@ -466,6 +482,25 @@ def create_sync_router(abrir_conexion, operation_handler=None,
             resultado = receptor.accept(operacion)
         return {"operation_id": operacion.operation_id,
                 "result": resultado.result, "error": resultado.error}
+
+    @router.post(_cierre.RUTA)
+    def estado_de_operaciones(payload: dict, request: Request):
+        """El estado en ``sync_inbox`` de unas operaciones del nodo. **Solo lee.** Ver ``cierre_de_revision``."""
+        node_id = payload.get("node_id")
+        if not isinstance(node_id, str) or not node_id.strip():
+            raise HTTPException(422, detail={"missing": ["node_id"]})
+        ids = payload.get("operation_ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) and i for i in ids):
+            raise HTTPException(422, detail="operation_ids: una lista de textos")
+        if not 1 <= len(ids) <= _revision.MAXIMO_POR_CONSULTA:
+            raise HTTPException(422, detail=f"operation_ids: de 1 a {_revision.MAXIMO_POR_CONSULTA}")
+        secreto = _secreto(request)
+        with abrir_conexion() as conexion:
+            # Mismo gate que push y pull: secreto de un nodo ACTIVO, latido y esquema.
+            _autenticar(conexion, node_id, secreto)
+            _verificar_esquema(request, version_esquema, conexion, HTTPException)
+            operaciones = _revision.estados_de_operaciones(conexion, node_id, ids)
+        return {"operaciones": operaciones}
 
     def _autorizar_monitoreo(request, token_de_query: str | None) -> None:
         """El token de monitoreo de la instancia. 404 si no esta definido, 401 si no coincide.

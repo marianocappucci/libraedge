@@ -36,6 +36,12 @@ Un paso aparte, **despues** de la bajada y solo si esa bajada termino (ADR-023):
 sucursal una sola vez por nodo, con la funcion que el producto declara. Su resultado va a `EstadoNodo.carga_inicial` y
 **no** toca `en_linea`: que la carga inicial espere o falle no es estar fuera de linea, y no puede frenar las ventas.
 
+## El cierre de lo que quedo en revision va al final de todo
+
+Un paso mas, **despues de subir y de bajar** (ADR-028): cada tanto el nodo le pregunta al central por lo que tiene en
+`manual_review` y cierra solo lo que alguien ya resolvio alla. Corre solo si el ciclo no tuvo falla de transporte, tiene
+su propio ritmo y no toca `en_linea`: lo nuevo que genero el nodo sale siempre primero.
+
 ## El nodo no se cae porque se caiga internet
 
 Es la razon de existir de todo esto. `sincronizar()` **nunca propaga** un error
@@ -125,13 +131,17 @@ class Nodo:
     """
 
     def __init__(self, repository, node_id: str, outbox_worker=None,
-                 pull_worker=None, ruta_estado: str | None = None, carga_inicial_worker=None):
+                 pull_worker=None, ruta_estado: str | None = None, carga_inicial_worker=None,
+                 cierre_de_revision_worker=None):
         self.repository = repository
         self.node_id = node_id
         self.outbox_worker = outbox_worker
         self.pull_worker = pull_worker
         #: `libraedge.sync.carga_inicial.CargaInicialWorker`, o `None` si el producto no declara carga inicial.
         self.carga_inicial_worker = carga_inicial_worker
+        #: `libraedge.sync.cierre_de_revision.CierreDeRevisionWorker`, o `None` (ADR-028): cierra solo lo que se
+        #: resolvio en el central. Sin el, el nodo se comporta como hasta v0.22 (`revision reenviar` a mano).
+        self.cierre_de_revision_worker = cierre_de_revision_worker
         self.ruta_estado = ruta_estado
         self._ultima_ok: str | None = None
 
@@ -180,6 +190,13 @@ class Nodo:
         # suyo no entra en `error`: no es una falla de transporte.
         if self.carga_inicial_worker is not None and error is None:
             carga_inicial = self.carga_inicial_worker.run_once(bajada_completa=bajados < limite).para_el_estado()
+
+        # El cierre de lo que quedo en revision (ADR-028), al final: **despues de subir y de bajar**, asi que lo que el
+        # nodo genero sale primero y una consulta lenta o caida no lo demora. Solo con el central a la vista (`error`
+        # es None); el worker tiene su propio ritmo (cada 5 minutos por defecto, no cada ciclo), no levanta, y lo suyo
+        # no entra en `error`: no es una falla de transporte.
+        if self.cierre_de_revision_worker is not None and error is None:
+            self.cierre_de_revision_worker.run_once()
 
         # Hubo un `fallo_al_subir` aparte de `error` hasta que la matriz de
         # mutaciones mostro que sacarlo dejaba la suite verde: `error` ya queda

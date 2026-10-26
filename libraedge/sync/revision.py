@@ -13,10 +13,12 @@ con ella despues, y es generico: no sabe que es una venta.
   la fila queda como constancia de que esa operacion existio y por que no se
   aplico.
 
-Del lado del nodo la operacion quedo en ``manual_review`` en su outbox. Despues
-de reintentarla aca, ``libraedge-nodo revision reenviar <id>`` la vuelve a
-mandar y el central contesta ``duplicate``: el nodo la confirma y sale de su
-bandeja.
+Del lado del nodo la operacion quedo en ``manual_review`` en su outbox. **El nodo
+se entera solo** (v0.25, ADR-028): cada tanto le pregunta al central por el estado
+de lo que tiene en revision (``estados_de_operaciones``, que sirve
+``POST /sync/v1/estado-operaciones``) y, si la reintentaron y entro, la vuelve a
+mandar y el central contesta ``duplicate``; si la descartaron, la descarta. A mano
+queda ``libraedge-nodo revision reenviar <id>``, para forzarlo sin esperar.
 """
 
 import json
@@ -76,6 +78,39 @@ def obtener(conn, operation_id: str) -> OperacionEnRevision | None:
         f"SELECT {_COLUMNAS} FROM sync_inbox WHERE operation_id = ?", (operation_id,)
     ).fetchone()
     return None if fila is None else _fila(fila)
+
+
+#: Cuantos ``operation_id`` acepta una consulta de estado. El nodo manda tandas mas chicas
+#: (``cierre_de_revision.TANDA_POR_DEFECTO``); el tope es de este lado para que un nodo mal configurado no pueda
+#: pedir la tabla entera.
+MAXIMO_POR_CONSULTA = 200
+
+
+def estados_de_operaciones(conn, node_id: str, operation_ids) -> dict[str, dict]:
+    """El estado en ``sync_inbox`` de las operaciones ``operation_ids`` **de ese nodo** (ADR-028). **Solo lee.**
+
+    ``{operation_id: {"estado": "applied" | "manual_review" | "discarded", "motivo": texto | None}}``. ``motivo`` es
+    el que usa el receptor al contestar un reenvio: la resolucion si la hay (el motivo del descarte, o «reintentada y
+    aplicada»), si no el ``last_error`` (por que sigue en revision).
+
+    Lo que el central **no tiene** (nunca llego, o la rechazo por invalida con un 422 sin guardarla) **no figura**: el
+    nodo lo lee como «no se nada» y la deja como esta. Tampoco figura lo de otro nodo (el filtro por ``node_id`` va en
+    el ``WHERE``): un nodo no se entera del estado de lo ajeno.
+
+    No aplica nada, no llama a ningun manejador y no escribe: es lo que hace seguro preguntar seguido.
+    """
+    ids = list(dict.fromkeys(str(i) for i in operation_ids))
+    if not ids:
+        return {}
+    marcas = ", ".join("?" for _ in ids)
+    filas = conn.execute(
+        "SELECT operation_id, status, COALESCE(resolucion, last_error) FROM sync_inbox"
+        f" WHERE node_id = ? AND operation_id IN ({marcas})",
+        (node_id, *ids),
+    ).fetchall()
+    # La lectura abre una transaccion en PostgreSQL: no se la deja abierta (como `_nodos_para_vigilar`).
+    conn.commit()
+    return {fila[0]: {"estado": fila[1], "motivo": fila[2]} for fila in filas}
 
 
 def _operacion_guardada(conn, operation_id: str) -> OutboxOperation:

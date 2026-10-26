@@ -1310,7 +1310,7 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
      listar --nodo <node_id>`.
   2. **Descartar en el nodo sólo cuando el central la rechazó con una razón y no se va a corregir.** Si el rechazo se arregla
      (se despliega el manejador que faltaba, se carga el dato que chocaba), lo que corresponde es `libraedge-central
-     revision reintentar` y después `libraedge-nodo revision reenviar`, no descartar.
+     revision reintentar` y después `libraedge-nodo revision reenviar`, no descartar. (Desde ADR-028 el nodo hace ese `reenviar` solo.)
   3. `libraedge-nodo revision descartar <operation_id> --motivo "<qué pasó y quién lo decidió>"`.
   4. **Si era un movimiento de stock** (la carga inicial esperaba por `stock_en_revision`): después de descartar,
      `libraedge-nodo carga-inicial --forzar` realinea el stock del nodo con el central. La fila local del movimiento
@@ -1623,3 +1623,79 @@ servicios corriendo y `verificar_nodo.ps1` en 0).
   `InfoBeforeFile` y la prueba en VM del instalador de MedLibra (PR 12 del plan) siguen abiertas. Para publicarlos falta que
   GestioLibra y MedLibra lleguen a su `main` (con libraedge v0.23.0 y su router de nodos); **no** verificado: que `dar-de-baja`
   borre la base local de la PC.
+
+## ADR-028 — El nodo cierra solo lo que quedó en revisión y se resolvió en el central: `POST /sync/v1/estado-operaciones`
+
+- Estado: propuesta
+- Fecha: 2026-10-26
+- Contexto: cuando el central rechaza una operación del nodo, la guarda entera en `sync_inbox` como `manual_review` y el nodo
+  marca su copia del outbox igual (ADR-007, ADR-020). Alguien la resuelve en el central: `libraedge.sync.revision.reintentar`
+  la deja `applied` y `descartar` la deja `discarded`. En LibraClub, por ejemplo, la pantalla «Clientes por revisar» llama a
+  `reintentar` con un manejador propio. Pero **la copia del nodo seguía en `manual_review` para siempre**, hasta que alguien
+  corría a mano `libraedge-nodo revision reenviar <id>` en esa PC, y el central no tiene ruta hacia el nodo (ADR-024). Con siete
+  apps sobre LibraEdge (RestoLibra, VentaLibra, ContaLibra, LibraCargo, LibraClub, GestioLibra y MedLibra) eso es un paso manual
+  en cada local por cada operación resuelta, y mientras tanto el nodo cuenta como pendiente de revisión lo que ya está aplicado.
+- Qué ya existe (se miró antes de diseñar): `NodeRepository.reenviar_operacion` y `descartar_operacion` (el nodo ya sabe cerrar una
+  operación en revisión, a mano), `SyncReceiver.accept` (qué contesta ante un `operation_id` repetido) y el patrón de ruta nueva
+  con 404/501 de `carga-inicial` (ADR-023) y `ticket-arca` (ADR-009). **Medido** (`tests/test_cierre_de_revision.py::
+  test_el_receptor_no_reprocesa_un_reenvio_en_ningun_estado`): ante un reenvío del push, el receptor contesta `duplicate` si la
+  fila está `applied`, `rejected` «en revisión manual en el central: …» si está `manual_review` y `rejected` «descartada en el
+  central: …» si está `discarded`; **en ningún caso vuelve a correr un manejador ni escribe una fila nueva de `sync_inbox`**. O
+  sea que reenviar por el push ya era seguro para lo que el central tiene guardado.
+- Decisión:
+  1. **El nodo pregunta, no reenvía.** Ruta nueva `POST /sync/v1/estado-operaciones` (`create_sync_router`) con
+     `{"node_id", "operation_ids": [1..200]}`; contesta `{"operaciones": {id: {"estado": "applied" | "manual_review" |
+     "discarded", "motivo"}}}` con lo que `sync_inbox` tiene de las operaciones **de ese nodo** (el `WHERE` lleva `node_id`); lo
+     que el central no tiene no figura. **Sólo lee**: no hay manejador que llamar ni fila que escribir, así que no existe
+     camino por el que preguntar reaplique algo. Misma autenticación que push y pull (secreto del nodo, latido, esquema).
+  2. **El worker del nodo** (`libraedge.sync.cierre_de_revision.CierreDeRevisionWorker`) es un paso más de `Nodo.sincronizar`,
+     **después de subir y de bajar** y sólo si el ciclo no tuvo falla de transporte. Tiene su ritmo: cada
+     `LIBRAEDGE_REVISION_CADA_SEGUNDOS` (300; `0` lo apaga) toma una tanda de hasta `LIBRAEDGE_REVISION_TANDA` (50; el central
+     tope 200) de sus `manual_review`. Un reloj en memoria (monotónico), sin tabla ni marca: al reiniciar el servicio pregunta en
+     el primer ciclo y sigue cada ventana. Las tandas **rotan** (por `operation_id`, `ids_en_revision(despues_de=)`): con más
+     operaciones en revisión que una tanda se recorren todas, no las mismas primeras. La ventana se consume antes de preguntar:
+     un error, un 404 o un central lento se reintentan en la ventana siguiente, no en el ciclo siguiente.
+  3. **Qué hace con la respuesta, reusando lo que ya había** (no se duplica lógica de estados):
+     - `applied` → `reenviar_operacion` (la función de `revision reenviar`): vuelve a `pending`, el ciclo siguiente la sube y
+       el central contesta `duplicate`, que el worker confirma por el camino de siempre (`acknowledge_operation`). El central no
+       la reprocesa (medido arriba) y el orden de estos reenvíos no importa: para cuando el central dice `applied`, todas
+       salen `duplicate`.
+     - `discarded` → `descartar_operacion` (ADR-024) con el motivo `descartada en el central: <motivo>`; el rechazo original
+       queda en `last_error` como siempre.
+     - `manual_review`, ausente, o un estado que el nodo no conoce → no se toca.
+     Si entre el pedido y la respuesta alguien tocó la operación en el nodo (`reenviar` o `descartar` a mano), el cambio de
+     estado de la respuesta se ignora (`LookupError`/`ValueError` del repositorio, sin pisar nada).
+  4. **Compatibilidad con un central anterior:** contesta 404 y el nodo sigue exactamente como hasta v0.24 (`revision reenviar`
+     a mano). Avisa una vez en el log (`warning`, la primera vez y otra vez cuando el 404 se repite tras haber andado) y
+     **vuelve a probar en la ventana siguiente**, así que cuando el central se actualice el nodo lo detecta solo, sin reiniciar.
+     Cualquier otro error (red, 5xx, 401, 409 de esquema) queda sin efecto y no cambia `en_linea` ni `ultimo_error`.
+  5. **Configuración blanda**, como `LIBRAEDGE_CARGA_INICIAL`: un valor que no es un entero en rango avisa por stderr y usa el
+     default; no frena el arranque de una caja. Sin cableado en el producto: la ruta sale sola con `create_sync_router`.
+- Descartadas:
+  - **Reenviar la operación por el push y leer la respuesta** (la primera idea). Es seguro para lo que el central tiene en
+    `sync_inbox` (medido), pero: (a) la respuesta de una descartada y la de una en revisión son las dos `rejected` y sólo se
+    distinguen leyendo texto; (b) sube el payload entero de cada operación en cada ventana, en vez de una lista de ids; (c) **una
+    operación que el central nunca guardó** (el 422 de `HttpSyncTransport`, o una fila perdida al restaurar el central) no está en
+    `sync_inbox`, así que el reenvío la **aplicaría por primera vez**: justo lo que «no reaplicar» prohíbe. Su ventaja era no
+    sumar una ruta (y por tanto ninguna fila en la matriz de roles de los productos); no alcanza.
+  - **Una bandera `solo_consultar` en el push**: un central anterior la ignoraría y aplicaría la operación.
+  - **Que el nodo confirme directo (`acknowledge_operation`) al ver `applied`**: funciona, pero es una segunda ruta a
+    `acknowledged` fuera del worker. Reencolar cuesta un ciclo (≈ 1 minuto) y usa la misma función que el comando manual.
+  - **Que el central avise al nodo** (webhook, cola): no tiene ruta hacia el nodo (ADR-024) y exigiría abrirla.
+  - **Preguntar en cada ciclo**: son 60 s; la resolución de una revisión es cosa de minutos u horas y cada pregunta toca la base
+    del central. Tampoco una tanda de todo el outbox: se pregunta sólo por lo que está en `manual_review`.
+  - **Persistir el ritmo** (una marca en `local_sequences`): agrega estado para ahorrar una pregunta por reinicio.
+  - **Guardar el motivo nuevo del central** cuando un `reintentar` vuelve a fallar: el nodo la deja «como está»; el motivo vigente
+    se ve en `libraedge-central revision listar`.
+- Consecuencias: **MINOR (v0.25.0, a decidir al taggear)**: suma una ruta, un worker, un paso del ciclo, dos variables opcionales y
+  `NodeRepository.ids_en_revision`; sin tocar el esquema ni la versión de esquema que el nodo declara. **Se despliega primero el
+  central** (uno anterior da 404, y es inocuo). **Los productos no cablean nada** (la ruta sale con `create_sync_router`; basta
+  subir el pin de `libraedge` en el central y en el instalador del nodo), pero según ADR-023 **cada producto suma la fila
+  `POST /sync/v1/estado-operaciones` en su matriz de roles** como «PÚBLICA» (secreto del nodo): `RUTAS_AUTENTICADAS_POR_NODO` la
+  trae. **Lo que no cubre**: (1) una operación que el central nunca guardó (rechazo 422, o una fila de antes de v0.7 sin
+  `node_id`) no figura en la respuesta y sigue en `manual_review` hasta `revision reenviar` o `descartar` a mano; (2) si se
+  descarta en el nodo (ADR-024) y después el central la reintenta, el nodo la deja descartada: no la vuelve a mirar; (3) entre
+  que el operador resuelve y el nodo se entera pasan hasta una ventana (5 minutos por defecto) más un ciclo; (4)
+  `create_sync_app` (el proceso dedicado, sin ticket ni carga inicial) no suma la ruta: sólo `create_sync_router`; (5) **no se
+  probó** contra un PostgreSQL embebido de una PC real ni con el instalador: los tests corren el HTTP real del nodo contra el
+  router en SQLite y la base del repositorio en SQLite y PostgreSQL 16.
