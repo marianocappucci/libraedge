@@ -103,6 +103,12 @@ name = "libraedge"
 # de una sola base). Minor: suma un campo del pedido y del ticket, un metodo y dos productos; no toca el esquema ni la ruta, y un
 # nodo o un central de v0.21 siguen andando para `wsfe`. Se despliega primero el central. No hay CHANGELOG.md: la historia de
 # versiones es este bloque y el DECISIONS.md.
+# 0.24.x -> 0.25.0 (a decidir al taggear, ADR-028): el nodo cierra solo lo que quedo en revision y se resolvio en el central.
+# Cada `LIBRAEDGE_REVISION_CADA_SEGUNDOS` (300; 0 apaga) pregunta por una tanda de `LIBRAEDGE_REVISION_TANDA` (50) a
+# `POST /sync/v1/estado-operaciones` (nueva, solo lee; `create_sync_router` la suma sola) y reencola la aplicada o descarta la
+# descartada; antes hacia falta `libraedge-nodo revision reenviar` a mano en cada PC. Minor: suma una ruta, un paso del ciclo y
+# dos variables opcionales; no toca el esquema. Se despliega primero el central: uno anterior da 404 y el nodo sigue como antes.
+# Los productos suman la fila de la ruta en su matriz de roles (PUBLICA, secreto del nodo).
 # 🔴 La version sale del TAG, no de esta linea.
 #
 # Estuvo clavada en 0.6.0 mientras los tags iban por v0.6.6: v0.6.1 a v0.6.6

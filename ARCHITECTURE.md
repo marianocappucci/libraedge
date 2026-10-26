@@ -26,7 +26,8 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
 
 - **`cli.py`** (`libraedge-nodo`, console script) — arma el nodo:
   `construir_nodo`, `tablas_espejo`, `main`. Es la entrada operativa.
-  `revision listar|reenviar|descartar` es la revisión manual del outbox del nodo (ADR-024).
+  `revision listar|reenviar|descartar` es la revisión manual del outbox del nodo (ADR-024); `reenviar` ya no hace falta
+  tras resolver en el central (ADR-028).
 - **`central.py`** (`libraedge-central`) — las herramientas del central: `nodo` (aprovisionamiento)
   y `revision`.
 - **`aprovisionamiento.py`** (`Aprovisionamiento`, `publicar`, `registrar`, `dar_de_baja`, `estado`,
@@ -68,6 +69,9 @@ sincronización; no sabe qué es una venta, sólo que hay una operación a propa
     manual, nunca a `applied` (ADR-007).
   - `revision` (`listar_en_revision`, `reintentar`, `descartar`) — la revisión
     manual del central; CLI `libraedge-central revision` (`central.py`).
+  - `cierre_de_revision` (`CierreDeRevisionWorker`, `HttpCierreDeRevisionTransport`) — el nodo pregunta cada tanto
+    (`POST /sync/v1/estado-operaciones`, que sólo lee) por lo que tiene en `manual_review` y cierra solo lo que el central
+    ya aplicó (reencola) o descartó (ADR-028).
   - `esquema` (`version_de_alembic`, `EsquemaIncompatible`) — la versión del
     esquema que nodo y central comparan; 409 si difiere.
   - `api` (`create_sync_app`, `create_sync_router`) — la app/router FastAPI de

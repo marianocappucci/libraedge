@@ -23,6 +23,8 @@ archivo de entorno.
 | `LIBRAEDGE_ESTADO` | Donde escribir el estado para que lo lea una UI |
 | `LIBRAEDGE_VERSION_ESQUEMA` | Opcional: `alembic` (default), `modulo:funcion` o `ninguna` |
 | `LIBRAEDGE_CARGA_INICIAL` | Opcional: `modulo:funcion` que trae las existencias de la sucursal (v0.20, ADR-023) |
+| `LIBRAEDGE_REVISION_CADA_SEGUNDOS` | Opcional: cada cuanto mira lo que tiene en revision (300, `0` apaga) (v0.25) |
+| `LIBRAEDGE_REVISION_TANDA` | Opcional: cuantas operaciones en revision consulta por vez (50, maximo 200) (v0.25) |
 
 Una clave compuesta en `LIBRAEDGE_TABLAS_ESPEJO` va con `+`
 (`party_roles:party_id+role`). `LIBRAEDGE_VERSION_ESQUEMA` dice como se calcula
@@ -37,6 +39,9 @@ se arregla actualizando.
 aceptaria cualquier tabla que el central mande, y esa lista **es** la frontera
 que impide que el nodo escriba en tablas de su propia autoridad. Un default
 vacio la volveria opcional en la practica.
+
+`LIBRAEDGE_REVISION_CADA_SEGUNDOS` y `LIBRAEDGE_REVISION_TANDA` tambien son **blandas**: un valor que no es un numero
+entero (o fuera de rango) avisa por stderr y usa el default, no frena el arranque.
 """
 
 import argparse
@@ -47,6 +52,8 @@ from datetime import UTC
 
 from libraedge.db.changelog import columnas_de_clave
 from libraedge.sync.carga_inicial import VARIABLE as VARIABLE_CARGA_INICIAL
+from libraedge.sync.cierre_de_revision import VARIABLE_CADA_SEGUNDOS as VARIABLE_REVISION_CADA_SEGUNDOS
+from libraedge.sync.cierre_de_revision import VARIABLE_TANDA as VARIABLE_REVISION_TANDA
 
 
 def _requerido(nombre: str) -> str:
@@ -206,7 +213,42 @@ def construir_nodo():
         ruta_estado=os.environ.get("LIBRAEDGE_ESTADO"),
         carga_inicial_worker=carga_inicial_del_nodo(
             repositorio, conexion, node_id, central, secreto, version, os.environ.get(VARIABLE_CARGA_INICIAL)),
+        cierre_de_revision_worker=cierre_de_revision_del_nodo(
+            repositorio, node_id, central, secreto, version,
+            os.environ.get(VARIABLE_REVISION_CADA_SEGUNDOS), os.environ.get(VARIABLE_REVISION_TANDA)),
     ), conexion
+
+
+def _entero_blando(nombre: str, crudo: str | None, por_defecto: int, minimo: int, maximo: int) -> int:
+    """Un entero opcional del entorno: ausente o vacio es el default; uno que no sirve avisa y usa el default."""
+    if not (crudo or "").strip():
+        return por_defecto
+    try:
+        valor = int(crudo.strip())
+    except ValueError:
+        valor = None
+    if valor is None or not minimo <= valor <= maximo:
+        print(f"AVISO: {nombre}={crudo!r} no sirve (un entero de {minimo} a {maximo}): se usa {por_defecto}.",
+              file=sys.stderr)
+        return por_defecto
+    return valor
+
+
+def cierre_de_revision_del_nodo(repositorio, node_id, central, secreto, version, cada_segundos, tanda):
+    """El `CierreDeRevisionWorker` del nodo (ADR-028). Siempre existe: `LIBRAEDGE_REVISION_CADA_SEGUNDOS=0` lo apaga.
+
+    Es blando: un valor que no se entiende avisa y usa el default (un dato asi no frena el arranque de una caja)."""
+    from libraedge.sync import cierre_de_revision as cierre
+    from libraedge.sync.revision import MAXIMO_POR_CONSULTA
+
+    return cierre.CierreDeRevisionWorker(
+        repositorio,
+        cierre.HttpCierreDeRevisionTransport(central, node_id, secreto, version_esquema=version),
+        cada_segundos=_entero_blando(
+            cierre.VARIABLE_CADA_SEGUNDOS, cada_segundos, cierre.CADA_SEGUNDOS_POR_DEFECTO, 0, 7 * 24 * 3600),
+        tanda=_entero_blando(
+            cierre.VARIABLE_TANDA, tanda, cierre.TANDA_POR_DEFECTO, 1, MAXIMO_POR_CONSULTA),
+    )
 
 
 def carga_inicial_del_nodo(repositorio, conexion, node_id, central, secreto, version, especificacion):
@@ -261,7 +303,8 @@ def main(argv: list[str] | None = None) -> int:
     listar = revision_sub.add_parser("listar", help="lista las operaciones en revision")
     listar.add_argument("--todas", action="store_true", help="incluir las descartadas")
     reenviar = revision_sub.add_parser(
-        "reenviar", help="la vuelve a poner en cola (despues de resolverla en el central)")
+        "reenviar",
+        help="la vuelve a poner en cola ya, sin esperar (el nodo lo hace solo cuando la resuelven en el central)")
     reenviar.add_argument("operation_id")
     descartar = revision_sub.add_parser(
         "descartar",

@@ -58,12 +58,12 @@ Toda la configuración viene del entorno, que es lo que el instalador escribe un
 
 ## Despacho, revisión manual y versión del esquema (v0.7, ADR-007)
 
-El central registra un manejador por `(operation_type, schema_version)` con un `Despachador` y lo pasa a `create_sync_router(get_connection, despachador=...)`. Lo que no tiene manejador, o lo que el manejador rechaza, **no se aplica**: queda entero en `sync_inbox` como `manual_review` y el nodo recibe `rejected`. Se revisa con `libraedge-central revision listar|reintentar|descartar` (con `--por` y, al descartar, `--motivo`); después de reintentarla, `libraedge-nodo revision reenviar <id>` la confirma en el nodo.
+El central registra un manejador por `(operation_type, schema_version)` con un `Despachador` y lo pasa a `create_sync_router(get_connection, despachador=...)`. Lo que no tiene manejador, o lo que el manejador rechaza, **no se aplica**: queda entero en `sync_inbox` como `manual_review` y el nodo recibe `rejected`. Se revisa con `libraedge-central revision listar|reintentar|descartar` (con `--por` y, al descartar, `--motivo`). **El nodo se entera solo** (v0.25, ADR-028): ver «El nodo cierra solo lo que se resolvió en el central», más abajo; `libraedge-nodo revision reenviar <id>` ya no hace falta, queda para forzarlo sin esperar.
 
 ### Descartar una operación en revisión del nodo (v0.21, ADR-024)
 
 Lo que el central rechazó queda en `manual_review` del outbox del nodo. Si el rechazo se corrige, se `reintentar` en el
-central y se `reenviar` desde el nodo (arriba). Si **el central la rechazó con una razón y no se va a corregir**, se descarta
+central y el nodo se entera solo (ADR-028; `reenviar` a mano sólo para no esperar). Si **el central la rechazó con una razón y no se va a corregir**, se descarta
 en el nodo, con motivo obligatorio:
 
 ```
@@ -213,6 +213,24 @@ La función y la marca entran en **una sola transacción**. Si espera, no marca 
 producto no tiene carga inicial) se da por hecha; los errores (incluido que el producto instalado no traiga el módulo)
 quedan en `EstadoNodo.carga_inicial` y no cortan la sincronización ni cambian `en_linea`. Soporte:
 `libraedge-nodo carga-inicial [--forzar]` (`--forzar` borra la marca y **pisa las existencias del nodo** con las del central).
+
+### El nodo cierra solo lo que se resolvió en el central (v0.25, ADR-028)
+
+Una operación que el central rechaza queda en `manual_review` en los dos lados. Cuando alguien la resuelve **en el central**
+(`libraedge-central revision reintentar` → `applied`, o `descartar` → `discarded`), el nodo se entera solo, sin comandos en la
+PC del local: cada `LIBRAEDGE_REVISION_CADA_SEGUNDOS` (300 por defecto; `0` lo apaga) el ciclo del nodo, **después de subir y de
+bajar**, le pregunta al central por una tanda de hasta `LIBRAEDGE_REVISION_TANDA` (50; máximo 200) de lo que tiene en
+revisión (`POST /sync/v1/estado-operaciones`, que sólo lee) y:
+
+- si la **aplicaron**, la reencola (lo mismo que `revision reenviar`) y su push siguiente contesta `duplicate`: queda
+  confirmada, sin reprocesar nada en el central;
+- si la **descartaron**, la descarta (ADR-024) con el motivo del central;
+- si **sigue en revisión**, o el central no la conoce, no se toca.
+
+No hay que cablear nada en el producto: la ruta sale con `create_sync_router`. **Se despliega primero el central.** Un central
+anterior contesta 404 y el nodo sigue como antes (avisa una vez en el log; `revision reenviar` a mano). Los productos suman la
+fila de `POST /sync/v1/estado-operaciones` en su matriz de roles («PÚBLICA», secreto del nodo): está en
+`RUTAS_AUTENTICADAS_POR_NODO`.
 
 **Vincular se niega si la instancia no está lista.** `Aprovisionamiento(..., validar_registro=)` es una costura opcional
 `(conn) -> list[str]` de problemas (en la familia, los depósitos sin sucursal): con alguno, `registrar` no escribe nada y las

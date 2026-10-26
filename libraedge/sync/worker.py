@@ -80,7 +80,10 @@ class OutboxWorker:
         vez (el manejador no encuentra lo que la operacion necesita), y va tambien
         a revision. Al resolverlas, `reenviar_operacion` las devuelve a `pending`
         y salen otra vez por secuencia: hay que reenviar en el orden en que se
-        crearon. Ver `DECISIONS.md`, ADR-020.
+        crearon. Ver `DECISIONS.md`, ADR-020. Desde v0.25 (ADR-028) el nodo las
+        reenvia solo cuando el central le dice que ya las aplico
+        (`libraedge.sync.cierre_de_revision`); como para entonces el central ya
+        las tiene, el orden de esos reenvios no importa: todas salen `duplicate`.
 
         Una operacion `discarded` (v0.21, ADR-024: soporte la cerro con motivo
         porque el rechazo no se corrige) no la ve este metodo: la cola es solo
