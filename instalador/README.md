@@ -220,6 +220,34 @@ Se arma en dos lugares:
    antes de ISCC; para el `.deb`, `armar_deb.sh ... --escritorio escritorio/salida`. Sin la app, los dos instaladores
    salen igual y el acceso directo abre el navegador. El CI la compila en `windows-latest` y `ubuntu-22.04`.
 
+## Marca blanca: el instalador con el nombre del revendedor (ADR-029)
+
+Para que un revendedor venda el nodo **con su nombre**: lo que ve el cajero (acceso directo, app de escritorio, ventana, programa en
+«Agregar o quitar programas», editor, ícono y nombre del archivo) sale con la marca. **No cambia** lo que sólo ve quien administra la PC:
+los servicios (`LibraEdge…`), las carpetas de datos, el `AppId`, las reglas de firewall y la tarea de respaldo (renombrarlos rompería la
+reinstalación encima). Eso, y la bandeja y las descripciones de los servicios, quedan para una fase 2; Ubuntu (el `.deb`), para una
+fase 3 (ver el wiki, `libraedge-marca-blanca-instalador-diseno`).
+
+1. **Armar la marca** (en cualquier sistema, con Pillow): `python instalador/marca.py ventalibra --nombre "Comercial Modelo" --editor
+   "Comercial Modelo SRL" --logo logo.png` deja en `instalador/marca-blanca/` (ignorada por git) la definición con el nombre de la marca,
+   el ícono (`.ico` y `.png`), la marca de las pantallas, `marca.json` y `marca.isi`. El nombre y el editor se validan (letras con acento,
+   números, espacio y `. _ -`; sin comillas, barras ni nada que un shell o Inno Setup interprete) y el logo se centra en un cuadrado.
+2. **La app de escritorio**, en Windows: `python escritorio/armar.py ventalibra --marca instalador/marca-blanca`, y se copia a
+   `paquete\escritorio\ventalibra.exe` como siempre (el binario se sigue llamando `<producto>.exe`; el instalador lo instala con el
+   nombre de la marca).
+3. **El instalador**: `ISCC.exe /DProducto=ventalibra /DConMarca /DVersion=0.10.0 nodo.iss` → `salida\nodo-comercial-modelo-0.10.0.exe`.
+   Sin `/DConMarca` todo sale igual que antes.
+
+El instalador **no es público de Libra**: se publica donde el revendedor decida (su repo o un release privado), no en `libraedge`. El
+`AppId` es el del producto: un nodo de marca blanca se actualiza con el instalador de la misma marca (y es el mismo producto para el
+central).
+
+> ⚠️ **Sin verificar de punta a punta.** Los tests (`tests/test_marca_blanca_instalador.py`) miden la herramienta, que el `.iss`, `build.rs`
+> y `armar.py` estén cableados a lo que arma y que sin `/DConMarca` el `.iss` quede igual; **no compilan** el `.iss` ni la app. El
+> primer instalador de marca blanca hay que compilarlo y probarlo en una VM de Windows (`PROBAR_EN_VM.md`) antes de entregarlo; lo que
+> más puede fallar es el `#include` de `marca-blanca\marca.isi` en Inno Setup y el `build.rs` con `LIBRAEDGE_MARCA_DIR`. Tampoco hay
+> todavía un job del CI para esto: se arma a mano hasta que el revendedor tenga nombre y logo.
+
 ## Instalar
 
 - **Con el asistente:** pide la carpeta, y en «Vincular con el sistema» la **dirección** y el **código** que muestra

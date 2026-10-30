@@ -44,3 +44,6 @@ instalador/paquete/
 instalador/salida/
 instalador/paquete-linux/
 carga-nodo*.json
+
+# Marca blanca del instalador (ADR-029): la arma instalador/marca.py con el logo del revendedor; no se commitea.
+instalador/marca-blanca/

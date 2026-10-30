@@ -90,13 +90,15 @@ def test_la_marca_de_la_que_sale_es_la_de_libraedge():
 
 def test_el_iss_lo_usa_en_el_instalador_y_al_desinstalar():
     iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
-    assert "\nSetupIconFile=libraedge.ico\n" in iss
+    # Por defecto el icono del instalador es `libraedge.ico`; con /DConMarca (ADR-029) lo pisa el de la marca.
+    assert '\n#define IconoInstalador    "libraedge.ico"\n' in iss
+    assert "\nSetupIconFile={#IconoInstalador}\n" in iss
     assert "\nUninstallDisplayIcon={app}\\libraedge.ico\n" in iss
-    # "Agregar o quitar programas" lee el icono del archivo instalado: si no se copia, Windows muestra el generico.
-    assert (
-        'Source: "libraedge.ico"' in iss
-        and 'DestDir: "{app}"' in iss.split('Source: "libraedge.ico"')[1].splitlines()[0]
-    )
+    # "Agregar o quitar programas" lee el icono del archivo instalado: si no se copia (siempre como
+    # `libraedge.ico`), Windows
+    # muestra el generico.
+    linea = iss.split('Source: "{#IconoInstalador}"')[1].splitlines()[0]
+    assert 'DestDir: "{app}"' in linea and 'DestName: "libraedge.ico"' in linea
 
 
 # ── la marca de cada producto, para su acceso directo (ADR-013) ─────────────
@@ -125,6 +127,8 @@ def test_armar_icono_arma_el_de_libraedge_y_uno_por_producto():
 
 def test_el_iss_instala_el_ico_del_producto():
     iss = (CARPETA / "nodo.iss").read_text(encoding="utf-8")
-    assert 'Source: "iconos\\{#Producto}.ico"' in iss
-    linea = iss.split('Source: "iconos\\{#Producto}.ico"')[1].splitlines()[0]
+    # Por defecto, `iconos\<producto>.ico`; con /DConMarca, `marca-blanca\icono.ico` (ADR-029).
+    assert '#define DirIconos          "iconos"' in iss and "#define ArchivoIcono       Producto" in iss
+    assert 'Source: "{#DirIconos}\\{#ArchivoIcono}.ico"' in iss
+    linea = iss.split('Source: "{#DirIconos}\\{#ArchivoIcono}.ico"')[1].splitlines()[0]
     assert 'DestDir: "{app}"' in linea and 'DestName: "producto.ico"' in linea
