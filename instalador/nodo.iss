@@ -83,6 +83,28 @@
 #endif
 #define NombreNodo "Nodo LibraEdge"
 #define Editor     "Mariano Cappucci"
+; De donde salen el nombre del archivo, la definicion y los iconos. Por defecto, los del producto; con /DConMarca (marca blanca,
+; ADR-029) los pisa lo que arma instalador\marca.py en marca-blanca\ (nombre, editor, icono, definicion).
+#define PrefijoSalida      "libraedge-nodo-"
+#define NombreSalida       Producto
+#define DirProducto        "productos"
+#define ArchivoProducto    Producto
+#define DirIconos          "iconos"
+#define ArchivoIcono       Producto
+#define IconoInstalador    "libraedge.ico"
+#ifdef ConMarca
+  #undef NombreProducto
+  #undef Editor
+  #undef NombreNodo
+  #undef PrefijoSalida
+  #undef NombreSalida
+  #undef DirProducto
+  #undef ArchivoProducto
+  #undef DirIconos
+  #undef ArchivoIcono
+  #undef IconoInstalador
+  #include "marca-blanca\marca.isi"
+#endif
 
 [Setup]
 ; El AppId es por producto y fijo: es lo que hace que una reinstalacion
@@ -96,7 +118,7 @@ DefaultDirName={autopf}\LibraEdge
 DefaultGroupName=LibraEdge
 DisableProgramGroupPage=yes
 OutputDir=salida
-OutputBaseFilename=libraedge-nodo-{#Producto}-{#Version}
+OutputBaseFilename={#PrefijoSalida}{#NombreSalida}-{#Version}
 Compression=lzma2/max
 SolidCompression=yes
 PrivilegesRequired=admin
@@ -108,7 +130,7 @@ WizardStyle=modern
 CloseApplications=force
 ; La marca de LibraEdge (libra-ui, ADR-078): el icono del .exe del instalador
 ; y el de "Agregar o quitar programas", que Windows lee del archivo instalado.
-SetupIconFile=libraedge.ico
+SetupIconFile={#IconoInstalador}
 UninstallDisplayIcon={app}\libraedge.ico
 #if Producto == "medlibra"
 ; La PC guarda la historia clinica completa (medlibra ADR-045, decision del humano): el asistente lo dice, en lenguaje
@@ -132,10 +154,10 @@ Source: "paquete\herramientas\nssm.exe";  DestDir: "{app}\herramientas"; Flags: 
 ; tampoco (0xC0000135, medido 2026-08-30). Lo instala instalar.ps1 si falta;
 ; queda en {app} para poder reparar sin el instalador.
 Source: "paquete\herramientas\vc_redist.x64.exe"; DestDir: "{app}\herramientas"; Flags: ignoreversion
-Source: "libraedge.ico";                 DestDir: "{app}";              Flags: ignoreversion
+Source: "{#IconoInstalador}";           DestDir: "{app}"; DestName: "libraedge.ico"; Flags: ignoreversion
 ; La marca del producto, para su acceso directo (ADR-013; lo crea preparar_nodo.ps1).
-Source: "iconos\{#Producto}.ico";        DestDir: "{app}"; DestName: "producto.ico"; Flags: ignoreversion
-Source: "productos\{#Producto}.json";     DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
+Source: "{#DirIconos}\{#ArchivoIcono}.ico"; DestDir: "{app}"; DestName: "producto.ico"; Flags: ignoreversion
+Source: "{#DirProducto}\{#ArchivoProducto}.json"; DestDir: "{app}\instalador"; DestName: "producto.json"; Flags: ignoreversion
 ; La version de escritorio del producto (ADR-015): el acceso directo "<Producto>" la abre.
 Source: "paquete\escritorio\{#Producto}.exe"; DestDir: "{app}\escritorio"; DestName: "{#NombreProducto}.exe"; Flags: ignoreversion skipifsourcedoesntexist
 ; El ayudante en Python: libraedge/instalador.py tal cual, solo biblioteca estandar.

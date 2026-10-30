@@ -13,6 +13,12 @@ icono, identificador y la definicion del instalador. Deja en DIR (por defecto `e
 Despues de compilar cada uno, corre `--version` y verifica que sea ese producto (todos se compilan en el
 mismo `target/`: si cargo no recompilara el crate, saldria el nombre del anterior).
 
+Marca blanca (ADR-029): `--marca DIR` (la carpeta que arma `instalador/marca.py`, con un solo producto) compila
+la app con el
+nombre, el icono y las pantallas de la marca en vez de los del producto (`LIBRAEDGE_MARCA_DIR`, que lee
+`build.rs`). El binario sigue
+llamandose `<producto>.exe`: el instalador lo instala con el nombre de la marca.
+
 Firma de codigo (todavia no hay certificado): si `LIBRAEDGE_FIRMA_CMD` tiene un comando con `{archivo}` (por
 ejemplo `signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f cert.pfx /p ... {archivo}`), se
 corre sobre cada binario de Windows antes de copiarlo. Sin la variable no se firma.
@@ -38,9 +44,17 @@ def nombre_del_binario(producto: str, windows: bool) -> str:
     return f"{producto}.exe" if windows else f"libraedge-nodo-{producto}"
 
 
-def armar(producto: str, version: str, salida: pathlib.Path, windows: bool) -> pathlib.Path:
-    definicion = json.loads((PRODUCTOS / f"{producto}.json").read_text(encoding="utf-8"))
+def armar(
+    producto: str, version: str, salida: pathlib.Path, windows: bool, marca: pathlib.Path | None = None
+) -> pathlib.Path:
+    ruta_definicion = (marca / "producto.json") if marca else (PRODUCTOS / f"{producto}.json")
+    definicion = json.loads(ruta_definicion.read_text(encoding="utf-8"))
     entorno = dict(os.environ, LIBRAEDGE_PRODUCTO=producto, LIBRAEDGE_VERSION=version)
+    if marca:
+        entorno["LIBRAEDGE_MARCA_DIR"] = str(marca)
+    else:
+        # Que una variable del entorno no marque una compilacion que no la pidio.
+        entorno.pop("LIBRAEDGE_MARCA_DIR", None)
     print(f"== {definicion['nombre']} {version}", flush=True)
     subprocess.run(["cargo", "build", "--release", "--locked"], cwd=AQUI, env=entorno, check=True)
     compilado = AQUI / "target" / "release" / ("libraedge-escritorio.exe" if windows else "libraedge-escritorio")
@@ -66,12 +80,24 @@ def main() -> None:
     parser.add_argument("productos", nargs="+")
     parser.add_argument("--version", default="0.0.0")
     parser.add_argument("--salida", type=pathlib.Path, default=AQUI / "salida")
+    parser.add_argument(
+        "--marca", type=pathlib.Path, help="marca blanca: la carpeta que arma instalador/marca.py (un solo producto)"
+    )
     args = parser.parse_args()
+    marca = args.marca.resolve() if args.marca else None
+    if marca:
+        if len(args.productos) != 1:
+            sys.exit("--marca va con un solo producto: la carpeta de la marca es de uno.")
+        for archivo in ("producto.json", "icono.png", "icono.ico", "marca.svg", "marca.json"):
+            if not (marca / archivo).is_file():
+                sys.exit(f"Falta {marca / archivo}: armar la marca con instalador/marca.py.")
+        if json.loads((marca / "producto.json").read_text(encoding="utf-8")).get("producto") != args.productos[0]:
+            sys.exit(f"La marca de {marca} no es del producto {args.productos[0]}.")
     windows = sys.platform == "win32"
     for producto in args.productos:
         if not (PRODUCTOS / f"{producto}.json").is_file():
             sys.exit(f"No hay definicion para '{producto}' en {PRODUCTOS}.")
-        destino = armar(producto, args.version, args.salida.resolve(), windows)
+        destino = armar(producto, args.version, args.salida.resolve(), windows, marca)
         print(f"   {destino} ({destino.stat().st_size // 1024} KB)", flush=True)
 
 
