@@ -74,6 +74,7 @@ from libraedge.instalador import (
     ErrorDeInstalacion,
     armar_carga,
     emisor_desde_config,
+    marca_desde_config,
     normalizar_url_del_central,
     ruta_config_del_central,
     validar_emisor,
@@ -365,7 +366,7 @@ def create_nodos_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
                          "incompleta: " + " ".join(linea.strip() for linea in lineas if "SALTEADA" in linea))
 
     def _responder_carga(alta: ap.Alta, url: str, emisor: dict | None):
-        carga = _carga_de(alta, url, emisor, producto, _error)
+        carga = _carga_de(alta, url, emisor, producto, _error, leer_ruta_config())
         cuerpo = json.dumps(carga, ensure_ascii=False, indent=2) + "\n"
         return Response(
             content=cuerpo.encode("utf-8"), media_type="application/json",
@@ -497,12 +498,15 @@ def _error_http(HTTPException):
     return _error
 
 
-def _carga_de(alta: ap.Alta, url: str, emisor: dict | None, producto: str, _error) -> dict:
-    """La carga del nodo recién registrado: lo mismo para el archivo y para el canje."""
+def _carga_de(alta: ap.Alta, url: str, emisor: dict | None, producto: str, _error,
+              ruta_config: str | None = None) -> dict:
+    """La carga del nodo recién registrado: lo mismo para el archivo y para el canje. Con ``ruta_config`` lleva
+    también la marca blanca de la instancia (ADR-030), si tiene."""
     entorno_del_nodo = dict(linea.split("=", 1) for linea in alta.entorno_del_nodo())
     try:
+        marca = marca_desde_config(ruta_config) if ruta_config else None
         return armar_carga(producto, entorno_del_nodo, url, emisor,
-                           {"id": str(alta.sucursal.id), "nombre": alta.sucursal.nombre or ""})
+                           {"id": str(alta.sucursal.id), "nombre": alta.sucursal.nombre or ""}, marca)
     except ErrorDeInstalacion as exc:
         raise _error(500, "carga_no_armada",
                      f"El nodo {alta.node_id!r} quedó registrado pero no se pudo armar la carga ({exc}). "
@@ -615,7 +619,7 @@ def create_canje_router(aprov: ap.Aprovisionamiento, abrir_conexion: Callable[[]
                 conn.rollback()
                 status, codigo = _status_de_registro(exc)
                 raise _error(status, codigo, str(exc)) from None
-        carga = _carga_de(alta, url, emisor, producto, _error)
+        carga = _carga_de(alta, url, emisor, producto, _error, leer_ruta_config())
         logger.info("Código de vinculación canjeado: nodo %s (ip %s).", node_id, ip)
         return JSONResponse(carga, headers=CABECERAS_SIN_CACHE)
 

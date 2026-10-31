@@ -52,9 +52,11 @@ from libraedge.instalador import (
     armar_carga,
     emisor_desde_config,
     escribir_carga,
+    marca_desde_config,
     normalizar_url_del_central,
     ruta_config_del_central,
     validar_emisor,
+    validar_marca,
 )
 
 
@@ -255,6 +257,9 @@ def _preparar_carga(args):
     emisor = emisor_desde_config(ruta_config)
     if emisor is not None:
         validar_emisor(emisor)  # un CUIT mal cargado se ve ahora y no despues de emitir el secreto
+    marca = marca_desde_config(ruta_config)
+    if marca is not None:
+        validar_marca(marca)  # y un logo que no es PNG, tambien
     return url, emisor, ruta_config, args.carga
 
 
@@ -262,7 +267,8 @@ def _escribir_carga(alta, aprov, url, emisor, ruta_config, ruta) -> int:
     entorno = dict(linea.split("=", 1) for linea in alta.entorno_del_nodo())
     try:
         carga = armar_carga(aprov.prefijo.lower(), entorno, url, emisor,
-                            {"id": str(alta.sucursal.id), "nombre": alta.sucursal.nombre or ""})
+                            {"id": str(alta.sucursal.id), "nombre": alta.sucursal.nombre or ""},
+                            marca_desde_config(ruta_config))
         escribir_carga(ruta, carga)
     except (ErrorDeInstalacion, OSError) as exc:
         print(f"\nERROR: el nodo {alta.node_id!r} quedo registrado pero no se pudo escribir la carga: {exc}\n"

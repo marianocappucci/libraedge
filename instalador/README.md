@@ -238,15 +238,21 @@ fase 3 (ver el wiki, `libraedge-marca-blanca-instalador-diseno`).
 3. **El instalador**: `ISCC.exe /DProducto=ventalibra /DConMarca /DVersion=0.10.0 nodo.iss` → `salida\nodo-comercial-modelo-0.10.0.exe`.
    Sin `/DConMarca` todo sale igual que antes.
 
+4. **La marca de la web de adentro del nodo** viaja en la **carga** (ADR-030), no en el instalador: si el `config.json` del central tiene
+   marca propia (`libracore`, pantalla «Marca» del backoffice), `libraedge-central nodo registrar --carga` la incluye (claves del
+   `config.json`, logo y Términos) y `config-emisor`, que ya corre el instalador, la escribe en el nodo. Sin eso el nodo abre la web
+   del producto («VentaLibra») aunque el instalador diga la marca. Una marca sin Términos deja el nodo **congelado**: la carga avisa.
+   Una carga sin marca no borra la que el nodo ya tiene.
+
 El instalador **no es público de Libra**: se publica donde el revendedor decida (su repo o un release privado), no en `libraedge`. El
 `AppId` es el del producto: un nodo de marca blanca se actualiza con el instalador de la misma marca (y es el mismo producto para el
 central).
 
-> ⚠️ **Sin verificar de punta a punta.** Los tests (`tests/test_marca_blanca_instalador.py`) miden la herramienta, que el `.iss`, `build.rs`
-> y `armar.py` estén cableados a lo que arma y que sin `/DConMarca` el `.iss` quede igual; **no compilan** el `.iss` ni la app. El
-> primer instalador de marca blanca hay que compilarlo y probarlo en una VM de Windows (`PROBAR_EN_VM.md`) antes de entregarlo; lo que
-> más puede fallar es el `#include` de `marca-blanca\marca.isi` en Inno Setup y el `build.rs` con `LIBRAEDGE_MARCA_DIR`. Tampoco hay
-> todavía un job del CI para esto: se arma a mano hasta que el revendedor tenga nombre y logo.
+> **Verificado en una VM de Windows 10 (2026-10-31)**: `nodo.iss` compila con y sin `/DConMarca`, el instalador de marca instala en
+> silencio con una carga y reinstala encima, el acceso directo y «Agregar o quitar programas» salen con la marca, y con una carga con
+> marca el nodo responde `/api/marca` con `propia: true`. **Sin probar todavía**: `build.rs` con `LIBRAEDGE_MARCA_DIR` (la app de
+> escritorio en Rust), el asistente con interfaz y la desinstalación. Tampoco hay un job del CI para esto: se arma a mano hasta que
+> el revendedor tenga nombre y logo.
 
 ## Instalar
 
