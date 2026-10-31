@@ -250,9 +250,12 @@ central).
 
 > **Verificado en una VM de Windows 10 (2026-10-31)**: `nodo.iss` compila con y sin `/DConMarca`, el instalador de marca instala en
 > silencio con una carga y reinstala encima, el acceso directo y «Agregar o quitar programas» salen con la marca, y con una carga con
-> marca el nodo responde `/api/marca` con `propia: true`. **Sin probar todavía**: `build.rs` con `LIBRAEDGE_MARCA_DIR` (la app de
-> escritorio en Rust), el asistente con interfaz y la desinstalación. Tampoco hay un job del CI para esto: se arma a mano hasta que
-> el revendedor tenga nombre y logo.
+> marca el nodo responde `/api/marca` con `propia: true`. **La app de escritorio** (`build.rs` con `LIBRAEDGE_MARCA_DIR`) se probó
+> compilando en Linux (Rust 1.99, WebKitGTK 4.1): `--version` dice el nombre de la marca, la configuración de Tauri sale con su nombre,
+> su identificador (`nodo.<slug>`) y sus íconos, la `marca.svg` embebida es la suya y el binario no lleva el nombre del producto (sí
+> «LibraEdge» en el texto de `--version` y en la descripción del paquete de Cargo, que el cajero no ve). **Sin probar todavía**: el
+> `.exe` de Windows con marca (el CI compila el de Windows pero sin marca), abrir la ventana, el asistente con interfaz y la
+> desinstalación. Tampoco hay un job del CI para esto: se arma a mano hasta que el revendedor tenga nombre y logo.
 
 ## Instalar
 
