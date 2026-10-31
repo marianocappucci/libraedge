@@ -51,6 +51,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
+import binascii
 import ipaddress
 import json
 import os
@@ -123,6 +125,20 @@ CLAVES_DEL_EMISOR = (
     "ticket_linea_corte",
     "ticket_pie",
 )
+
+#: La MARCA BLANCA que viaja en la carga (ADR-030): las claves del ``config.json`` donde ``libracore`` guarda la
+#: marca y los Terminos propios (``marca_router.CLAVE_CONFIG``, ``terminos_propios.CLAVE_CONFIG`` y
+#: ``CLAVE_HISTORIAL``), mas los dos archivos que acompanian (``marca/logo.png`` y ``marca/terminos.md``, en
+#: ``DATA_DIR``). Sin esto el nodo se instala con la marca del producto aunque el central tenga la del revendedor.
+#: Lista cerrada, como la del emisor.
+CLAVES_DE_LA_MARCA = ("marca", "terminos_propios", "terminos_propios_historial")
+CARPETA_DE_LA_MARCA = "marca"
+ARCHIVO_DEL_LOGO = "logo.png"
+ARCHIVO_DE_LOS_TERMINOS = "terminos.md"
+#: Los mismos topes que ``libracore`` (``marca_router`` re-codifica el logo a 1024 px; ``terminos_propios.MAX_TEXTO``).
+MAX_LOGO_BYTES = 2_000_000
+MAX_TERMINOS = 300_000
+_FIRMA_PNG = b"\x89PNG\r\n\x1a\n"
 
 #: Sin estas dos el nodo no sabe que comprobante emitir (A, B o C) ni a nombre de quien.
 CLAVES_DEL_EMISOR_NECESARIAS = ("empresa_cuit", "empresa_iva_condition")
@@ -354,6 +370,9 @@ class Carga:
     emisor: Mapping[str, object]
     sucursal: Mapping[str, str]
     avisos: tuple[str, ...] = ()
+    #: La marca blanca validada (``None`` si la carga no la trae):
+    #: ``{"config": {...}, "logo": bytes | None, "terminos": str | None}``.
+    marca: Mapping[str, object] | None = None
 
     def resumen(self) -> dict:
         """Lo que se puede mostrar: todo menos el secreto."""
@@ -367,6 +386,9 @@ class Carga:
             "emisor": sorted(self.emisor),
             "avisos": list(self.avisos),
         }
+        if self.marca:
+            resumen["marca"] = {"nombre": self.marca["config"]["marca"].get("nombre", ""),
+                                "logo": self.marca["logo"] is not None, "terminos": self.marca["terminos"] is not None}
         solo_lectura = self.entorno.get("LIBRAEDGE_TABLAS_SOLO_LECTURA")
         if solo_lectura:
             resumen["tablas_solo_lectura"] = len(solo_lectura.split(","))
@@ -424,6 +446,94 @@ def _cuit_valido(cuit: str) -> bool:
     resto = sum(int(d) * p for d, p in zip(digitos[:10], pesos)) % 11
     verificador = 0 if resto == 0 else 11 - resto
     return verificador != 10 and verificador == int(digitos[10])
+
+
+def _marca(crudo, avisos: list[str]) -> dict | None:
+    """Valida la marca blanca de la carga. ``None`` si no trae. Un nodo con marca propia y sin Terminos propios queda
+    **congelado** (``libraauth`` ADR-030: sin contrato nadie puede aceptar), y eso se avisa aca y no despues de
+    instalar."""
+    if crudo is None:
+        return None
+    if not isinstance(crudo, Mapping):
+        raise ErrorDeInstalacion("'marca' tiene que ser un objeto {config, logo_png, terminos}.")
+    sobran = sorted(set(crudo) - {"config", "logo_png", "terminos"})
+    if sobran:
+        raise ErrorDeInstalacion(f"La marca trae claves que no le corresponden: {', '.join(sobran)}.")
+    config = crudo.get("config")
+    if not isinstance(config, Mapping):
+        raise ErrorDeInstalacion("A la marca le falta 'config' (la clave 'marca' del config.json de la instancia).")
+    ajenas = sorted(set(config) - set(CLAVES_DE_LA_MARCA))
+    if ajenas:
+        raise ErrorDeInstalacion(f"La marca trae claves del config.json que no se copian: {', '.join(ajenas)}.")
+    propia = config.get("marca")
+    if not isinstance(propia, Mapping) or not propia:
+        raise ErrorDeInstalacion("La marca no tiene la clave 'marca' con el nombre y los colores.")
+    if not any(isinstance(propia.get(c), str) and propia[c].strip() for c in ("nombre", "nombre_corto")):
+        raise ErrorDeInstalacion("La marca no tiene nombre.")
+    for clave in ("terminos_propios", "terminos_propios_historial"):
+        if clave in config and not isinstance(config[clave], Mapping):
+            raise ErrorDeInstalacion(f"{clave!r} de la marca tiene que ser un objeto.")
+    logo = None
+    if crudo.get("logo_png") is not None:
+        try:
+            logo = base64.b64decode(str(crudo["logo_png"]), validate=True)
+        except (binascii.Error, ValueError):
+            raise ErrorDeInstalacion("El logo de la marca no es base64 valido.") from None
+        if not logo.startswith(_FIRMA_PNG):
+            raise ErrorDeInstalacion("El logo de la marca tiene que ser un PNG.")
+        if len(logo) > MAX_LOGO_BYTES:
+            raise ErrorDeInstalacion(f"El logo de la marca pesa mas de {MAX_LOGO_BYTES // 1_000_000} MB.")
+    elif propia.get("logo"):
+        avisos.append("La marca declara un logo pero la carga no lo trae: el nodo va a mostrar la marca sin logo.")
+    terminos = crudo.get("terminos")
+    if terminos is not None:
+        if not isinstance(terminos, str) or not terminos.strip():
+            raise ErrorDeInstalacion("Los Terminos de la marca tienen que ser un texto.")
+        if len(terminos) > MAX_TERMINOS:
+            raise ErrorDeInstalacion(f"Los Terminos de la marca pasan de {MAX_TERMINOS} caracteres.")
+    if terminos is None or "terminos_propios" not in config:
+        avisos.append("La marca no trae Terminos propios completos: con marca propia y sin Terminos el nodo queda"
+                      " congelado (nadie puede aceptar) hasta cargarlos.")
+    return {"config": {c: config[c] for c in CLAVES_DE_LA_MARCA if c in config}, "logo": logo, "terminos": terminos}
+
+
+def validar_marca(crudo) -> tuple[dict | None, list[str]]:
+    """La marca validada y los avisos. Un logo que no es PNG o una marca sin nombre son error."""
+    avisos: list[str] = []
+    return _marca(crudo, avisos), avisos
+
+
+def _escribir_atomico(ruta: str, contenido: bytes) -> bool:
+    """Escribe ``contenido`` en ``ruta`` si cambio. ``True`` si escribio."""
+    if os.path.isfile(ruta):
+        with open(ruta, "rb") as archivo:
+            if archivo.read() == contenido:
+                return False
+    carpeta = os.path.dirname(os.path.abspath(ruta))
+    os.makedirs(carpeta, exist_ok=True)
+    descriptor, temporal = tempfile.mkstemp(prefix=".marca-", dir=carpeta)
+    try:
+        with os.fdopen(descriptor, "wb") as archivo:
+            archivo.write(contenido)
+        os.replace(temporal, ruta)
+    except BaseException:
+        if os.path.exists(temporal):
+            os.unlink(temporal)
+        raise
+    return True
+
+
+def aplicar_marca(ruta_config: str, marca: Mapping[str, object]) -> list[str]:
+    """Escribe la marca del nodo donde ``libracore`` la lee: las claves en el ``config.json`` (fusionado, sin tocar el
+    resto) y el logo y los Terminos en ``marca/`` junto a el (``config_manager.MARCA_DIR``). Devuelve lo que cambio."""
+    cambios = [f"config.json:{clave}" for clave in fusionar_config(ruta_config, marca["config"])]
+    carpeta = os.path.join(os.path.dirname(os.path.abspath(ruta_config)), CARPETA_DE_LA_MARCA)
+    if marca["logo"] is not None and _escribir_atomico(os.path.join(carpeta, ARCHIVO_DEL_LOGO), marca["logo"]):
+        cambios.append(f"{CARPETA_DE_LA_MARCA}/{ARCHIVO_DEL_LOGO}")
+    if marca["terminos"] is not None and _escribir_atomico(
+            os.path.join(carpeta, ARCHIVO_DE_LOS_TERMINOS), marca["terminos"].encode("utf-8")):
+        cambios.append(f"{CARPETA_DE_LA_MARCA}/{ARCHIVO_DE_LOS_TERMINOS}")
+    return cambios
 
 
 def _emisor(crudo, avisos: list[str]) -> dict[str, object]:
@@ -581,7 +691,8 @@ def carga_desde_dict(datos: Mapping, producto: str) -> Carga:
     sucursal = datos.get("sucursal") or {}
     if not isinstance(sucursal, Mapping):
         raise ErrorDeInstalacion("'sucursal' es un objeto {id, nombre}.")
-    return Carga(producto, entorno, emisor, {k: str(v) for k, v in sucursal.items()}, tuple(avisos))
+    marca = _marca(datos.get("marca"), avisos)
+    return Carga(producto, entorno, emisor, {k: str(v) for k, v in sucursal.items()}, tuple(avisos), marca)
 
 
 def leer_carga(ruta: str, producto: str) -> Carga:
@@ -762,6 +873,27 @@ def emisor_desde_config(ruta: str) -> dict[str, object] | None:
     return {clave: datos[clave] for clave in CLAVES_DEL_EMISOR if clave in datos}
 
 
+def marca_desde_config(ruta: str) -> dict | None:
+    """La marca blanca de la instancia (las :data:`CLAVES_DE_LA_MARCA` del ``config.json``, el logo y los Terminos de
+    ``marca/`` junto a el) lista para ir en la carga, o ``None`` si la instancia no tiene marca propia."""
+    if not os.path.exists(ruta):
+        return None
+    datos = _leer_json(ruta, "el config.json del central")
+    if not isinstance(datos, dict) or not isinstance(datos.get("marca"), dict) or not datos["marca"]:
+        return None
+    marca: dict = {"config": {c: datos[c] for c in CLAVES_DE_LA_MARCA if c in datos}}
+    carpeta = os.path.join(os.path.dirname(os.path.abspath(ruta)), CARPETA_DE_LA_MARCA)
+    logo = os.path.join(carpeta, ARCHIVO_DEL_LOGO)
+    if os.path.isfile(logo):
+        with open(logo, "rb") as archivo:
+            marca["logo_png"] = base64.b64encode(archivo.read()).decode("ascii")
+    terminos = os.path.join(carpeta, ARCHIVO_DE_LOS_TERMINOS)
+    if os.path.isfile(terminos):
+        with open(terminos, encoding="utf-8") as archivo:
+            marca["terminos"] = archivo.read()
+    return marca
+
+
 def ruta_config_del_central(entorno: Mapping[str, str] | None = None) -> str:
     """Donde lo lee libracore (``config_manager``): ``$DATA_DIR/config.json``, o el directorio actual."""
     entorno = os.environ if entorno is None else entorno
@@ -769,7 +901,8 @@ def ruta_config_del_central(entorno: Mapping[str, str] | None = None) -> str:
 
 
 def armar_carga(producto: str, entorno_del_alta: Mapping[str, str], central_url: str,
-                emisor: Mapping[str, object] | None, sucursal: Mapping[str, str] | None = None) -> dict:
+                emisor: Mapping[str, object] | None, sucursal: Mapping[str, str] | None = None,
+                marca: Mapping[str, object] | None = None) -> dict:
     """La carga que lee el instalador, validada con las mismas reglas con que la va a leer."""
     entorno = dict(entorno_del_alta)
     entorno["LIBRAEDGE_CENTRAL_URL"] = central_url
@@ -784,6 +917,8 @@ def armar_carga(producto: str, entorno_del_alta: Mapping[str, str], central_url:
             carga["entorno"][nombre] = entorno[nombre]
     if emisor is not None:
         carga["emisor"] = dict(emisor)
+    if marca:
+        carga["marca"] = dict(marca)
     validada = carga_desde_dict(carga, producto)
     carga["entorno"] = dict(validada.entorno)
     return carga
@@ -1278,6 +1413,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(carga.resumen(), ensure_ascii=False))
             return 0
         if args.comando == "config-emisor":
+            if carga.marca:
+                cambios = aplicar_marca(args.config, carga.marca)
+                print(f"Marca blanca: {len(cambios)} cambios" + (f" ({', '.join(cambios)})." if cambios else "."))
             if not carga.emisor:
                 print("La carga no trae datos del emisor: el config.json no se toca.")
                 return 0
